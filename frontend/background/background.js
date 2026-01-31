@@ -18,7 +18,8 @@ const AutomationState = {
     PROCESSING_QUEUE: 'PROCESSING_QUEUE',
     NAVIGATING_TO_POST: 'NAVIGATING_TO_POST',
     WAITING_FOR_POST: 'WAITING_FOR_POST',
-    GENERATING_DM: 'GENERATING_DM'
+    GENERATING_DM: 'GENERATING_DM',
+    AWAITING_CONFIRMATION: 'AWAITING_CONFIRMATION'
 };
 
 // Store active automation tasks with retry support
@@ -162,7 +163,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             isActive: !!task || (queue && queue.isActive),
             status: task ? task.status : 'IDLE',
             queueProgress: queue ? `${queue.currentIndex + 1}/${queue.urls.length}` : '',
-            subreddit: queue ? queue.subreddit : ''
+            subreddit: queue ? queue.subreddit : '',
+            awaitingConfirmation: task ? task.status === AutomationState.AWAITING_CONFIRMATION : false,
+            pendingDM: task && task.status === AutomationState.AWAITING_CONFIRMATION ? task.data : null
         });
     }
 
@@ -256,6 +259,72 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
 
         sendResponse({ success: true });
+    }
+
+    // Handle DM confirmation (user approved the DM)
+    if (request.action === 'CONFIRM_DM') {
+        const tabId = sender.tab ? sender.tab.id : request.tabId;
+        const task = activeTasks[tabId];
+
+        if (task && task.status === AutomationState.AWAITING_CONFIRMATION) {
+            console.log('DM confirmed, proceeding to send...');
+
+            // Update message if user edited it
+            if (request.editedMessage) {
+                task.data.message = request.editedMessage;
+            }
+
+            // Proceed with automation
+            task.status = AutomationState.NAVIGATING_PROFILE;
+            const profileUrl = `https://www.reddit.com/user/${task.data.targetUser}/`;
+            chrome.tabs.update(tabId, { url: profileUrl });
+            task.status = AutomationState.WAITING_FOR_PROFILE;
+
+            sendResponse({ success: true });
+        } else {
+            sendResponse({ success: false, error: 'No pending confirmation' });
+        }
+        return true;
+    }
+
+    // Handle DM skip (user declined the DM)
+    if (request.action === 'SKIP_DM') {
+        const tabId = sender.tab ? sender.tab.id : request.tabId;
+        const task = activeTasks[tabId];
+
+        if (task && task.status === AutomationState.AWAITING_CONFIRMATION) {
+            console.log('DM skipped by user');
+
+            const queue = subredditQueues[tabId];
+            if (queue && queue.isActive) {
+                // Move to next item in queue
+                queue.currentIndex++;
+
+                // Update Supabase session
+                if (queue.sessionId) {
+                    api.updateAutomationSession(queue.sessionId, {
+                        processedCount: queue.currentIndex,
+                        successCount: queue.successCount,
+                        failedCount: queue.failedCount
+                    });
+                }
+
+                // Clear current task and move to next
+                delete activeTasks[tabId];
+                processNextQueueItem(tabId);
+            } else {
+                // Single automation - just clear the task
+                delete activeTasks[tabId];
+                chrome.tabs.sendMessage(tabId, {
+                    action: 'AUTOMATION_STOPPED'
+                }).catch(() => {});
+            }
+
+            sendResponse({ success: true });
+        } else {
+            sendResponse({ success: false, error: 'No pending confirmation' });
+        }
+        return true;
     }
 });
 
@@ -383,20 +452,40 @@ async function processNextStep(tabId) {
 
                         console.log('DM Generated:', message);
 
-                        // 3. Start Single User Automation
-                        // We update the task data with the new user and message
+                        // 3. Update task data with the new user and message
                         task.data = {
                             targetUser: postData.author,
                             message: message,
                             postUrl: postData.url,
-                            postTitle: postData.title
+                            postTitle: postData.title,
+                            subreddit: postData.subreddit
                         };
 
-                        // Transition to Profile Navigation
-                        task.status = AutomationState.NAVIGATING_PROFILE;
-                        const profileUrl = `https://www.reddit.com/user/${postData.author}/`;
-                        chrome.tabs.update(tabId, { url: profileUrl });
-                        task.status = AutomationState.WAITING_FOR_PROFILE;
+                        // Check DM send mode
+                        const modeSettings = await chrome.storage.local.get(['dmSendMode']);
+                        const dmSendMode = modeSettings.dmSendMode || 'confirm';
+
+                        if (dmSendMode === 'confirm') {
+                            // Show confirmation dialog in content script
+                            task.status = AutomationState.AWAITING_CONFIRMATION;
+                            chrome.tabs.sendMessage(tabId, {
+                                action: 'SHOW_DM_CONFIRMATION',
+                                data: {
+                                    targetUser: postData.author,
+                                    message: message,
+                                    postTitle: postData.title,
+                                    subreddit: postData.subreddit
+                                }
+                            }).catch(err => {
+                                console.error('Failed to show confirmation dialog:', err);
+                            });
+                        } else {
+                            // Auto mode - proceed directly
+                            task.status = AutomationState.NAVIGATING_PROFILE;
+                            const profileUrl = `https://www.reddit.com/user/${postData.author}/`;
+                            chrome.tabs.update(tabId, { url: profileUrl });
+                            task.status = AutomationState.WAITING_FOR_PROFILE;
+                        }
 
                     } catch (err) {
                         console.error('Generation failed:', err);

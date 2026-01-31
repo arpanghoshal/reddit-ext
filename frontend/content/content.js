@@ -38,6 +38,9 @@ async function init() {
             renderErrorState(request.error, request.context);
         } else if (request.action === 'SHOW_TOAST') {
             showToast(request.message, request.type);
+        } else if (request.action === 'SHOW_DM_CONFIRMATION') {
+            // Show confirmation dialog before sending DM
+            renderDMConfirmation(request.data);
         }
         return true;
     });
@@ -394,6 +397,14 @@ function injectSidebar() {
                         </select>
                     </div>
                     <div class="form-group">
+                        <label>DM Send Mode</label>
+                        <select id="settings-dm-mode">
+                            <option value="confirm">Ask before sending</option>
+                            <option value="auto">Auto-send</option>
+                        </select>
+                        <p class="help-text">Choose whether to review each DM before sending</p>
+                    </div>
+                    <div class="form-group">
                         <label for="settings-daily-limit">Daily DM Limit</label>
                         <input type="number" id="settings-daily-limit" min="1" max="100" value="50">
                     </div>
@@ -603,10 +614,11 @@ async function initSidebarLogic() {
 
     // Settings button
     settingsBtn.addEventListener('click', async () => {
-        const items = await chrome.storage.local.get(['businessDesc', 'persona', 'tone', 'dailyLimit', 'dmDelay']);
+        const items = await chrome.storage.local.get(['businessDesc', 'persona', 'tone', 'dailyLimit', 'dmDelay', 'dmSendMode']);
         shadowRoot.getElementById('settings-business-desc').value = items.businessDesc || '';
         shadowRoot.getElementById('settings-persona').value = items.persona || '';
         shadowRoot.getElementById('settings-tone').value = items.tone || 'Curious';
+        shadowRoot.getElementById('settings-dm-mode').value = items.dmSendMode || 'confirm';
         shadowRoot.getElementById('settings-daily-limit').value = items.dailyLimit || 50;
         shadowRoot.getElementById('settings-delay').value = items.dmDelay || 20;
         showSettingsView();
@@ -622,10 +634,11 @@ async function initSidebarLogic() {
         const businessDesc = shadowRoot.getElementById('settings-business-desc').value;
         const persona = shadowRoot.getElementById('settings-persona').value;
         const tone = shadowRoot.getElementById('settings-tone').value;
+        const dmSendMode = shadowRoot.getElementById('settings-dm-mode').value;
         const dailyLimit = parseInt(shadowRoot.getElementById('settings-daily-limit').value) || 50;
         const dmDelay = parseInt(shadowRoot.getElementById('settings-delay').value) || 20;
 
-        await chrome.storage.local.set({ businessDesc, persona, tone, dailyLimit, dmDelay });
+        await chrome.storage.local.set({ businessDesc, persona, tone, dmSendMode, dailyLimit, dmDelay });
         chrome.runtime.sendMessage({ action: 'SETTINGS_UPDATED' });
         showToast('Settings saved!', 'success');
         showMainView();
@@ -1184,6 +1197,156 @@ function showToast(message, type = 'info', duration = 3000) {
         toast.classList.remove('show');
         setTimeout(() => toast.remove(), 300);
     }, duration);
+}
+
+// --- DM Confirmation Dialog ---
+function renderDMConfirmation(data) {
+    if (!shadowRoot) return;
+
+    // Ensure sidebar is open
+    if (!isSidebarOpen) {
+        isSidebarOpen = true;
+        injectSidebar();
+        // Wait for sidebar to inject before rendering
+        setTimeout(() => renderDMConfirmation(data), 500);
+        return;
+    }
+
+    const contentArea = shadowRoot.getElementById('content-area');
+    const statusDot = shadowRoot.getElementById('status-dot');
+    const statusText = shadowRoot.getElementById('status-text');
+
+    if (statusDot) {
+        statusDot.className = 'dot pending';
+        statusText.innerText = 'Pending Approval';
+    }
+
+    // Add pending dot style if not present
+    if (!shadowRoot.querySelector('#pending-style')) {
+        const style = document.createElement('style');
+        style.id = 'pending-style';
+        style.textContent = `
+            .dot.pending { background-color: #ffa500; }
+            .confirmation-box {
+                background: var(--secondary-bg, #272729);
+                border: 1px solid var(--border-color, #343536);
+                border-radius: 8px;
+                padding: 16px;
+                margin-top: 12px;
+            }
+            .confirmation-header {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 12px;
+            }
+            .confirmation-icon {
+                font-size: 24px;
+            }
+            .confirmation-title {
+                font-size: 16px;
+                font-weight: 600;
+                color: var(--text-color, #d7dadc);
+            }
+            .confirmation-meta {
+                display: flex;
+                gap: 12px;
+                font-size: 12px;
+                color: var(--text-muted, #818384);
+                margin-bottom: 12px;
+            }
+            .confirmation-message-label {
+                font-size: 12px;
+                color: var(--text-muted, #818384);
+                margin-bottom: 6px;
+            }
+            .confirmation-message {
+                width: 100%;
+                background: var(--primary-bg, #1a1a1b);
+                border: 1px solid var(--border-color, #343536);
+                border-radius: 6px;
+                padding: 10px;
+                color: var(--text-color, #d7dadc);
+                font-size: 13px;
+                resize: vertical;
+                min-height: 80px;
+                font-family: inherit;
+            }
+            .confirmation-actions {
+                display: flex;
+                gap: 8px;
+                margin-top: 12px;
+            }
+            .confirmation-actions .btn-confirm {
+                flex: 1;
+                background: #46a758;
+                color: #fff;
+                border: none;
+                padding: 10px 16px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: 500;
+                cursor: pointer;
+            }
+            .confirmation-actions .btn-confirm:hover {
+                background: #3d9148;
+            }
+            .confirmation-actions .btn-skip {
+                flex: 1;
+                background: transparent;
+                color: var(--text-color, #d7dadc);
+                border: 1px solid var(--border-color, #343536);
+                padding: 10px 16px;
+                border-radius: 6px;
+                font-size: 14px;
+                cursor: pointer;
+            }
+            .confirmation-actions .btn-skip:hover {
+                background: var(--secondary-bg, #272729);
+            }
+        `;
+        shadowRoot.appendChild(style);
+    }
+
+    contentArea.innerHTML = `
+        <div class="post-info">
+            <div class="confirmation-box">
+                <div class="confirmation-header">
+                    <span class="confirmation-icon">📨</span>
+                    <span class="confirmation-title">Review DM before sending</span>
+                </div>
+                <div class="confirmation-meta">
+                    <span>To: <strong>u/${escapeHtml(data.targetUser)}</strong></span>
+                    ${data.subreddit ? `<span>r/${escapeHtml(data.subreddit)}</span>` : ''}
+                </div>
+                ${data.postTitle ? `<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">"${escapeHtml(truncateText(data.postTitle, 60))}"</div>` : ''}
+                <div class="confirmation-message-label">Message (you can edit):</div>
+                <textarea class="confirmation-message" id="confirm-message">${escapeHtml(data.message)}</textarea>
+                <div class="confirmation-actions">
+                    <button class="btn-skip" id="skip-dm-btn">Skip</button>
+                    <button class="btn-confirm" id="confirm-dm-btn">Send DM</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Add event listeners
+    shadowRoot.getElementById('confirm-dm-btn').addEventListener('click', () => {
+        const editedMessage = shadowRoot.getElementById('confirm-message').value;
+        chrome.runtime.sendMessage({
+            action: 'CONFIRM_DM',
+            editedMessage: editedMessage
+        });
+        showToast('Sending DM...', 'info');
+    });
+
+    shadowRoot.getElementById('skip-dm-btn').addEventListener('click', () => {
+        chrome.runtime.sendMessage({
+            action: 'SKIP_DM'
+        });
+        showToast('DM skipped', 'info');
+        checkPageStatus();
+    });
 }
 
 // --- Error Recovery UI ---

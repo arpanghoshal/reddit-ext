@@ -3,75 +3,538 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reddit Automated DM - Settings</title>
+    <title>Reddit Automated DM - Dashboard</title>
     <link rel="stylesheet" href="options.css">
 </head>
 <body>
-    <div class="options-container">
-        <header>
-            <h1>Reddit Automated DM</h1>
-            <p class="subtitle">Configure your backend server and preferences</p>
-        </header>
-
-        <form id="options-form">
-            <!-- Backend Configuration -->
-            <section class="settings-section">
-                <h2>Backend Configuration</h2>
-                <p class="section-desc">Connect to your backend server that handles API keys and database.</p>
-
-                <div class="form-group">
-                    <label for="backend-url">Backend Server URL</label>
-                    <div class="input-with-button">
-                        <input type="text" id="backend-url" placeholder="http://localhost:3000">
-                        <button type="button" id="test-connection" class="btn-secondary">Test</button>
-                    </div>
-                    <p class="help-text">URL of your Reddit Automated DM backend server</p>
-                    <div id="connection-status" class="connection-status hidden"></div>
-                </div>
-
-                <div class="form-group">
-                    <label for="api-key">API Key (Optional)</label>
-                    <input type="password" id="api-key" placeholder="Enter your API key">
-                    <p class="help-text">Required if your backend has authentication enabled. Leave empty for development mode.</p>
-                </div>
-            </section>
-
-            <!-- Automation Settings -->
-            <section class="settings-section">
-                <h2>Automation Settings</h2>
-
-                <div class="form-group">
-                    <label for="typing-speed">Typing Speed: <span id="speed-value">100</span>ms per character</label>
-                    <input type="range" id="typing-speed" min="50" max="200" value="100" step="10">
-                    <div class="range-labels">
-                        <span>Fast (50ms)</span>
-                        <span>Slow (200ms)</span>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="delay-between-dms">Delay Between DMs: <span id="delay-value">20</span> seconds</label>
-                    <input type="range" id="delay-between-dms" min="15" max="60" value="20" step="5">
-                    <div class="range-labels">
-                        <span>15s</span>
-                        <span>60s</span>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="daily-limit">Daily DM Limit</label>
-                    <input type="number" id="daily-limit" min="10" max="100" value="50" step="5">
-                    <p class="help-text">Maximum DMs to send per day (recommended: 50 or less)</p>
-                </div>
-            </section>
-
-            <div class="form-actions">
-                <button type="submit" class="btn-primary">Save Settings</button>
-                <button type="button" id="reset-btn" class="btn-secondary">Reset to Defaults</button>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>Reddit DM</h1>
+                <span class="version">v2.0</span>
             </div>
-        </form>
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-tab="overview">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>Overview</span>
+                </button>
+                <button class="nav-item" data-tab="queue">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    <span>Queue</span>
+                    <span class="badge" id="queue-badge">0</span>
+                </button>
+                <button class="nav-item" data-tab="conversations">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <span>Conversations</span>
+                    <span class="badge badge-success" id="conversations-badge">0</span>
+                </button>
+                <button class="nav-item" data-tab="accounts">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    <span>Accounts</span>
+                </button>
+                <button class="nav-item" data-tab="analytics">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                    </svg>
+                    <span>Analytics</span>
+                </button>
+                <button class="nav-item" data-tab="settings">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="connection-indicator" id="connection-indicator">
+                    <span class="dot"></span>
+                    <span class="text">Checking...</span>
+                </div>
+            </div>
+        </aside>
 
-        <div id="status-message" class="status-message hidden"></div>
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Overview Tab -->
+            <section class="tab-content active" id="tab-overview">
+                <header class="tab-header">
+                    <h2>Overview</h2>
+                    <button class="btn-refresh" id="refresh-overview">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                        </svg>
+                        Refresh
+                    </button>
+                </header>
+
+                <!-- Key Metrics -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon blue">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 2L11 13"></path>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </div>
+                        <div class="metric-info">
+                            <span class="metric-value" id="metric-dms-sent">-</span>
+                            <span class="metric-label">DMs Sent Today</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon green">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                        </div>
+                        <div class="metric-info">
+                            <span class="metric-value" id="metric-replies">-</span>
+                            <span class="metric-label">Replies Received</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon orange">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                        </div>
+                        <div class="metric-info">
+                            <span class="metric-value" id="metric-pending">-</span>
+                            <span class="metric-label">Pending Review</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon purple">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                            </svg>
+                        </div>
+                        <div class="metric-info">
+                            <span class="metric-value" id="metric-reply-rate">-</span>
+                            <span class="metric-label">Reply Rate</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Funnel Visualization -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Conversion Funnel</h3>
+                    </div>
+                    <div class="funnel-container" id="funnel-container">
+                        <div class="funnel-stage">
+                            <div class="funnel-bar" style="width: 100%">
+                                <span class="funnel-label">Posts Identified</span>
+                                <span class="funnel-value" id="funnel-posts">-</span>
+                            </div>
+                        </div>
+                        <div class="funnel-stage">
+                            <div class="funnel-bar" style="width: 80%">
+                                <span class="funnel-label">Qualified</span>
+                                <span class="funnel-value" id="funnel-qualified">-</span>
+                            </div>
+                        </div>
+                        <div class="funnel-stage">
+                            <div class="funnel-bar" style="width: 60%">
+                                <span class="funnel-label">DMs Sent</span>
+                                <span class="funnel-value" id="funnel-sent">-</span>
+                            </div>
+                        </div>
+                        <div class="funnel-stage">
+                            <div class="funnel-bar" style="width: 30%">
+                                <span class="funnel-label">Replies</span>
+                                <span class="funnel-value" id="funnel-replies">-</span>
+                            </div>
+                        </div>
+                        <div class="funnel-stage">
+                            <div class="funnel-bar" style="width: 15%">
+                                <span class="funnel-label">Positive</span>
+                                <span class="funnel-value" id="funnel-positive">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity & Recommendations -->
+                <div class="grid-2">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Recent Activity</h3>
+                            <a href="#" class="link" data-tab-link="queue">View All</a>
+                        </div>
+                        <div class="activity-list" id="recent-activity">
+                            <div class="loading-state">Loading...</div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Recommendations</h3>
+                        </div>
+                        <div class="recommendations-list" id="recommendations">
+                            <div class="loading-state">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Queue Tab -->
+            <section class="tab-content" id="tab-queue">
+                <header class="tab-header">
+                    <h2>DM Queue</h2>
+                    <div class="tab-actions">
+                        <select id="queue-filter" class="select-input">
+                            <option value="pending">Pending Review</option>
+                            <option value="approved">Approved</option>
+                            <option value="sent">Sent</option>
+                            <option value="failed">Failed</option>
+                            <option value="rejected">Rejected</option>
+                        </select>
+                        <button class="btn-primary" id="bulk-approve-btn">Approve Selected</button>
+                    </div>
+                </header>
+
+                <!-- Queue Stats -->
+                <div class="queue-stats">
+                    <div class="stat-item">
+                        <span class="stat-value" id="queue-stat-pending">0</span>
+                        <span class="stat-label">Pending</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="queue-stat-approved">0</span>
+                        <span class="stat-label">Approved</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="queue-stat-sent">0</span>
+                        <span class="stat-label">Sent Today</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="queue-stat-failed">0</span>
+                        <span class="stat-label">Failed</span>
+                    </div>
+                </div>
+
+                <!-- Queue Table -->
+                <div class="card">
+                    <table class="data-table" id="queue-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="select-all-queue"></th>
+                                <th>Recipient</th>
+                                <th>Subreddit</th>
+                                <th>Message Preview</th>
+                                <th>Score</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queue-tbody">
+                            <tr><td colspan="7" class="loading-state">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Conversations Tab -->
+            <section class="tab-content" id="tab-conversations">
+                <header class="tab-header">
+                    <h2>Conversations</h2>
+                    <div class="tab-actions">
+                        <select id="conv-filter" class="select-input">
+                            <option value="all">All</option>
+                            <option value="active">Active</option>
+                            <option value="interested">Interested</option>
+                            <option value="needs-reply">Needs Reply</option>
+                            <option value="cold">Cold</option>
+                        </select>
+                    </div>
+                </header>
+
+                <!-- Conversation Stats -->
+                <div class="queue-stats">
+                    <div class="stat-item">
+                        <span class="stat-value" id="conv-stat-total">0</span>
+                        <span class="stat-label">Total</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="conv-stat-active">0</span>
+                        <span class="stat-label">Active</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="conv-stat-replies">0</span>
+                        <span class="stat-label">With Replies</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="conv-stat-interested">0</span>
+                        <span class="stat-label">Interested</span>
+                    </div>
+                </div>
+
+                <!-- Conversations List -->
+                <div class="conversations-container">
+                    <div class="conversations-list" id="conversations-list">
+                        <div class="loading-state">Loading...</div>
+                    </div>
+                    <div class="conversation-detail" id="conversation-detail">
+                        <div class="empty-state">
+                            <p>Select a conversation to view details</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Accounts Tab -->
+            <section class="tab-content" id="tab-accounts">
+                <header class="tab-header">
+                    <h2>Reddit Accounts</h2>
+                    <button class="btn-primary" id="add-account-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        Add Account
+                    </button>
+                </header>
+
+                <!-- Accounts Grid -->
+                <div class="accounts-grid" id="accounts-grid">
+                    <div class="loading-state">Loading...</div>
+                </div>
+            </section>
+
+            <!-- Analytics Tab -->
+            <section class="tab-content" id="tab-analytics">
+                <header class="tab-header">
+                    <h2>Analytics</h2>
+                    <div class="tab-actions">
+                        <select id="analytics-range" class="select-input">
+                            <option value="7">Last 7 Days</option>
+                            <option value="30">Last 30 Days</option>
+                            <option value="90">Last 90 Days</option>
+                        </select>
+                    </div>
+                </header>
+
+                <!-- Analytics Metrics -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-info">
+                            <span class="metric-value" id="analytics-total-dms">-</span>
+                            <span class="metric-label">Total DMs</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-info">
+                            <span class="metric-value" id="analytics-total-replies">-</span>
+                            <span class="metric-label">Total Replies</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-info">
+                            <span class="metric-value" id="analytics-conversions">-</span>
+                            <span class="metric-label">Conversions</span>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-info">
+                            <span class="metric-value" id="analytics-roi">-</span>
+                            <span class="metric-label">ROI</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Performance by Subreddit -->
+                <div class="grid-2">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Performance by Subreddit</h3>
+                        </div>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Subreddit</th>
+                                    <th>DMs</th>
+                                    <th>Replies</th>
+                                    <th>Rate</th>
+                                </tr>
+                            </thead>
+                            <tbody id="analytics-subreddits">
+                                <tr><td colspan="4" class="loading-state">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Daily Performance</h3>
+                        </div>
+                        <div class="chart-container" id="daily-chart">
+                            <div class="loading-state">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DM History -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>DM History</h3>
+                        <button class="btn-secondary" id="export-history-btn">Export CSV</button>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Recipient</th>
+                                <th>Subreddit</th>
+                                <th>Status</th>
+                                <th>Message</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dm-history-tbody">
+                            <tr><td colspan="5" class="loading-state">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section class="tab-content" id="tab-settings">
+                <header class="tab-header">
+                    <h2>Settings</h2>
+                </header>
+
+                <form id="settings-form">
+                    <!-- Backend Configuration -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Backend Configuration</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="backend-url">Backend Server URL</label>
+                                <div class="input-group">
+                                    <input type="text" id="backend-url" placeholder="http://localhost:8000">
+                                    <button type="button" id="test-connection" class="btn-secondary">Test</button>
+                                </div>
+                                <p class="help-text">URL of your Reddit Automated DM backend server</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="api-key">API Key (Optional)</label>
+                                <input type="password" id="api-key" placeholder="Enter your API key">
+                                <p class="help-text">Required if your backend has authentication enabled</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Message Settings -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Message Settings</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="business-desc">Business Description</label>
+                                <textarea id="business-desc" rows="3" placeholder="Describe your business/product..."></textarea>
+                                <p class="help-text">Used by AI to generate relevant messages</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="persona">Persona</label>
+                                <input type="text" id="persona" placeholder="e.g., Helpful consultant, Curious peer">
+                                <p class="help-text">The persona AI should adopt when writing messages</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="tone">Tone</label>
+                                <select id="tone">
+                                    <option value="curious">Curious</option>
+                                    <option value="professional">Professional</option>
+                                    <option value="friendly">Friendly</option>
+                                    <option value="casual">Casual</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Automation Settings -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Automation Settings</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label>DM Send Mode</label>
+                                <div class="radio-group">
+                                    <label class="radio-option">
+                                        <input type="radio" name="dm-send-mode" value="auto" id="dm-mode-auto">
+                                        <span class="radio-label">
+                                            <strong>Auto-send</strong>
+                                            <small>DMs are sent automatically without confirmation</small>
+                                        </span>
+                                    </label>
+                                    <label class="radio-option">
+                                        <input type="radio" name="dm-send-mode" value="confirm" id="dm-mode-confirm" checked>
+                                        <span class="radio-label">
+                                            <strong>Ask before sending</strong>
+                                            <small>Review and confirm each DM before it's sent</small>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="typing-speed">Typing Speed: <span id="speed-value">100</span>ms</label>
+                                <input type="range" id="typing-speed" min="50" max="200" value="100" step="10">
+                            </div>
+                            <div class="form-group">
+                                <label for="delay-between-dms">Delay Between DMs: <span id="delay-value">20</span>s</label>
+                                <input type="range" id="delay-between-dms" min="15" max="60" value="20" step="5">
+                            </div>
+                            <div class="form-group">
+                                <label for="daily-limit">Daily DM Limit</label>
+                                <input type="number" id="daily-limit" min="10" max="100" value="50">
+                                <p class="help-text">Maximum DMs per day (recommended: 50 or less)</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">Save Settings</button>
+                        <button type="button" id="reset-btn" class="btn-secondary">Reset to Defaults</button>
+                    </div>
+                </form>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container"></div>
+
+    <!-- Modal Template -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal" id="modal-content">
+            <!-- Dynamic modal content -->
+        </div>
     </div>
 
     <script src="options.js"></script>

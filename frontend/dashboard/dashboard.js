@@ -5,6 +5,8 @@ console.log('Dashboard script starting...');
 const apiWarning = document.getElementById('api-warning');
 const configureBtn = document.getElementById('configure-btn');
 const settingsBtn = document.getElementById('settings-btn');
+const openSidebarBtn = document.getElementById('open-sidebar-btn');
+const sidebarHint = document.getElementById('sidebar-hint');
 const todayCount = document.getElementById('today-count');
 const weekCount = document.getElementById('week-count');
 const totalCount = document.getElementById('total-count');
@@ -39,6 +41,10 @@ async function init() {
     settingsBtn.addEventListener('click', openSettings);
     configureBtn.addEventListener('click', openSettings);
     filterStatus.addEventListener('change', filterActivity);
+    openSidebarBtn.addEventListener('click', handleOpenSidebar);
+
+    // Check if current tab is Reddit and update hint
+    checkCurrentTabForReddit();
 
     // Load data in parallel (don't block on each other)
     checkBackendConnection().then(() => console.log('Backend check done'));
@@ -112,6 +118,57 @@ async function checkBackendConnection() {
 
 function openSettings() {
     chrome.runtime.openOptionsPage();
+}
+
+async function checkCurrentTabForReddit() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.url || !tab.url.includes('reddit.com')) {
+            sidebarHint.textContent = 'Navigate to Reddit first to use the sidebar';
+            openSidebarBtn.style.opacity = '0.7';
+        } else {
+            sidebarHint.textContent = '';
+            openSidebarBtn.style.opacity = '1';
+        }
+    } catch (error) {
+        console.error('Failed to check current tab:', error);
+    }
+}
+
+async function handleOpenSidebar() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+        if (!tab || !tab.url) {
+            sidebarHint.textContent = 'No active tab found';
+            return;
+        }
+
+        if (!tab.url.includes('reddit.com')) {
+            sidebarHint.textContent = 'Navigate to Reddit first to use the sidebar';
+            // Open Reddit in current tab
+            chrome.tabs.update(tab.id, { url: 'https://www.reddit.com' });
+            window.close();
+            return;
+        }
+
+        // Toggle sidebar state
+        const data = await chrome.storage.local.get('isSidebarOpen');
+        const newState = !data.isSidebarOpen;
+        await chrome.storage.local.set({ isSidebarOpen: newState });
+
+        // Send message to content script to toggle sidebar
+        await chrome.tabs.sendMessage(tab.id, {
+            action: 'TOGGLE_SIDEBAR',
+            isOpen: newState
+        });
+
+        // Close the popup
+        window.close();
+    } catch (error) {
+        console.error('Failed to open sidebar:', error);
+        sidebarHint.textContent = 'Failed to open sidebar. Try refreshing the Reddit page.';
+    }
 }
 
 async function loadStats() {
