@@ -2,23 +2,52 @@
  * API Client for Reddit Automation Dashboard
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
+// Get API key from localStorage or environment
+function getApiKey() {
+    return localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY || '';
+}
+
+// Set API key in localStorage
+export function setApiKey(key) {
+    localStorage.setItem('apiKey', key);
+}
+
+// Clear API key
+export function clearApiKey() {
+    localStorage.removeItem('apiKey');
+}
 
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
+    const apiKey = getApiKey();
+
+    const headers = {
+        'Content-Type': 'application/json',
+        ...options.headers
+    };
+
+    // Add API key if available
+    if (apiKey) {
+        headers['X-API-Key'] = apiKey;
+    }
 
     try {
         const response = await fetch(url, {
             ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            }
+            headers
         });
 
         if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('Authentication required. Please enter your API key.');
+            }
+            if (response.status === 403) {
+                throw new Error('Invalid API key. Please check your settings.');
+            }
             const error = await response.json().catch(() => ({ error: 'Request failed' }));
-            throw new Error(error.error || 'Request failed');
+            throw new Error(error.error || error.detail || 'Request failed');
         }
 
         return await response.json();
@@ -26,6 +55,21 @@ async function apiRequest(endpoint, options = {}) {
         console.error(`API request failed: ${endpoint}`, error);
         throw error;
     }
+}
+
+// Auth
+export async function validateApiKey(apiKey) {
+    const response = await fetch(`${API_BASE_URL}/auth/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey })
+    });
+    return await response.json();
+}
+
+export async function getStatus() {
+    const response = await fetch(`${API_BASE_URL}/status`);
+    return await response.json();
 }
 
 // Analytics
@@ -46,7 +90,12 @@ export async function getQualificationStats() {
 
 // Queue
 export async function getQueue(filters = {}) {
-    const params = new URLSearchParams(filters);
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
     const result = await apiRequest(`/queue?${params}`);
     return result.data;
 }
@@ -123,7 +172,12 @@ export async function getRotationStatus() {
 
 // Conversations
 export async function getConversations(filters = {}) {
-    const params = new URLSearchParams(filters);
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
     const result = await apiRequest(`/conversations?${params}`);
     return result.data;
 }
@@ -143,6 +197,11 @@ export async function updateConversation(id, data) {
 
 export async function getConversationStats() {
     const result = await apiRequest('/conversations/stats');
+    return result.data;
+}
+
+export async function getConversationMessages(id, limit = 100) {
+    const result = await apiRequest(`/conversations/${id}/messages?limit=${limit}`);
     return result.data;
 }
 
@@ -184,7 +243,12 @@ export async function getRuleTemplates() {
 
 // Safety
 export async function getSafetyEvents(filters = {}) {
-    const params = new URLSearchParams(filters);
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
     const result = await apiRequest(`/safety/events?${params}`);
     return result.data;
 }
@@ -202,5 +266,11 @@ export async function getDMHistory(limit = 50) {
 
 export async function getDMsBySubreddit(limit = 10) {
     const result = await apiRequest(`/dm/subreddits?limit=${limit}`);
+    return result.data;
+}
+
+// Session logs
+export async function getSessionLogs(limit = 20) {
+    const result = await apiRequest(`/session/logs?limit=${limit}`);
     return result.data;
 }

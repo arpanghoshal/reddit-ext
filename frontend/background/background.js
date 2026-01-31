@@ -1,4 +1,4 @@
-console.log('Reddit Insight Gatherer: Background service worker loaded');
+console.log('Reddit Automated DM: Background service worker loaded');
 
 // --- Import API Client ---
 importScripts('../lib/api.js');
@@ -26,6 +26,37 @@ let activeTasks = {};
 
 // Subreddit Queue: { [tabId]: { urls: [], currentIndex: 0, isActive: false, subreddit: '', sessionId: '', successCount: 0, failedCount: 0 } }
 let subredditQueues = {};
+
+// Track which tab is waiting for chat to prevent race conditions
+let chatWaitingTabId = null;
+
+// Cleanup function to remove tasks for closed tabs
+function cleanupTask(tabId) {
+    if (activeTasks[tabId]) {
+        console.log(`Cleaning up task for closed tab ${tabId}`);
+        delete activeTasks[tabId];
+    }
+    if (subredditQueues[tabId]) {
+        const queue = subredditQueues[tabId];
+        if (queue.sessionId && queue.isActive) {
+            globalThis.api.updateAutomationSession(queue.sessionId, {
+                processedCount: queue.currentIndex,
+                successCount: queue.successCount || 0,
+                failedCount: queue.failedCount || 0,
+                status: 'stopped'
+            }).catch(() => {});
+        }
+        delete subredditQueues[tabId];
+    }
+    if (chatWaitingTabId === tabId) {
+        chatWaitingTabId = null;
+    }
+}
+
+// Listen for tab removal to clean up memory
+chrome.tabs.onRemoved.addListener((tabId) => {
+    cleanupTask(tabId);
+});
 
 // Retry configuration
 const RETRY_CONFIG = {
@@ -62,20 +93,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'START_SUBREDDIT_AUTOMATION') {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
-        console.log(`Starting subreddit automation for tab ${tabId} with ${request.data.posts.length} posts`);
+
+        // Validate queue data
+        if (!request.data || !Array.isArray(request.data.posts) || request.data.posts.length === 0) {
+            console.error('Invalid subreddit automation data: posts array is missing or empty');
+            chrome.tabs.sendMessage(tabId, {
+                action: 'SHOW_TOAST',
+                message: 'No posts found to automate',
+                type: 'error'
+            }).catch(() => {});
+            sendResponse({ success: false, error: 'No posts found' });
+            return;
+        }
+
+        // Filter out invalid URLs
+        const validPosts = request.data.posts.filter(url =>
+            typeof url === 'string' &&
+            url.startsWith('https://') &&
+            url.includes('reddit.com')
+        );
+
+        if (validPosts.length === 0) {
+            console.error('No valid post URLs found');
+            chrome.tabs.sendMessage(tabId, {
+                action: 'SHOW_TOAST',
+                message: 'No valid post URLs found',
+                type: 'error'
+            }).catch(() => {});
+            sendResponse({ success: false, error: 'No valid posts' });
+            return;
+        }
+
+        console.log(`Starting subreddit automation for tab ${tabId} with ${validPosts.length} posts`);
 
         // Start Supabase automation session
         (async () => {
             const session = await globalThis.api.startAutomationSession({
                 subreddit: request.data.subreddit,
-                totalPosts: request.data.posts.length
+                totalPosts: validPosts.length
             });
 
             subredditQueues[tabId] = {
-                urls: request.data.posts,
+                urls: validPosts,
                 currentIndex: 0,
                 isActive: true,
-                subreddit: request.data.subreddit,
+                subreddit: request.data.subreddit || 'unknown',
                 sessionId: session ? session.sessionId : null,
                 successCount: 0,
                 failedCount: 0
@@ -200,14 +262,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // Check if this is a chat.reddit.com tab that we're waiting for
     if (changeInfo.status === 'complete' && tab.url && tab.url.includes('chat.reddit.com')) {
-        // Find if any task is waiting for chat
-        for (const [originalTabId, task] of Object.entries(activeTasks)) {
+        // Only transfer if we have a specific tab waiting for chat (prevents race condition)
+        if (chatWaitingTabId !== null && activeTasks[chatWaitingTabId]) {
+            const task = activeTasks[chatWaitingTabId];
             if (task.status === AutomationState.WAITING_FOR_CHAT) {
-                console.log(`Chat tab detected! Tab ${tabId}, transferring task from ${originalTabId}`);
+                console.log(`Chat tab detected! Tab ${tabId}, transferring task from ${chatWaitingTabId}`);
 
                 // Transfer the task to the new chat tab
                 activeTasks[tabId] = task;
-                delete activeTasks[originalTabId];
+                delete activeTasks[chatWaitingTabId];
+
+                // Clear the waiting flag
+                const originalTabId = chatWaitingTabId;
+                chatWaitingTabId = null;
 
                 // Process next step on the new tab
                 processNextStep(tabId);
@@ -235,20 +302,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onCreated.addListener((tab) => {
     console.log('New tab created:', tab.id, tab.pendingUrl || tab.url);
 
-    // Check if a task is waiting for chat and this might be the chat tab
-    for (const [originalTabId, task] of Object.entries(activeTasks)) {
+    // Only handle if we have a specific tab waiting for chat (prevents race condition)
+    if (chatWaitingTabId !== null && activeTasks[chatWaitingTabId]) {
+        const task = activeTasks[chatWaitingTabId];
         if (task.status === AutomationState.WAITING_FOR_CHAT) {
             const pendingUrl = tab.pendingUrl || tab.url || '';
             if (pendingUrl.includes('chat.reddit.com')) {
-                console.log(`Chat tab opened! Transferring task from tab ${originalTabId} to ${tab.id}`);
+                console.log(`Chat tab opened! Transferring task from tab ${chatWaitingTabId} to ${tab.id}`);
 
                 // Transfer task to new tab
                 activeTasks[tab.id] = task;
-                delete activeTasks[originalTabId];
+                delete activeTasks[chatWaitingTabId];
+
+                // Clear the waiting flag
+                chatWaitingTabId = null;
 
                 // onUpdated will trigger processNextStep when the new tab finishes loading
             }
-            break;
         }
     }
 });
@@ -379,21 +449,32 @@ function handleStepCompletion(tabId, result) {
 
     if (result.success) {
         if (task.status === AutomationState.CLICKING_CHAT) {
-            // Chat button clicked - chat opens as popup overlay on same page
-            // Proceed directly to typing after a delay for popup to render
-            console.log('Chat button clicked. Waiting for popup to render...');
-            task.status = AutomationState.TYPING_MESSAGE;
+            // Chat button clicked - could open as popup overlay or new tab
+            console.log('Chat button clicked. Setting up to wait for chat...');
 
-            // Wait for popup to fully render (5.5 seconds should be enough)
+            // Set this tab as waiting for chat (in case a new tab opens)
+            chatWaitingTabId = tabId;
+            task.status = AutomationState.WAITING_FOR_CHAT;
+
+            // Wait for either:
+            // 1. Chat popup to render on same page
+            // 2. New chat.reddit.com tab to open (handled by onCreated/onUpdated)
+            // After 5.5 seconds, try to type on current tab (popup case)
             setTimeout(() => {
-                console.log('Sending TYPE_MESSAGE command...');
-                chrome.tabs.sendMessage(tabId, {
-                    action: 'EXECUTE_ACTION',
-                    command: 'TYPE_MESSAGE',
-                    text: task.data.message
-                }).catch(err => {
-                    console.error('Failed to send TYPE_MESSAGE:', err);
-                });
+                // Only proceed if we're still waiting (didn't transfer to new tab)
+                if (chatWaitingTabId === tabId && activeTasks[tabId] &&
+                    activeTasks[tabId].status === AutomationState.WAITING_FOR_CHAT) {
+                    console.log('Chat popup detected (same tab). Sending TYPE_MESSAGE...');
+                    chatWaitingTabId = null;
+                    activeTasks[tabId].status = AutomationState.TYPING_MESSAGE;
+                    chrome.tabs.sendMessage(tabId, {
+                        action: 'EXECUTE_ACTION',
+                        command: 'TYPE_MESSAGE',
+                        text: task.data.message
+                    }).catch(err => {
+                        console.error('Failed to send TYPE_MESSAGE:', err);
+                    });
+                }
             }, 5500);
 
         } else if (task.status === AutomationState.TYPING_MESSAGE) {

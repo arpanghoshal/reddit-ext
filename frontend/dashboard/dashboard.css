@@ -305,11 +305,248 @@ body {
     font-size: 12px;
     cursor: pointer;
     transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
 }
 
 .btn-secondary:hover {
     border-color: #818384;
     color: #d7dadc;
+}
+
+.btn-secondary svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* Export Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+}
+
+.modal-content {
+    position: relative;
+    background-color: #1a1a1b;
+    border: 1px solid #343536;
+    border-radius: 12px;
+    width: 340px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid #343536;
+}
+
+.modal-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    margin: 0;
+}
+
+.modal-header .btn-icon {
+    font-size: 20px;
+    line-height: 1;
+    padding: 4px 8px;
+}
+
+.modal-body {
+    padding: 16px;
+}
+
+.modal-body .form-group {
+    margin-bottom: 16px;
+}
+
+.modal-body .form-group:last-child {
+    margin-bottom: 0;
+}
+
+.modal-body label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #d7dadc;
+    margin-bottom: 8px;
+}
+
+.modal-body select {
+    width: 100%;
+    padding: 10px 12px;
+    background-color: #272729;
+    border: 1px solid #343536;
+    border-radius: 6px;
+    color: #d7dadc;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.modal-body select:focus {
+    outline: none;
+    border-color: #0079d3;
+}
+
+/* Custom Date Range */
+.custom-dates {
+    margin-top: 8px;
+}
+
+.date-inputs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.date-inputs input[type="date"] {
+    flex: 1;
+    padding: 8px 10px;
+    background-color: #272729;
+    border: 1px solid #343536;
+    border-radius: 6px;
+    color: #d7dadc;
+    font-size: 12px;
+}
+
+.date-inputs input[type="date"]:focus {
+    outline: none;
+    border-color: #0079d3;
+}
+
+.date-inputs span {
+    color: #818384;
+    font-size: 12px;
+}
+
+/* Checkbox Group */
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.checkbox-item,
+.radio-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 8px 10px;
+    background-color: #272729;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+}
+
+.checkbox-item:hover,
+.radio-item:hover {
+    background-color: #343536;
+}
+
+.checkbox-item input,
+.radio-item input {
+    width: 16px;
+    height: 16px;
+    accent-color: #0079d3;
+    cursor: pointer;
+}
+
+.checkbox-item span,
+.radio-item span {
+    font-size: 13px;
+    color: #d7dadc;
+}
+
+/* Radio Group */
+.radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Modal Footer */
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 16px;
+    border-top: 1px solid #343536;
+}
+
+.modal-footer .btn-secondary {
+    flex: none;
+    padding: 10px 16px;
+}
+
+.modal-footer .btn-primary {
+    padding: 10px 20px;
+    background-color: #0079d3;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.modal-footer .btn-primary:hover {
+    background-color: #0091ff;
+}
+
+.modal-footer .btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Button Spinner */
+.btn-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #ffffff;
+    animation: spin 0.8s linear infinite;
+}
+
+.btn-spinner.hidden {
+    display: none;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* Footer */
@@ -320,6 +557,15 @@ body {
     color: #818384;
     padding-top: 12px;
     border-top: 1px solid #343536;
+}
+
+.dashboard-footer a {
+    color: #0079d3;
+    text-decoration: none;
+}
+
+.dashboard-footer a:hover {
+    text-decoration: underline;
 }
 
 /* Scrollbar */

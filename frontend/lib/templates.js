@@ -1,4 +1,4 @@
-// Message Templates System for Reddit Insight Gatherer
+// Message Templates System for Reddit Automated DM
 
 const TEMPLATES_STORAGE_KEY = 'messageTemplates';
 

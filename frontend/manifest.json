@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Reddit Insight Gatherer",
+  "name": "Reddit Automated DM",
   "version": "2.0.0",
-  "description": "Gather user insights from Reddit by sending thoughtful DMs.",
+  "description": "Automate sending personalized DMs to Reddit users.",
   "permissions": [
     "storage",
     "activeTab",
@@ -14,13 +14,25 @@
   ],
   "host_permissions": [
     "*://*.reddit.com/*",
+    "*://chat.reddit.com/*",
     "http://localhost:*/*",
-    "http://127.0.0.1:*/*",
-    "https://*/*"
+    "http://127.0.0.1:*/*"
   ],
   "action": {
     "default_popup": "dashboard/dashboard.html",
-    "default_title": "Reddit Insight Gatherer"
+    "default_title": "Reddit Automated DM",
+    "default_icon": {
+      "16": "icons/icon.svg",
+      "32": "icons/icon.svg",
+      "48": "icons/icon.svg",
+      "128": "icons/icon.svg"
+    }
+  },
+  "icons": {
+    "16": "icons/icon.svg",
+    "32": "icons/icon.svg",
+    "48": "icons/icon.svg",
+    "128": "icons/icon.svg"
   },
   "options_ui": {
     "page": "options/options.html",
@@ -58,7 +70,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "styles/main.css"
+        "styles/main.css",
+        "icons/icon.svg"
       ],
       "matches": [
         "*://*.reddit.com/*"

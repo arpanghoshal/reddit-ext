@@ -1,7 +1,8 @@
-// Options page script for Reddit Insight Gatherer
+// Options page script for Reddit Automated DM
 
 const DEFAULT_SETTINGS = {
     backendUrl: 'http://localhost:3000',
+    apiKey: '',
     typingSpeed: 100,
     delayBetweenDMs: 20,
     dailyLimit: 50
@@ -10,6 +11,7 @@ const DEFAULT_SETTINGS = {
 // DOM Elements
 const form = document.getElementById('options-form');
 const backendUrlInput = document.getElementById('backend-url');
+const apiKeyInput = document.getElementById('api-key');
 const testConnectionBtn = document.getElementById('test-connection');
 const connectionStatus = document.getElementById('connection-status');
 const typingSpeedInput = document.getElementById('typing-speed');
@@ -42,6 +44,7 @@ async function loadSettings() {
         const data = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
 
         backendUrlInput.value = data.backendUrl || DEFAULT_SETTINGS.backendUrl;
+        apiKeyInput.value = data.apiKey || DEFAULT_SETTINGS.apiKey;
         typingSpeedInput.value = data.typingSpeed || DEFAULT_SETTINGS.typingSpeed;
         speedValueSpan.textContent = typingSpeedInput.value;
         delayInput.value = data.delayBetweenDMs || DEFAULT_SETTINGS.delayBetweenDMs;
@@ -55,6 +58,7 @@ async function loadSettings() {
 
 async function testConnection() {
     const url = backendUrlInput.value.trim().replace(/\/$/, '');
+    const apiKey = apiKeyInput.value.trim();
 
     if (!url) {
         showConnectionStatus('Please enter a backend URL', 'error');
@@ -65,40 +69,89 @@ async function testConnection() {
     testConnectionBtn.disabled = true;
 
     try {
-        const response = await fetch(`${url}/api/status`, {
+        // Use AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+        // First, check server status
+        const statusResponse = await fetch(`${url}/api/status`, {
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal
         });
 
-        if (!response.ok) {
+        clearTimeout(timeoutId);
+
+        if (!statusResponse.ok) {
             throw new Error('Server returned an error');
         }
 
-        const data = await response.json();
+        const statusData = await statusResponse.json();
 
-        let statusText = 'Connected successfully!';
+        let statusText = 'Server connected!';
         const details = [];
 
-        if (data.supabaseConfigured) {
-            details.push('Database: Connected');
+        if (statusData.supabaseConfigured) {
+            details.push('Database: ✓');
         } else {
-            details.push('Database: Not configured');
+            details.push('Database: ✗');
         }
 
-        if (data.openrouterConfigured) {
-            details.push('LLM: Connected');
+        if (statusData.openrouterConfigured) {
+            details.push('LLM: ✓');
         } else {
-            details.push('LLM: Not configured');
+            details.push('LLM: ✗');
         }
 
-        if (details.length > 0) {
-            statusText += ' (' + details.join(', ') + ')';
+        // If API key provided, validate it
+        if (apiKey) {
+            const validateController = new AbortController();
+            const validateTimeoutId = setTimeout(() => validateController.abort(), 10000);
+
+            try {
+                const validateResponse = await fetch(`${url}/api/auth/validate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey }),
+                    signal: validateController.signal
+                });
+
+                clearTimeout(validateTimeoutId);
+
+                if (validateResponse.ok) {
+                    const validateData = await validateResponse.json();
+
+                    if (validateData.valid) {
+                        details.push(`API Key: ✓ (${validateData.user.name})`);
+                        statusText = 'Connected & authenticated!';
+                    } else {
+                        details.push('API Key: ✗ Invalid');
+                        showConnectionStatus(
+                            'Server connected but API key is invalid. ' + details.join(' | '),
+                            'warning'
+                        );
+                        return;
+                    }
+                }
+            } catch (validateError) {
+                console.warn('API key validation failed:', validateError);
+                details.push('API Key: ? (validation failed)');
+            }
+        } else {
+            details.push('API Key: Not set');
         }
 
-        showConnectionStatus(statusText, 'success');
+        showConnectionStatus(statusText + ' (' + details.join(' | ') + ')', 'success');
     } catch (error) {
         console.error('Connection test failed:', error);
-        showConnectionStatus('Connection failed. Make sure the backend server is running.', 'error');
+
+        let errorMessage = 'Connection failed. Make sure the backend server is running.';
+
+        if (error.name === 'AbortError') {
+            errorMessage = 'Connection timed out. Check the server URL and try again.';
+        }
+
+        showConnectionStatus(errorMessage, 'error');
     } finally {
         testConnectionBtn.disabled = false;
     }
@@ -115,6 +168,7 @@ async function saveSettings(e) {
 
     const settings = {
         backendUrl: backendUrlInput.value.trim().replace(/\/$/, ''),
+        apiKey: apiKeyInput.value.trim(),
         typingSpeed: parseInt(typingSpeedInput.value, 10),
         delayBetweenDMs: parseInt(delayInput.value, 10),
         dailyLimit: parseInt(dailyLimitInput.value, 10)
@@ -125,6 +179,26 @@ async function saveSettings(e) {
         showStatus('Backend URL is required', 'error');
         backendUrlInput.focus();
         return;
+    }
+
+    // Validate URL format
+    try {
+        new URL(settings.backendUrl);
+    } catch {
+        showStatus('Invalid backend URL format', 'error');
+        backendUrlInput.focus();
+        return;
+    }
+
+    // Validate numeric settings
+    if (isNaN(settings.typingSpeed) || settings.typingSpeed < 50 || settings.typingSpeed > 200) {
+        settings.typingSpeed = DEFAULT_SETTINGS.typingSpeed;
+    }
+    if (isNaN(settings.delayBetweenDMs) || settings.delayBetweenDMs < 15 || settings.delayBetweenDMs > 60) {
+        settings.delayBetweenDMs = DEFAULT_SETTINGS.delayBetweenDMs;
+    }
+    if (isNaN(settings.dailyLimit) || settings.dailyLimit < 10 || settings.dailyLimit > 100) {
+        settings.dailyLimit = DEFAULT_SETTINGS.dailyLimit;
     }
 
     try {

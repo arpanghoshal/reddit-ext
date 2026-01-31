@@ -1,10 +1,11 @@
-console.log('Reddit Insight Gatherer: Content script loaded');
+console.log('Reddit Automated DM: Content script loaded');
 
 // --- Configuration & State ---
 let isSidebarOpen = false;
 let sidebarWidth = 400;
 let shadowRoot = null;
 let sidebarContainer = null;
+let isSidebarInjecting = false; // Prevent race condition in sidebar injection
 
 // --- Initialization ---
 async function init() {
@@ -289,7 +290,9 @@ async function executeTypeMessage(text) {
 
 // --- Sidebar Injection ---
 function injectSidebar() {
-    if (document.getElementById('reddit-insight-sidebar-host')) return;
+    // Prevent race condition: check both DOM and flag
+    if (document.getElementById('reddit-insight-sidebar-host') || isSidebarInjecting) return;
+    isSidebarInjecting = true;
 
     const host = document.createElement('div');
     host.id = 'reddit-insight-sidebar-host';
@@ -319,7 +322,7 @@ function injectSidebar() {
             <!-- Onboarding View -->
             <div id="onboarding-view" class="hidden">
                 <header>
-                    <h1>Setup Insight Gatherer</h1>
+                    <h1>Setup Reddit Automated DM</h1>
                     <p class="subtitle">Configure your business context to generate better DMs.</p>
                 </header>
                 <form id="setup-form">
@@ -388,6 +391,9 @@ function injectSidebar() {
     shadowRoot.appendChild(container);
     sidebarContainer = container;
 
+    // Clear injection flag
+    isSidebarInjecting = false;
+
     // Initialize Logic
     initSidebarLogic();
 }
@@ -440,6 +446,7 @@ function removeSidebar() {
     if (host) host.remove();
     sidebarContainer = null;
     shadowRoot = null;
+    isSidebarInjecting = false;
 }
 
 function toggleSidebar(isOpen) {
@@ -502,12 +509,23 @@ async function initSidebarLogic() {
         checkPageStatus();
     }
 
+    // Debounced URL change detection to prevent excessive UI rebuilds
     let lastUrl = location.href;
+    let urlChangeTimeout = null;
+
     new MutationObserver(() => {
         const url = location.href;
         if (url !== lastUrl) {
             lastUrl = url;
-            checkPageStatus();
+
+            // Debounce: wait 500ms after last URL change before updating UI
+            if (urlChangeTimeout) {
+                clearTimeout(urlChangeTimeout);
+            }
+            urlChangeTimeout = setTimeout(() => {
+                urlChangeTimeout = null;
+                checkPageStatus();
+            }, 500);
         }
     }).observe(document, { subtree: true, childList: true });
 
@@ -556,9 +574,9 @@ function renderSubredditInfo(data, container) {
     container.innerHTML = `
       <div class="post-info">
         <div class="meta">
-          <span class="subreddit">r/${data.name}</span>
+          <span class="subreddit">r/${escapeHtml(data.name)}</span>
         </div>
-        <h2 class="post-title">Found ${data.postCount} potential posts</h2>
+        <h2 class="post-title">Found ${parseInt(data.postCount, 10) || 0} potential posts</h2>
         <p class="subtitle" style="margin-bottom: 12px; font-size: 0.9em; opacity: 0.8;">
             Ready to automate DMs for this subreddit.
         </p>
@@ -568,17 +586,58 @@ function renderSubredditInfo(data, container) {
 
     shadowRoot.getElementById('start-sub-auto-btn').addEventListener('click', async () => {
         const btn = shadowRoot.getElementById('start-sub-auto-btn');
-        btn.disabled = true;
-        btn.innerText = 'Starting...';
 
         // Get fresh list of links
         const links = getPostLinks();
 
         if (links.length === 0) {
-            alert('No posts found to automate!');
-            btn.disabled = false;
-            btn.innerText = 'Start Subreddit Automation';
+            showToast('No posts found to automate!', 'error');
             return;
+        }
+
+        // Show confirmation dialog
+        const confirmed = confirm(
+            `Start automation for ${links.length} posts in r/${escapeHtml(data.name)}?\n\n` +
+            `This will:\n` +
+            `• Navigate to each post\n` +
+            `• Generate a personalized DM\n` +
+            `• Send the DM to the post author\n\n` +
+            `You can stop at any time by pressing Alt+S.`
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Starting...';
+        btn.classList.add('loading');
+
+        // Add spinner styles if not present
+        if (!shadowRoot.querySelector('#spinner-style')) {
+            const style = document.createElement('style');
+            style.id = 'spinner-style';
+            style.textContent = `
+                .spinner {
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    border: 2px solid rgba(255,255,255,0.3);
+                    border-radius: 50%;
+                    border-top-color: #fff;
+                    animation: spin 0.8s linear infinite;
+                    vertical-align: middle;
+                    margin-right: 6px;
+                }
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+                .btn-primary.loading {
+                    opacity: 0.8;
+                    cursor: wait;
+                }
+            `;
+            shadowRoot.appendChild(style);
         }
 
         console.log(`Starting automation on ${links.length} posts`);
@@ -597,8 +656,8 @@ function renderPostInfo(data, container) {
     container.innerHTML = `
       <div class="post-info">
         <div class="meta">
-          <span class="subreddit">r/${data.subreddit}</span>
-          <span class="author">u/${data.author}</span>
+          <span class="subreddit">r/${escapeHtml(data.subreddit)}</span>
+          <span class="author">u/${escapeHtml(data.author)}</span>
         </div>
         <h2 class="post-title">${truncate(data.title, 60)}</h2>
         <button id="generate-btn" class="btn-primary">Generate DM Question</button>
@@ -610,7 +669,35 @@ function renderPostInfo(data, container) {
         const originalText = btn.innerText;
 
         btn.disabled = true;
-        btn.innerText = 'Generating...';
+        btn.innerHTML = '<span class="spinner"></span> Generating...';
+        btn.classList.add('loading');
+
+        // Add spinner styles if not present
+        if (!shadowRoot.querySelector('#spinner-style')) {
+            const style = document.createElement('style');
+            style.id = 'spinner-style';
+            style.textContent = `
+                .spinner {
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    border: 2px solid rgba(255,255,255,0.3);
+                    border-radius: 50%;
+                    border-top-color: #fff;
+                    animation: spin 0.8s linear infinite;
+                    vertical-align: middle;
+                    margin-right: 6px;
+                }
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+                .btn-primary.loading {
+                    opacity: 0.8;
+                    cursor: wait;
+                }
+            `;
+            shadowRoot.appendChild(style);
+        }
 
         try {
             const settings = await chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone']);
@@ -621,22 +708,24 @@ function renderPostInfo(data, container) {
             }, (response) => {
                 btn.disabled = false;
                 btn.innerText = originalText;
+                btn.classList.remove('loading');
 
                 if (chrome.runtime.lastError) {
-                    alert('Error: ' + chrome.runtime.lastError.message);
+                    showToast('Error: ' + chrome.runtime.lastError.message, 'error');
                     return;
                 }
 
                 if (response && response.success) {
                     showPreview(response.data, data.author, data);
                 } else {
-                    alert('Generation failed: ' + (response?.error || 'Unknown error'));
+                    showToast('Generation failed: ' + (response?.error || 'Unknown error'), 'error');
                 }
             });
         } catch (err) {
             btn.disabled = false;
             btn.innerText = originalText;
-            alert('Error: ' + err.message);
+            btn.classList.remove('loading');
+            showToast('Error: ' + err.message, 'error');
         }
     });
 }
@@ -760,10 +849,10 @@ function renderErrorState(error, context = {}) {
       <div class="post-info error-state">
         <div class="error-icon">&#9888;</div>
         <h3 class="error-title">Action Failed</h3>
-        <p class="error-message">${error.message || error}</p>
+        <p class="error-message">${escapeHtml(error.message || String(error))}</p>
         <div class="error-details">
-            ${context.targetUser ? `<span>User: u/${context.targetUser}</span>` : ''}
-            ${context.step ? `<span>Step: ${context.step}</span>` : ''}
+            ${context.targetUser ? `<span>User: u/${escapeHtml(context.targetUser)}</span>` : ''}
+            ${context.step ? `<span>Step: ${escapeHtml(context.step)}</span>` : ''}
         </div>
         <div class="error-actions">
             <button id="retry-btn" class="btn-retry">Retry</button>
@@ -964,8 +1053,25 @@ async function saveNewTemplate(name, content) {
     return newTemplate;
 }
 
+// HTML sanitization to prevent XSS attacks
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 function truncate(str, n) {
-    return (str.length > n) ? str.substr(0, n - 1) + '&hellip;' : str;
+    if (!str) return '';
+    // First escape HTML, then truncate
+    const escaped = escapeHtml(str);
+    return (escaped.length > n) ? escaped.substring(0, n - 1) + '…' : escaped;
+}
+
+// Safe truncate that returns text (not HTML)
+function truncateText(str, n) {
+    if (!str) return '';
+    return (str.length > n) ? str.substring(0, n - 1) + '…' : str;
 }
 
 // --- Extraction Logic ---
@@ -1111,36 +1217,51 @@ async function simulateTyping(element, text) {
 }
 
 // --- Visual Mouse Helper ---
+// Track cursor element for cleanup
+let cursorElement = null;
+let cursorCleanupTimeout = null;
+
+function cleanupCursor() {
+    if (cursorElement && cursorElement.parentNode) {
+        cursorElement.parentNode.removeChild(cursorElement);
+        cursorElement = null;
+    }
+    if (cursorCleanupTimeout) {
+        clearTimeout(cursorCleanupTimeout);
+        cursorCleanupTimeout = null;
+    }
+}
+
 async function showCursorAnimation(targetElement) {
     console.log('🖱️ Showing cursor animation...');
 
-    let cursor = document.getElementById('reddit-insight-cursor');
-    if (!cursor) {
-        cursor = document.createElement('div');
-        cursor.id = 'reddit-insight-cursor';
-        cursor.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#FF4500" width="48px" height="48px" style="filter: drop-shadow(0 2px 8px rgba(0,0,0,0.5));">
-                <path d="M13.64 21.97c-.16-.02-.3-.15-.35-.31l-1.82-5.64-4.47-1.82c-.16-.06-.27-.2-.29-.36-.02-.16.05-.32.19-.41l13.99-9.99c.13-.09.29-.11.44-.04.15.06.25.2.27.36l1.98 15.99c.02.16-.07.32-.22.4-.15.07-.33.06-.47-.03l-4.81-3.59-3.9 5.63c-.1.14-.26.22-.43.22-.11 0-.22-.03-.31-.09z"/>
-            </svg>
-        `;
-        cursor.style.position = 'fixed';
-        cursor.style.zIndex = '2147483647';
-        cursor.style.pointerEvents = 'none';
-        cursor.style.transition = 'all 1.2s cubic-bezier(0.4, 0, 0.2, 1)';
-        cursor.style.width = '48px';
-        cursor.style.height = '48px';
-        cursor.style.top = '50vh';
-        cursor.style.left = '50vw';
-        cursor.style.opacity = '0';
-        document.body.appendChild(cursor);
+    // Clean up any existing cursor first
+    cleanupCursor();
 
-        await new Promise(r => setTimeout(r, 50));
-        cursor.style.opacity = '1';
-        await new Promise(r => setTimeout(r, 200));
-    }
+    const cursor = document.createElement('div');
+    cursor.id = 'reddit-insight-cursor';
+    cursor.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#FF4500" width="48px" height="48px" style="filter: drop-shadow(0 2px 8px rgba(0,0,0,0.5));">
+            <path d="M13.64 21.97c-.16-.02-.3-.15-.35-.31l-1.82-5.64-4.47-1.82c-.16-.06-.27-.2-.29-.36-.02-.16.05-.32.19-.41l13.99-9.99c.13-.09.29-.11.44-.04.15.06.25.2.27.36l1.98 15.99c.02.16-.07.32-.22.4-.15.07-.33.06-.47-.03l-4.81-3.59-3.9 5.63c-.1.14-.26.22-.43.22-.11 0-.22-.03-.31-.09z"/>
+        </svg>
+    `;
+    cursor.style.position = 'fixed';
+    cursor.style.zIndex = '2147483647';
+    cursor.style.pointerEvents = 'none';
+    cursor.style.transition = 'all 1.2s cubic-bezier(0.4, 0, 0.2, 1)';
+    cursor.style.width = '48px';
+    cursor.style.height = '48px';
+    cursor.style.top = '50vh';
+    cursor.style.left = '50vw';
+    cursor.style.opacity = '0';
+    document.body.appendChild(cursor);
 
+    // Track for cleanup
+    cursorElement = cursor;
+
+    await new Promise(r => setTimeout(r, 50));
     cursor.style.opacity = '1';
-    cursor.style.display = 'block';
+    await new Promise(r => setTimeout(r, 200));
 
     const rect = targetElement.getBoundingClientRect();
     const targetX = rect.left + (rect.width / 2) - 24;
@@ -1159,6 +1280,12 @@ async function showCursorAnimation(targetElement) {
     await new Promise(r => setTimeout(r, 150));
 
     console.log('✓ Cursor animation complete');
+
+    // Schedule cursor cleanup after animation completes (fade out and remove)
+    cursor.style.opacity = '0';
+    cursorCleanupTimeout = setTimeout(() => {
+        cleanupCursor();
+    }, 500);
 }
 
 // Start

@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reddit Insight Gatherer</title>
+    <title>Reddit Automated DM</title>
     <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
     <div class="dashboard-container">
         <header class="dashboard-header">
-            <h1>Reddit Insight Gatherer</h1>
+            <h1>Reddit Automated DM</h1>
             <div class="header-actions">
                 <button id="settings-btn" class="btn-icon" title="Settings">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -82,14 +82,92 @@
 
         <!-- Export Section -->
         <div class="export-section">
-            <button id="export-csv" class="btn-secondary">Export CSV</button>
-            <button id="export-json" class="btn-secondary">Export JSON</button>
+            <button id="export-btn" class="btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Export Data
+            </button>
+        </div>
+
+        <!-- Export Modal -->
+        <div id="export-modal" class="modal hidden">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Export Analytics</h3>
+                    <button id="close-modal" class="btn-icon">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Date Range -->
+                    <div class="form-group">
+                        <label>Date Range</label>
+                        <select id="export-date-range">
+                            <option value="all">All Time</option>
+                            <option value="today">Today</option>
+                            <option value="week" selected>Last 7 Days</option>
+                            <option value="month">Last 30 Days</option>
+                            <option value="custom">Custom Range</option>
+                        </select>
+                    </div>
+                    <div id="custom-date-range" class="custom-dates hidden">
+                        <div class="date-inputs">
+                            <input type="date" id="export-start-date" placeholder="Start Date">
+                            <span>to</span>
+                            <input type="date" id="export-end-date" placeholder="End Date">
+                        </div>
+                    </div>
+
+                    <!-- Export Type -->
+                    <div class="form-group">
+                        <label>What to Export</label>
+                        <div class="checkbox-group">
+                            <label class="checkbox-item">
+                                <input type="checkbox" name="export-type" value="dms" checked>
+                                <span>DM History</span>
+                            </label>
+                            <label class="checkbox-item">
+                                <input type="checkbox" name="export-type" value="analytics" checked>
+                                <span>Analytics Summary</span>
+                            </label>
+                            <label class="checkbox-item">
+                                <input type="checkbox" name="export-type" value="sessions">
+                                <span>Automation Sessions</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Format -->
+                    <div class="form-group">
+                        <label>Format</label>
+                        <div class="radio-group">
+                            <label class="radio-item">
+                                <input type="radio" name="export-format" value="csv" checked>
+                                <span>CSV (Spreadsheet)</span>
+                            </label>
+                            <label class="radio-item">
+                                <input type="radio" name="export-format" value="json">
+                                <span>JSON (Raw Data)</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="cancel-export" class="btn-secondary">Cancel</button>
+                    <button id="confirm-export" class="btn-primary">
+                        <span class="btn-text">Export</span>
+                        <span class="btn-spinner hidden"></span>
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Footer -->
         <footer class="dashboard-footer">
             <span>v1.1.0</span>
-            <span>Alt+R to toggle sidebar</span>
+            <a href="#" id="open-full-dashboard">Open Dashboard</a>
         </footer>
     </div>
 

@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reddit Insight Gatherer - Settings</title>
+    <title>Reddit Automated DM - Settings</title>
     <link rel="stylesheet" href="options.css">
 </head>
 <body>
     <div class="options-container">
         <header>
-            <h1>Reddit Insight Gatherer</h1>
+            <h1>Reddit Automated DM</h1>
             <p class="subtitle">Configure your backend server and preferences</p>
         </header>
 
@@ -25,8 +25,14 @@
                         <input type="text" id="backend-url" placeholder="http://localhost:3000">
                         <button type="button" id="test-connection" class="btn-secondary">Test</button>
                     </div>
-                    <p class="help-text">URL of your Reddit Insight backend server</p>
+                    <p class="help-text">URL of your Reddit Automated DM backend server</p>
                     <div id="connection-status" class="connection-status hidden"></div>
+                </div>
+
+                <div class="form-group">
+                    <label for="api-key">API Key (Optional)</label>
+                    <input type="password" id="api-key" placeholder="Enter your API key">
+                    <p class="help-text">Required if your backend has authentication enabled. Leave empty for development mode.</p>
                 </div>
             </section>
 

@@ -1,8 +1,18 @@
-// API Client for Reddit Insight Gatherer Backend
+// API Client for Reddit Automated DM Backend
 // All API calls go through the backend server
+
+// Default timeout for API requests (30 seconds)
+const DEFAULT_TIMEOUT = 30000;
+
+// Maximum retries for failed requests
+const MAX_RETRIES = 3;
+
+// Retry delay base (exponential backoff)
+const RETRY_DELAY_BASE = 1000;
 
 let apiConfig = {
     baseUrl: null,
+    apiKey: null,
     initialized: false
 };
 
@@ -12,11 +22,12 @@ async function getApiConfig() {
         return apiConfig;
     }
 
-    const data = await chrome.storage.local.get(['backendUrl']);
+    const data = await chrome.storage.local.get(['backendUrl', 'apiKey']);
 
     if (data.backendUrl) {
         apiConfig = {
             baseUrl: data.backendUrl.replace(/\/$/, ''), // Remove trailing slash
+            apiKey: data.apiKey || null,
             initialized: true
         };
         return apiConfig;
@@ -25,31 +36,113 @@ async function getApiConfig() {
     // Default to localhost for development
     apiConfig = {
         baseUrl: 'http://localhost:3000',
+        apiKey: data.apiKey || null,
         initialized: true
     };
     return apiConfig;
 }
 
-async function apiRequest(endpoint, options = {}) {
-    const config = await getApiConfig();
-    const url = `${config.baseUrl}/api${endpoint}`;
+// Fetch with timeout support
+async function fetchWithTimeout(url, options = {}, timeout = DEFAULT_TIMEOUT) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
         const response = await fetch(url, {
             ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            }
+            signal: controller.signal
         });
+        return response;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+// Sleep helper for retry delays
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Check if error is retryable
+function isRetryableError(error, response) {
+    // Network errors are retryable
+    if (error.name === 'TypeError' || error.name === 'AbortError') {
+        return true;
+    }
+    // 5xx server errors are retryable
+    if (response && response.status >= 500) {
+        return true;
+    }
+    // 429 rate limit is retryable
+    if (response && response.status === 429) {
+        return true;
+    }
+    return false;
+}
+
+async function apiRequest(endpoint, options = {}, retries = 0) {
+    const config = await getApiConfig();
+    const url = `${config.baseUrl}/api${endpoint}`;
+
+    // Build headers with API key if configured
+    const headers = {
+        'Content-Type': 'application/json',
+        ...options.headers
+    };
+
+    // Add API key header if configured
+    if (config.apiKey) {
+        headers['X-API-Key'] = config.apiKey;
+    }
+
+    try {
+        const response = await fetchWithTimeout(url, {
+            ...options,
+            headers
+        }, options.timeout || DEFAULT_TIMEOUT);
 
         if (!response.ok) {
+            // Check if retryable
+            if (retries < MAX_RETRIES && isRetryableError(null, response)) {
+                const delay = RETRY_DELAY_BASE * Math.pow(2, retries);
+                console.warn(`API request failed with ${response.status}, retrying in ${delay}ms...`);
+                await sleep(delay);
+                return apiRequest(endpoint, options, retries + 1);
+            }
+
+            // Handle specific error codes
+            if (response.status === 401) {
+                throw new Error('Authentication required. Please configure your API key in settings.');
+            }
+            if (response.status === 403) {
+                throw new Error('Invalid API key. Please check your settings.');
+            }
+
             const error = await response.json().catch(() => ({ error: 'Request failed' }));
-            throw new Error(error.error || 'Request failed');
+            throw new Error(error.error || error.message || `Request failed with status ${response.status}`);
         }
 
         return await response.json();
     } catch (error) {
+        // Handle timeout
+        if (error.name === 'AbortError') {
+            if (retries < MAX_RETRIES) {
+                const delay = RETRY_DELAY_BASE * Math.pow(2, retries);
+                console.warn(`API request timed out, retrying in ${delay}ms...`);
+                await sleep(delay);
+                return apiRequest(endpoint, options, retries + 1);
+            }
+            throw new Error('Request timed out. Please check your network connection.');
+        }
+
+        // Handle network errors with retry
+        if (error.name === 'TypeError' && retries < MAX_RETRIES) {
+            const delay = RETRY_DELAY_BASE * Math.pow(2, retries);
+            console.warn(`Network error, retrying in ${delay}ms...`);
+            await sleep(delay);
+            return apiRequest(endpoint, options, retries + 1);
+        }
+
         console.error(`API request failed: ${endpoint}`, error);
         throw error;
     }
@@ -161,7 +254,11 @@ async function getSettings() {
 
 // Generate unique session ID (for offline/fallback use)
 function generateSessionId() {
-    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Use crypto.getRandomValues for better randomness
+    const array = new Uint8Array(16);
+    crypto.getRandomValues(array);
+    const randomStr = Array.from(array, b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
+    return `session_${Date.now()}_${randomStr}`;
 }
 
 // ============================================

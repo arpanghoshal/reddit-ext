@@ -309,6 +309,36 @@ async def get_status():
     }
 
 
+# --- Authentication Routes ---
+
+class ValidateKeyRequest(BaseModel):
+    apiKey: str
+
+
+@router.post("/auth/validate")
+async def validate_api_key_route(request: ValidateKeyRequest):
+    """Validate an API key and return user info if valid."""
+    from ..middleware.auth import validate_api_key_multi
+
+    user_info = validate_api_key_multi(request.apiKey)
+
+    if user_info:
+        return {
+            "valid": True,
+            "user": {
+                "userId": user_info.get("user_id"),
+                "name": user_info.get("name"),
+                "role": user_info.get("role"),
+                "dailyLimit": user_info.get("daily_limit", 50)
+            }
+        }
+    else:
+        return {
+            "valid": False,
+            "user": None
+        }
+
+
 # --- Classification Routes ---
 
 @router.post("/classify")
