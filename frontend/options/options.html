@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reddit Insight Gatherer - Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+<body>
+    <div class="options-container">
+        <header>
+            <h1>Reddit Insight Gatherer</h1>
+            <p class="subtitle">Configure your backend server and preferences</p>
+        </header>
+
+        <form id="options-form">
+            <!-- Backend Configuration -->
+            <section class="settings-section">
+                <h2>Backend Configuration</h2>
+                <p class="section-desc">Connect to your backend server that handles API keys and database.</p>
+
+                <div class="form-group">
+                    <label for="backend-url">Backend Server URL</label>
+                    <div class="input-with-button">
+                        <input type="text" id="backend-url" placeholder="http://localhost:3000">
+                        <button type="button" id="test-connection" class="btn-secondary">Test</button>
+                    </div>
+                    <p class="help-text">URL of your Reddit Insight backend server</p>
+                    <div id="connection-status" class="connection-status hidden"></div>
+                </div>
+            </section>
+
+            <!-- Automation Settings -->
+            <section class="settings-section">
+                <h2>Automation Settings</h2>
+
+                <div class="form-group">
+                    <label for="typing-speed">Typing Speed: <span id="speed-value">100</span>ms per character</label>
+                    <input type="range" id="typing-speed" min="50" max="200" value="100" step="10">
+                    <div class="range-labels">
+                        <span>Fast (50ms)</span>
+                        <span>Slow (200ms)</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="delay-between-dms">Delay Between DMs: <span id="delay-value">20</span> seconds</label>
+                    <input type="range" id="delay-between-dms" min="15" max="60" value="20" step="5">
+                    <div class="range-labels">
+                        <span>15s</span>
+                        <span>60s</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="daily-limit">Daily DM Limit</label>
+                    <input type="number" id="daily-limit" min="10" max="100" value="50" step="5">
+                    <p class="help-text">Maximum DMs to send per day (recommended: 50 or less)</p>
+                </div>
+            </section>
+
+            <div class="form-actions">
+                <button type="submit" class="btn-primary">Save Settings</button>
+                <button type="button" id="reset-btn" class="btn-secondary">Reset to Defaults</button>
+            </div>
+        </form>
+
+        <div id="status-message" class="status-message hidden"></div>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>

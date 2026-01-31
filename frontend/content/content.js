@@ -30,6 +30,13 @@ async function init() {
                 .then(result => sendResponse(result))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true; // Keep channel open for async response
+        } else if (request.action === 'AUTOMATION_STOPPED') {
+            showToast('Automation stopped', 'info');
+            checkPageStatus();
+        } else if (request.action === 'AUTOMATION_ERROR') {
+            renderErrorState(request.error, request.context);
+        } else if (request.action === 'SHOW_TOAST') {
+            showToast(request.message, request.type);
         }
         return true;
     });
@@ -621,7 +628,7 @@ function renderPostInfo(data, container) {
                 }
 
                 if (response && response.success) {
-                    showPreview(response.data, data.author);
+                    showPreview(response.data, data.author, data);
                 } else {
                     alert('Generation failed: ' + (response?.error || 'Unknown error'));
                 }
@@ -646,13 +653,30 @@ function renderRunningState(status) {
     }
 
     let statusMessage = 'Processing...';
+    let stepNumber = 0;
+    const totalSteps = 5;
+
     switch (status.status) {
-        case 'NAVIGATING_TO_POST': statusMessage = 'Navigating to next post...'; break;
-        case 'WAITING_FOR_POST': statusMessage = 'Analyzing post...'; break;
-        case 'GENERATING_DM': statusMessage = 'Generating DM...'; break;
-        case 'NAVIGATING_PROFILE': statusMessage = 'Going to user profile...'; break;
-        case 'CLICKING_CHAT': statusMessage = 'Opening chat...'; break;
-        case 'TYPING_MESSAGE': statusMessage = 'Typing message...'; break;
+        case 'NAVIGATING_TO_POST': statusMessage = 'Navigating to post...'; stepNumber = 1; break;
+        case 'WAITING_FOR_POST': statusMessage = 'Analyzing post...'; stepNumber = 1; break;
+        case 'GENERATING_DM': statusMessage = 'Generating DM...'; stepNumber = 2; break;
+        case 'NAVIGATING_PROFILE': statusMessage = 'Going to profile...'; stepNumber = 3; break;
+        case 'WAITING_FOR_PROFILE': statusMessage = 'Loading profile...'; stepNumber = 3; break;
+        case 'CLICKING_CHAT': statusMessage = 'Opening chat...'; stepNumber = 4; break;
+        case 'TYPING_MESSAGE': statusMessage = 'Typing message...'; stepNumber = 5; break;
+        default: stepNumber = 1;
+    }
+
+    const progressPercent = (stepNumber / totalSteps) * 100;
+
+    // Parse queue progress
+    let currentPost = 1, totalPosts = 1;
+    if (status.queueProgress) {
+        const match = status.queueProgress.match(/(\d+)\/(\d+)/);
+        if (match) {
+            currentPost = parseInt(match[1], 10);
+            totalPosts = parseInt(match[2], 10);
+        }
     }
 
     contentArea.innerHTML = `
@@ -660,71 +684,211 @@ function renderRunningState(status) {
         <div class="loader-container">
             <div class="loader"></div>
         </div>
-        <h2 class="post-title" style="text-align: center; margin-top: 10px;">Automation Active</h2>
-        <p class="subtitle" style="text-align: center;">${statusMessage}</p>
-        
-        ${status.queueProgress ? `<div class="progress-badge">Post ${status.queueProgress}</div>` : ''}
-        
-        <button id="stop-auto-btn" class="btn-danger" style="margin-top: 20px;">STOP AUTOMATION</button>
+        <h2 class="post-title" style="text-align: center; margin-top: 12px;">Automation Active</h2>
+
+        ${status.queueProgress ? `
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: ${(currentPost / totalPosts) * 100}%"></div>
+            </div>
+            <div class="progress-text">
+                <span>Post ${currentPost} of ${totalPosts}</span>
+                <span>${Math.round((currentPost / totalPosts) * 100)}%</span>
+            </div>
+        </div>
+        ` : ''}
+
+        <p class="progress-step">${statusMessage}</p>
+
+        <p class="shortcut-hint">Press <kbd>Alt</kbd>+<kbd>S</kbd> to stop</p>
+
+        <button id="stop-auto-btn" class="btn-danger" style="margin-top: 16px;">STOP AUTOMATION</button>
       </div>
     `;
 
-    // Add loader style if not present
-    if (!shadowRoot.querySelector('#loader-style')) {
-        const style = document.createElement('style');
-        style.id = 'loader-style';
-        style.textContent = `
-            .loader {
-                border: 4px solid #f3f3f3;
-                border-top: 4px solid #FF4500;
-                border-radius: 50%;
-                width: 30px;
-                height: 30px;
-                animation: spin 1s linear infinite;
-                margin: 0 auto;
-            }
-            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-            .running-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; }
-            .progress-badge { background: #eee; padding: 4px 8px; border-radius: 12px; font-size: 0.8em; margin-top: 8px; }
-            .btn-danger { background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; }
-            .btn-danger:hover { background: #c82333; }
-        `;
-        shadowRoot.appendChild(style);
-    }
-
     shadowRoot.getElementById('stop-auto-btn').addEventListener('click', () => {
         chrome.runtime.sendMessage({ action: 'STOP_AUTOMATION' }, () => {
-            checkPageStatus(); // Re-render default view
+            showToast('Automation stopped', 'info');
+            checkPageStatus();
         });
     });
 }
 
-function showPreview(message, author) {
+// --- Toast Notifications ---
+function showToast(message, type = 'info', duration = 3000) {
+    if (!shadowRoot) return;
+
+    // Create toast container if it doesn't exist
+    let toastContainer = shadowRoot.querySelector('.toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.className = 'toast-container';
+        shadowRoot.appendChild(toastContainer);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(() => {
+        toast.classList.add('show');
+    });
+
+    // Auto-remove
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+// --- Error Recovery UI ---
+function renderErrorState(error, context = {}) {
+    if (!shadowRoot) return;
+
+    const contentArea = shadowRoot.getElementById('content-area');
+    const statusDot = shadowRoot.getElementById('status-dot');
+    const statusText = shadowRoot.getElementById('status-text');
+
+    if (statusDot) {
+        statusDot.className = 'dot error';
+        statusText.innerText = 'Error';
+    }
+
+    contentArea.innerHTML = `
+      <div class="post-info error-state">
+        <div class="error-icon">&#9888;</div>
+        <h3 class="error-title">Action Failed</h3>
+        <p class="error-message">${error.message || error}</p>
+        <div class="error-details">
+            ${context.targetUser ? `<span>User: u/${context.targetUser}</span>` : ''}
+            ${context.step ? `<span>Step: ${context.step}</span>` : ''}
+        </div>
+        <div class="error-actions">
+            <button id="retry-btn" class="btn-retry">Retry</button>
+            <button id="skip-btn" class="btn-skip">Skip</button>
+        </div>
+      </div>
+    `;
+
+    // Add error dot style if not present
+    if (!shadowRoot.querySelector('#error-style')) {
+        const style = document.createElement('style');
+        style.id = 'error-style';
+        style.textContent = `
+            .dot.error { background-color: #dc3545; }
+            .dot.running { background-color: #ffa500; animation: pulse 1.5s infinite; }
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.5; }
+            }
+        `;
+        shadowRoot.appendChild(style);
+    }
+
+    shadowRoot.getElementById('retry-btn').addEventListener('click', () => {
+        chrome.runtime.sendMessage({
+            action: 'RETRY_AUTOMATION',
+            context: context
+        });
+        showToast('Retrying...', 'info');
+    });
+
+    shadowRoot.getElementById('skip-btn').addEventListener('click', () => {
+        chrome.runtime.sendMessage({
+            action: 'SKIP_AND_CONTINUE',
+            context: context
+        });
+        showToast('Skipped, continuing...', 'info');
+        checkPageStatus();
+    });
+}
+
+async function showPreview(message, author, postData = {}) {
     const contentArea = shadowRoot.getElementById('content-area');
     const postInfo = contentArea.querySelector('.post-info');
     const btn = shadowRoot.getElementById('generate-btn');
     if (btn) btn.remove();
 
+    // Load templates
+    const templates = await loadTemplates();
+
     const previewHtml = `
       <div class="preview-box">
+        <div class="template-section">
+          <label>Use Template</label>
+          <select id="template-select">
+            <option value="">AI Generated</option>
+            ${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+          </select>
+        </div>
         <label>Draft Message</label>
         <textarea id="dm-message" rows="4">${message}</textarea>
         <div class="actions">
-          <button id="copy-btn" class="btn-secondary">Copy to Clipboard</button>
-          <button id="send-btn" class="btn-primary">Open Chat</button>
+          <button id="copy-btn" class="btn-secondary">Copy</button>
+          <button id="send-btn" class="btn-primary">Send DM</button>
         </div>
-        <button id="regenerate-btn" class="btn-text">Regenerate</button>
+        <div class="template-actions">
+          <button id="save-template-btn" class="btn-text">Save as Template</button>
+          <button id="regenerate-btn" class="btn-text">Regenerate</button>
+        </div>
       </div>
     `;
 
     postInfo.insertAdjacentHTML('beforeend', previewHtml);
+
+    // Add template section styles if not present
+    if (!shadowRoot.querySelector('#template-style')) {
+        const style = document.createElement('style');
+        style.id = 'template-style';
+        style.textContent = `
+            .template-section { margin-bottom: 12px; }
+            .template-section select {
+                width: 100%;
+                padding: 8px 12px;
+                border: 1px solid var(--border-color);
+                border-radius: 4px;
+                background-color: var(--secondary-bg);
+                color: var(--text-color);
+                font-size: 13px;
+                cursor: pointer;
+            }
+            .template-actions {
+                display: flex;
+                justify-content: space-between;
+                margin-top: 8px;
+            }
+            .template-actions .btn-text { width: auto; margin-top: 0; }
+        `;
+        shadowRoot.appendChild(style);
+    }
+
+    // Store context for template rendering
+    const templateContext = {
+        author: author,
+        subreddit: postData.subreddit || '',
+        postTitle: postData.title || ''
+    };
+
+    // Template selector change handler
+    shadowRoot.getElementById('template-select').addEventListener('change', async (e) => {
+        const templateId = e.target.value;
+        if (templateId) {
+            const template = templates.find(t => t.id === templateId);
+            if (template) {
+                const rendered = renderTemplate(template.content, templateContext);
+                shadowRoot.getElementById('dm-message').value = rendered;
+            }
+        }
+    });
 
     shadowRoot.getElementById('copy-btn').addEventListener('click', () => {
         const text = shadowRoot.getElementById('dm-message').value;
         navigator.clipboard.writeText(text);
         const copyBtn = shadowRoot.getElementById('copy-btn');
         copyBtn.innerText = 'Copied!';
-        setTimeout(() => copyBtn.innerText = 'Copy to Clipboard', 2000);
+        setTimeout(() => copyBtn.innerText = 'Copy', 2000);
     });
 
     shadowRoot.getElementById('send-btn').addEventListener('click', async () => {
@@ -736,16 +900,68 @@ function showPreview(message, author) {
             action: 'START_AUTOMATION',
             data: {
                 targetUser: author,
-                message: text
+                message: text,
+                postUrl: postData.url,
+                postTitle: postData.title
             }
         });
 
         console.log('✓ Started automation via background script');
     });
 
+    shadowRoot.getElementById('save-template-btn').addEventListener('click', async () => {
+        const text = shadowRoot.getElementById('dm-message').value;
+        const name = prompt('Enter a name for this template:');
+
+        if (name && name.trim()) {
+            await saveNewTemplate(name.trim(), text);
+            showToast('Template saved!', 'success');
+        }
+    });
+
     shadowRoot.getElementById('regenerate-btn').addEventListener('click', () => {
         checkPageStatus();
     });
+}
+
+// Template helper functions
+async function loadTemplates() {
+    const data = await chrome.storage.local.get(['messageTemplates']);
+    if (data.messageTemplates && data.messageTemplates.length > 0) {
+        return data.messageTemplates;
+    }
+
+    // Return default templates
+    return [
+        { id: 'default_curious', name: 'Curious Question', content: '{{greeting}}! I saw your post about "{{post_title}}" in r/{{subreddit}}. I\'m curious - what led you to that decision?' },
+        { id: 'default_empathy', name: 'Empathetic Inquiry', content: '{{greeting}}, I noticed your post in r/{{subreddit}} and it really resonated with me. Would you mind sharing more about your experience?' },
+        { id: 'default_pain_point', name: 'Pain Point Discovery', content: '{{greeting}}! Reading your post in r/{{subreddit}}, I\'m wondering - what\'s been the most frustrating part of dealing with this?' },
+        { id: 'default_solution', name: 'Solution Explorer', content: '{{greeting}}! Your post in r/{{subreddit}} caught my attention. Have you found any solutions that worked well for you?' }
+    ];
+}
+
+function renderTemplate(template, context) {
+    const greetings = ['Hey', 'Hi', 'Hello', 'Hi there'];
+    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+
+    return template
+        .replace(/\{\{author\}\}/g, context.author || 'there')
+        .replace(/\{\{subreddit\}\}/g, context.subreddit || '')
+        .replace(/\{\{post_title\}\}/g, context.postTitle || '')
+        .replace(/\{\{greeting\}\}/g, greeting);
+}
+
+async function saveNewTemplate(name, content) {
+    const templates = await loadTemplates();
+    const newTemplate = {
+        id: `template_${Date.now()}`,
+        name: name,
+        content: content
+    };
+
+    templates.push(newTemplate);
+    await chrome.storage.local.set({ messageTemplates: templates });
+    return newTemplate;
 }
 
 function truncate(str, n) {

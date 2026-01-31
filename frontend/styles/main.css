@@ -297,3 +297,248 @@ textarea {
 .btn-text:hover {
     color: #d7dadc;
 }
+
+/* Progress Bar */
+.progress-container {
+    margin: 16px 0;
+    width: 100%;
+}
+
+.progress-bar {
+    height: 8px;
+    background: var(--secondary-bg);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff4500, #ff6b35);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    position: relative;
+}
+
+.progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.progress-text {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #818384;
+}
+
+.progress-step {
+    font-size: 13px;
+    color: #d7dadc;
+    text-align: center;
+    margin-top: 8px;
+}
+
+/* Toast Notifications */
+.toast-container {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2147483647;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    padding: 12px 20px;
+    border-radius: 8px;
+    color: white;
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.3s ease;
+    pointer-events: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.toast-success {
+    background: linear-gradient(135deg, #46a758, #3d9b4d);
+}
+
+.toast-error {
+    background: linear-gradient(135deg, #dc3545, #c82333);
+}
+
+.toast-info {
+    background: linear-gradient(135deg, #0079d3, #0066b3);
+}
+
+.toast-warning {
+    background: linear-gradient(135deg, #ffa500, #e69500);
+}
+
+/* Error State */
+.error-state {
+    text-align: center;
+    padding: 20px;
+}
+
+.error-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+
+.error-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+.error-message {
+    color: #ff6b6b;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+
+.error-details {
+    font-size: 12px;
+    color: #818384;
+    margin-bottom: 16px;
+}
+
+.error-details span {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.error-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+}
+
+.btn-retry {
+    padding: 10px 20px;
+    background-color: #d93a00;
+    color: white;
+    border: none;
+    border-radius: 9999px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-retry:hover {
+    background-color: #ff4500;
+}
+
+.btn-skip {
+    padding: 10px 20px;
+    background-color: transparent;
+    color: #818384;
+    border: 1px solid #343536;
+    border-radius: 9999px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-skip:hover {
+    border-color: #818384;
+    color: #d7dadc;
+}
+
+/* Rate Limit Badge */
+.rate-limit-badge {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: var(--secondary-bg);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 12px;
+}
+
+.rate-limit-badge .label {
+    color: #818384;
+}
+
+.rate-limit-badge .value {
+    color: #d7dadc;
+    font-weight: 500;
+}
+
+.rate-limit-badge.warning .value {
+    color: #ffa500;
+}
+
+.rate-limit-badge.danger .value {
+    color: #dc3545;
+}
+
+/* Running State Enhanced */
+.running-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.running-state .loader-container {
+    margin-bottom: 16px;
+}
+
+.loader {
+    border: 4px solid #343536;
+    border-top: 4px solid #ff4500;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Keyboard Shortcut Hint */
+.shortcut-hint {
+    font-size: 11px;
+    color: #818384;
+    margin-top: 12px;
+    text-align: center;
+}
+
+.shortcut-hint kbd {
+    background-color: #343536;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: monospace;
+}
