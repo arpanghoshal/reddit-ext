@@ -69,6 +69,18 @@ async function init() {
             }
         }
     });
+
+    // Fallback keyboard shortcut listener (in case chrome.commands doesn't work)
+    document.addEventListener('keydown', (e) => {
+        // Alt+R to toggle sidebar
+        if (e.altKey && e.key.toLowerCase() === 'r') {
+            e.preventDefault();
+            console.log('Alt+R pressed (fallback handler)');
+            const newState = !isSidebarOpen;
+            chrome.storage.local.set({ isSidebarOpen: newState });
+            toggleSidebar(newState);
+        }
+    });
 }
 
 // --- Automation Command Handler ---
@@ -356,6 +368,43 @@ function injectSidebar() {
                 </form>
             </div>
 
+            <!-- Settings View -->
+            <div id="settings-view" class="hidden">
+                <header class="main-header">
+                    <button id="back-from-settings" class="btn-icon" title="Back">←</button>
+                    <h2 style="margin:0;font-size:16px;">Settings</h2>
+                    <div></div>
+                </header>
+                <div class="settings-content">
+                    <div class="form-group">
+                        <label for="settings-business-desc">Business Description</label>
+                        <textarea id="settings-business-desc" rows="2" placeholder="Your business..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="settings-persona">Target Persona</label>
+                        <input type="text" id="settings-persona" placeholder="e.g. Startup founders">
+                    </div>
+                    <div class="form-group">
+                        <label for="settings-tone">Message Tone</label>
+                        <select id="settings-tone">
+                            <option value="Curious">Curious</option>
+                            <option value="Empathetic">Empathetic</option>
+                            <option value="Casual">Casual Reddit-native</option>
+                            <option value="Professional">Professional</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="settings-daily-limit">Daily DM Limit</label>
+                        <input type="number" id="settings-daily-limit" min="1" max="100" value="50">
+                    </div>
+                    <div class="form-group">
+                        <label for="settings-delay">Delay Between DMs (seconds)</label>
+                        <input type="number" id="settings-delay" min="5" max="120" value="20">
+                    </div>
+                    <button id="save-settings-btn" class="btn-primary">Save Settings</button>
+                </div>
+            </div>
+
             <!-- Main View -->
             <div id="main-view" class="hidden">
                 <header class="main-header">
@@ -363,11 +412,73 @@ function injectSidebar() {
                         <span id="status-dot" class="dot inactive"></span>
                         <span id="status-text">Inactive</span>
                     </div>
-                    <button id="settings-btn" class="btn-icon" title="Settings">⚙️</button>
+                    <div class="header-actions">
+                        <button id="refresh-btn" class="btn-icon" title="Refresh">🔄</button>
+                        <button id="settings-btn" class="btn-icon" title="Settings">⚙️</button>
+                    </div>
                 </header>
-                <div id="content-area">
-                    <div class="empty-state">
-                        <p>Navigate to a Reddit post to start gathering insights.</p>
+
+                <!-- Stats Section -->
+                <div id="stats-section" class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-value" id="stat-today">-</span>
+                        <span class="stat-label">Today</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="stat-success">-</span>
+                        <span class="stat-label">Success</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="stat-remaining">-</span>
+                        <span class="stat-label">Remaining</span>
+                    </div>
+                </div>
+
+                <!-- Rate Limit Bar -->
+                <div id="rate-limit-section" class="rate-limit-bar-container">
+                    <div class="rate-limit-header">
+                        <span>Daily Quota</span>
+                        <span id="rate-limit-text">0 / 50</span>
+                    </div>
+                    <div class="rate-limit-track">
+                        <div class="rate-limit-fill" id="rate-limit-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Tab Navigation -->
+                <div class="tab-nav">
+                    <button class="tab-btn active" data-tab="action">Action</button>
+                    <button class="tab-btn" data-tab="history">History</button>
+                    <button class="tab-btn" data-tab="queue">Queue</button>
+                </div>
+
+                <!-- Tab Content -->
+                <div id="tab-content">
+                    <!-- Action Tab (default) -->
+                    <div id="tab-action" class="tab-panel active">
+                        <div id="content-area">
+                            <div class="empty-state">
+                                <p>Navigate to a Reddit post to start gathering insights.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- History Tab -->
+                    <div id="tab-history" class="tab-panel hidden">
+                        <div id="history-list" class="history-list">
+                            <div class="loading-state">Loading...</div>
+                        </div>
+                    </div>
+
+                    <!-- Queue Tab -->
+                    <div id="tab-queue" class="tab-panel hidden">
+                        <div id="queue-stats" class="queue-stats">
+                            <span class="queue-stat"><span id="queue-pending">0</span> pending</span>
+                            <span class="queue-stat"><span id="queue-sent">0</span> sent</span>
+                        </div>
+                        <div id="queue-list" class="queue-list">
+                            <div class="loading-state">Loading...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -462,10 +573,14 @@ function toggleSidebar(isOpen) {
 async function initSidebarLogic() {
     const onboardingView = shadowRoot.getElementById('onboarding-view');
     const mainView = shadowRoot.getElementById('main-view');
+    const settingsView = shadowRoot.getElementById('settings-view');
     const setupForm = shadowRoot.getElementById('setup-form');
     const settingsBtn = shadowRoot.getElementById('settings-btn');
+    const refreshBtn = shadowRoot.getElementById('refresh-btn');
+    const backFromSettings = shadowRoot.getElementById('back-from-settings');
+    const saveSettingsBtn = shadowRoot.getElementById('save-settings-btn');
 
-    const data = await chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone']);
+    const data = await chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone', 'dailyLimit', 'dmDelay']);
 
     if (data.businessDesc) {
         showMainView();
@@ -473,6 +588,7 @@ async function initSidebarLogic() {
         showOnboarding();
     }
 
+    // Setup form submit
     setupForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const businessDesc = shadowRoot.getElementById('business-desc').value;
@@ -485,27 +601,83 @@ async function initSidebarLogic() {
         showMainView();
     });
 
-    settingsBtn.addEventListener('click', () => {
-        chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone'], (items) => {
-            shadowRoot.getElementById('business-desc').value = items.businessDesc || '';
-            shadowRoot.getElementById('persona').value = items.persona || '';
-            shadowRoot.getElementById('tone').value = items.tone || 'Curious';
-            const types = items.insightTypes || [];
-            shadowRoot.querySelectorAll('input[name="insight"]').forEach(cb => {
-                cb.checked = types.includes(cb.value);
-            });
-            showOnboarding();
+    // Settings button
+    settingsBtn.addEventListener('click', async () => {
+        const items = await chrome.storage.local.get(['businessDesc', 'persona', 'tone', 'dailyLimit', 'dmDelay']);
+        shadowRoot.getElementById('settings-business-desc').value = items.businessDesc || '';
+        shadowRoot.getElementById('settings-persona').value = items.persona || '';
+        shadowRoot.getElementById('settings-tone').value = items.tone || 'Curious';
+        shadowRoot.getElementById('settings-daily-limit').value = items.dailyLimit || 50;
+        shadowRoot.getElementById('settings-delay').value = items.dmDelay || 20;
+        showSettingsView();
+    });
+
+    // Back from settings
+    backFromSettings.addEventListener('click', () => {
+        showMainView();
+    });
+
+    // Save settings
+    saveSettingsBtn.addEventListener('click', async () => {
+        const businessDesc = shadowRoot.getElementById('settings-business-desc').value;
+        const persona = shadowRoot.getElementById('settings-persona').value;
+        const tone = shadowRoot.getElementById('settings-tone').value;
+        const dailyLimit = parseInt(shadowRoot.getElementById('settings-daily-limit').value) || 50;
+        const dmDelay = parseInt(shadowRoot.getElementById('settings-delay').value) || 20;
+
+        await chrome.storage.local.set({ businessDesc, persona, tone, dailyLimit, dmDelay });
+        chrome.runtime.sendMessage({ action: 'SETTINGS_UPDATED' });
+        showToast('Settings saved!', 'success');
+        showMainView();
+    });
+
+    // Refresh button
+    refreshBtn.addEventListener('click', () => {
+        loadSidebarData();
+        checkPageStatus();
+        showToast('Refreshed', 'info');
+    });
+
+    // Tab navigation
+    const tabBtns = shadowRoot.querySelectorAll('.tab-btn');
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tabName = btn.getAttribute('data-tab');
+            switchTab(tabName);
         });
     });
 
+    function switchTab(tabName) {
+        // Update active tab button
+        shadowRoot.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        shadowRoot.querySelector(`.tab-btn[data-tab="${tabName}"]`).classList.add('active');
+
+        // Show active panel
+        shadowRoot.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+        shadowRoot.getElementById(`tab-${tabName}`).classList.remove('hidden');
+
+        // Load data for the tab
+        if (tabName === 'history') loadHistory();
+        if (tabName === 'queue') loadQueue();
+    }
+
     function showOnboarding() {
         mainView.classList.add('hidden');
+        settingsView.classList.add('hidden');
         onboardingView.classList.remove('hidden');
+    }
+
+    function showSettingsView() {
+        mainView.classList.add('hidden');
+        onboardingView.classList.add('hidden');
+        settingsView.classList.remove('hidden');
     }
 
     function showMainView() {
         onboardingView.classList.add('hidden');
+        settingsView.classList.add('hidden');
         mainView.classList.remove('hidden');
+        loadSidebarData();
         checkPageStatus();
     }
 
@@ -530,6 +702,188 @@ async function initSidebarLogic() {
     }).observe(document, { subtree: true, childList: true });
 
     checkPageStatus();
+}
+
+// --- Data Loading Functions ---
+async function loadSidebarData() {
+    loadStats();
+    loadRateLimitStatus();
+}
+
+async function loadStats() {
+    if (!shadowRoot) return;
+
+    const statToday = shadowRoot.getElementById('stat-today');
+    const statSuccess = shadowRoot.getElementById('stat-success');
+    const statRemaining = shadowRoot.getElementById('stat-remaining');
+
+    if (!statToday) return;
+
+    try {
+        // Get analytics from background script
+        chrome.runtime.sendMessage({ action: 'GET_ANALYTICS' }, (analytics) => {
+            if (analytics) {
+                statToday.textContent = analytics.todayCount || 0;
+                statSuccess.textContent = analytics.successRate ? `${analytics.successRate}%` : '-';
+            }
+        });
+
+        // Get rate limit status for remaining
+        chrome.runtime.sendMessage({ action: 'GET_RATE_LIMIT_STATUS' }, (status) => {
+            if (status) {
+                const remaining = Math.max(0, status.dailyLimit - status.dailyCount);
+                statRemaining.textContent = remaining;
+            }
+        });
+    } catch (error) {
+        console.log('Error loading stats:', error);
+    }
+}
+
+async function loadRateLimitStatus() {
+    if (!shadowRoot) return;
+
+    const rateLimitText = shadowRoot.getElementById('rate-limit-text');
+    const rateLimitFill = shadowRoot.getElementById('rate-limit-fill');
+
+    if (!rateLimitText || !rateLimitFill) return;
+
+    try {
+        chrome.runtime.sendMessage({ action: 'GET_RATE_LIMIT_STATUS' }, (status) => {
+            if (status) {
+                rateLimitText.textContent = `${status.dailyCount} / ${status.dailyLimit}`;
+                const percentage = Math.min((status.dailyCount / status.dailyLimit) * 100, 100);
+                rateLimitFill.style.width = `${percentage}%`;
+
+                // Update color based on usage
+                rateLimitFill.classList.remove('warning', 'danger');
+                if (percentage >= 90) {
+                    rateLimitFill.classList.add('danger');
+                } else if (percentage >= 70) {
+                    rateLimitFill.classList.add('warning');
+                }
+            }
+        });
+    } catch (error) {
+        console.log('Error loading rate limit:', error);
+    }
+}
+
+async function loadHistory() {
+    if (!shadowRoot) return;
+
+    const historyList = shadowRoot.getElementById('history-list');
+    if (!historyList) return;
+
+    historyList.innerHTML = '<div class="loading-state">Loading...</div>';
+
+    try {
+        chrome.runtime.sendMessage({ action: 'GET_DM_HISTORY', limit: 10 }, (history) => {
+            if (!history || history.length === 0) {
+                historyList.innerHTML = '<div class="empty-state-small">No DMs sent yet</div>';
+                return;
+            }
+
+            historyList.innerHTML = history.map(item => `
+                <div class="history-item">
+                    <div class="history-item-header">
+                        <span class="history-user">u/${escapeHtml(item.recipient_username || 'Unknown')}</span>
+                        <span class="history-status ${item.status}">${item.status}</span>
+                    </div>
+                    <div class="history-meta">
+                        <span>${item.subreddit ? 'r/' + escapeHtml(item.subreddit) : ''}</span>
+                        <span>${getTimeAgo(new Date(item.created_at))}</span>
+                    </div>
+                    ${item.message_content ? `<div class="history-message">${escapeHtml(truncateText(item.message_content, 100))}</div>` : ''}
+                </div>
+            `).join('');
+        });
+    } catch (error) {
+        historyList.innerHTML = '<div class="empty-state-small">Failed to load history</div>';
+    }
+}
+
+async function loadQueue() {
+    if (!shadowRoot) return;
+
+    const queueList = shadowRoot.getElementById('queue-list');
+    const queuePending = shadowRoot.getElementById('queue-pending');
+    const queueSent = shadowRoot.getElementById('queue-sent');
+
+    if (!queueList) return;
+
+    queueList.innerHTML = '<div class="loading-state">Loading...</div>';
+
+    try {
+        // Get queue stats
+        chrome.runtime.sendMessage({ action: 'GET_QUEUE_STATS' }, (stats) => {
+            if (stats) {
+                queuePending.textContent = stats.pending || 0;
+                queueSent.textContent = stats.sent || 0;
+            }
+        });
+
+        // Get queue items
+        chrome.runtime.sendMessage({ action: 'GET_QUEUE', status: 'pending', limit: 5 }, (items) => {
+            if (!items || items.length === 0) {
+                queueList.innerHTML = '<div class="empty-state-small">No pending items</div>';
+                return;
+            }
+
+            queueList.innerHTML = items.map(item => `
+                <div class="queue-item" data-id="${item.id}">
+                    <div class="queue-item-header">
+                        <span class="queue-user">u/${escapeHtml(item.recipient_username || 'Unknown')}</span>
+                        ${item.relevance_score ? `<span class="queue-score">${Math.round(item.relevance_score * 100)}%</span>` : ''}
+                    </div>
+                    <div class="queue-message">${escapeHtml(truncateText(item.message_content || '', 80))}</div>
+                    <div class="queue-actions">
+                        <button class="btn-approve" onclick="approveQueueItem('${item.id}')">Approve</button>
+                        <button class="btn-reject" onclick="rejectQueueItem('${item.id}')">Reject</button>
+                    </div>
+                </div>
+            `).join('');
+
+            // Add event listeners for queue actions
+            queueList.querySelectorAll('.btn-approve').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const itemId = e.target.closest('.queue-item').getAttribute('data-id');
+                    handleQueueAction(itemId, 'approve');
+                });
+            });
+
+            queueList.querySelectorAll('.btn-reject').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const itemId = e.target.closest('.queue-item').getAttribute('data-id');
+                    handleQueueAction(itemId, 'reject');
+                });
+            });
+        });
+    } catch (error) {
+        queueList.innerHTML = '<div class="empty-state-small">Failed to load queue</div>';
+    }
+}
+
+function handleQueueAction(itemId, action) {
+    chrome.runtime.sendMessage({
+        action: action === 'approve' ? 'APPROVE_QUEUE_ITEM' : 'REJECT_QUEUE_ITEM',
+        itemId: itemId
+    }, (response) => {
+        if (response && response.success) {
+            showToast(`Item ${action}d`, 'success');
+            loadQueue(); // Refresh queue
+        } else {
+            showToast(`Failed to ${action} item`, 'error');
+        }
+    });
+}
+
+function getTimeAgo(date) {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 function checkPageStatus() {

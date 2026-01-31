@@ -5,47 +5,18 @@
 from datetime import datetime
 
 # Hardcoded API keys for development/testing
-# Replace these with your own or use the ones below
+# Empty dict = authentication disabled (dev mode)
+# To enable auth, add API keys here
 VALID_API_KEYS = {
-    # Admin key - full access
-    "rig-admin-key-2024-super-secret": {
-        "user_id": "admin",
-        "name": "Admin User",
-        "role": "admin",
-        "created_at": "2024-01-01T00:00:00Z",
-        "is_active": True,
-        "daily_limit": 1000
-    },
-
-    # Test user key
-    "rig-test-user-abc123xyz789": {
-        "user_id": "test-user-1",
-        "name": "Test User",
-        "role": "user",
-        "created_at": "2024-01-15T00:00:00Z",
-        "is_active": True,
-        "daily_limit": 50
-    },
-
-    # Demo key - limited access
-    "rig-demo-key-try-it-out-2024": {
-        "user_id": "demo",
-        "name": "Demo User",
-        "role": "demo",
-        "created_at": "2024-01-20T00:00:00Z",
-        "is_active": True,
-        "daily_limit": 10
-    },
-
-    # Development key - for local testing
-    "rig-dev-local-testing-key": {
-        "user_id": "developer",
-        "name": "Local Developer",
-        "role": "admin",
-        "created_at": "2024-01-01T00:00:00Z",
-        "is_active": True,
-        "daily_limit": 500
-    }
+    # Uncomment these for production:
+    # "rig-admin-key-2024-super-secret": {
+    #     "user_id": "admin",
+    #     "name": "Admin User",
+    #     "role": "admin",
+    #     "created_at": "2024-01-01T00:00:00Z",
+    #     "is_active": True,
+    #     "daily_limit": 1000
+    # },
 }
 
 

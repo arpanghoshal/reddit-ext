@@ -1,11 +1,11 @@
 // API Client for Reddit Automated DM Backend
 // All API calls go through the backend server
 
-// Default timeout for API requests (30 seconds)
-const DEFAULT_TIMEOUT = 30000;
+// Default timeout for API requests (5 seconds - fast fail when backend is down)
+const DEFAULT_TIMEOUT = 5000;
 
-// Maximum retries for failed requests
-const MAX_RETRIES = 3;
+// Maximum retries for failed requests (reduced for faster fail when backend is down)
+const MAX_RETRIES = 1;
 
 // Retry delay base (exponential backoff)
 const RETRY_DELAY_BASE = 1000;
@@ -15,6 +15,15 @@ let apiConfig = {
     apiKey: null,
     initialized: false
 };
+
+// Reset config cache (call when settings change)
+function resetApiConfig() {
+    apiConfig = {
+        baseUrl: null,
+        apiKey: null,
+        initialized: false
+    };
+}
 
 // Get API configuration from storage
 async function getApiConfig() {
@@ -616,84 +625,450 @@ async function getReplySuggestion(conversationId) {
     return result.data?.suggestion;
 }
 
-// Export for use in background script
-if (typeof globalThis !== 'undefined') {
-    globalThis.api = {
-        // Original functions
-        isConfigured,
-        getStatus,
-        generateQuestion,
-        getAvailableModels,
-        logDM,
-        getDMHistory,
-        getDMsBySubreddit,
-        startAutomationSession,
-        updateAutomationSession,
-        getAutomationLogs,
-        getAnalytics,
-        saveSettings,
-        getSettings,
-        generateSessionId,
+// ============================================
+// USER ANALYSIS FUNCTIONS (Deep Profile)
+// ============================================
 
-        // Classification
-        classifyPost,
-        getClassificationStats,
-
-        // Qualification
-        qualifyUser,
-        getQualificationStats,
-        filterPost,
-
-        // Queue
-        getQueue,
-        addToQueue,
-        getQueueStats,
-        getNextQueueItem,
-        updateQueueItem,
-        approveQueueItem,
-        rejectQueueItem,
-        markQueueItemSent,
-        markQueueItemFailed,
-        bulkApproveQueue,
-        bulkRejectQueue,
-
-        // Accounts
-        getAccounts,
-        addAccount,
-        getAccount,
-        updateAccount,
-        deleteAccount,
-        getAccountCookies,
-        canAccountSend,
-        incrementAccountDM,
-        checkAccountShadowban,
-        getAccountSubreddits,
-        assignAccountToSubreddit,
-
-        // Rotation
-        getNextAccountForSubreddit,
-        getRotationStatus,
-        getNextAvailableAccount,
-
-        // Safety
-        getSafetyEvents,
-        logSafetyEvent,
-        getAccountHealth,
-
-        // Rules
-        getRules,
-        createRule,
-        updateRule,
-        deleteRule,
-        evaluateRules,
-        getRuleTemplates,
-
-        // Conversations
-        getConversations,
-        getConversation,
-        updateConversation,
-        getConversationStats,
-        syncConversation,
-        getReplySuggestion
-    };
+async function analyzeUser(username, forceRefresh = false) {
+    const result = await apiRequest(`/user-analysis/${encodeURIComponent(username)}?forceRefresh=${forceRefresh}`);
+    return result.data;
 }
+
+async function getOptimalSendTime(username) {
+    const result = await apiRequest(`/user-analysis/${encodeURIComponent(username)}/optimal-time`);
+    return result.data;
+}
+
+async function getSubredditCulture(subreddit) {
+    const result = await apiRequest(`/subreddit-culture/${encodeURIComponent(subreddit)}`);
+    return result.data;
+}
+
+// ============================================
+// LEAD SCORING FUNCTIONS
+// ============================================
+
+async function calculateLeadScore(post, classification, qualification, userProfile = null) {
+    const result = await apiRequest('/lead-score', {
+        method: 'POST',
+        body: JSON.stringify({ post, classification, qualification, userProfile })
+    });
+    return result.data;
+}
+
+async function scoreLeadsBatch(leads) {
+    const result = await apiRequest('/lead-score/batch', {
+        method: 'POST',
+        body: JSON.stringify({ leads })
+    });
+    return result.data;
+}
+
+async function getLeadScoreStats(days = 7) {
+    const result = await apiRequest(`/lead-score/stats?days=${days}`);
+    return result.data;
+}
+
+// ============================================
+// INTENT DETECTION FUNCTIONS
+// ============================================
+
+async function detectIntent(message, conversationContext = '', useLlmFallback = true) {
+    const result = await apiRequest('/intent/detect', {
+        method: 'POST',
+        body: JSON.stringify({ message, conversationContext, useLlmFallback })
+    });
+    return result.data;
+}
+
+async function getIntentTemplate(intentName) {
+    const result = await apiRequest(`/intent/${encodeURIComponent(intentName)}/template`);
+    return result.data;
+}
+
+async function analyzeSentimentTrajectory(messages) {
+    const result = await apiRequest('/intent/sentiment-trajectory', {
+        method: 'POST',
+        body: JSON.stringify({ messages })
+    });
+    return result.data;
+}
+
+// ============================================
+// A/B TESTING FUNCTIONS
+// ============================================
+
+async function getExperiments(status = 'running') {
+    const result = await apiRequest(`/experiments?status=${status}`);
+    return result.data || [];
+}
+
+async function createExperiment(experimentData) {
+    const result = await apiRequest('/experiments', {
+        method: 'POST',
+        body: JSON.stringify(experimentData)
+    });
+    return result.data;
+}
+
+async function getExperiment(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}`);
+    return result.data;
+}
+
+async function getExperimentStats(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}/stats`);
+    return result.data;
+}
+
+async function selectVariant(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}/select-variant`, {
+        method: 'POST'
+    });
+    return result.data;
+}
+
+async function recordExperimentOutcome(experimentId, variantId, success, dmId = null) {
+    const result = await apiRequest(`/experiments/${experimentId}/variants/${variantId}/outcome`, {
+        method: 'POST',
+        body: JSON.stringify({ success, dmId })
+    });
+    return result.success;
+}
+
+async function checkExperimentSignificance(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}/significance`);
+    return result.data;
+}
+
+async function pauseExperiment(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}/pause`, {
+        method: 'POST'
+    });
+    return result.data;
+}
+
+async function resumeExperiment(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}/resume`, {
+        method: 'POST'
+    });
+    return result.data;
+}
+
+async function promoteExperimentWinner(experimentId) {
+    const result = await apiRequest(`/experiments/${experimentId}/promote-winner`, {
+        method: 'POST'
+    });
+    return result.data;
+}
+
+// ============================================
+// ANALYTICS FUNCTIONS (Funnel & ROI)
+// ============================================
+
+async function getFunnelMetrics(options = {}) {
+    const queryParams = new URLSearchParams();
+    if (options.startDate) queryParams.set('startDate', options.startDate);
+    if (options.endDate) queryParams.set('endDate', options.endDate);
+    if (options.accountId) queryParams.set('accountId', options.accountId);
+    if (options.subreddit) queryParams.set('subreddit', options.subreddit);
+
+    const result = await apiRequest(`/analytics/funnel?${queryParams}`);
+    return result.data;
+}
+
+async function logFunnelEvent(event) {
+    const result = await apiRequest('/analytics/funnel/event', {
+        method: 'POST',
+        body: JSON.stringify(event)
+    });
+    return result.data;
+}
+
+async function getROIMetrics(options = {}) {
+    const queryParams = new URLSearchParams();
+    if (options.startDate) queryParams.set('startDate', options.startDate);
+    if (options.endDate) queryParams.set('endDate', options.endDate);
+
+    const result = await apiRequest(`/analytics/roi?${queryParams}`);
+    return result.data;
+}
+
+async function logConversion(conversionData) {
+    const result = await apiRequest('/analytics/conversion', {
+        method: 'POST',
+        body: JSON.stringify(conversionData)
+    });
+    return result.data;
+}
+
+async function getPerformanceBySubreddit(options = {}) {
+    const queryParams = new URLSearchParams();
+    if (options.startDate) queryParams.set('startDate', options.startDate);
+    if (options.endDate) queryParams.set('endDate', options.endDate);
+    if (options.limit) queryParams.set('limit', options.limit);
+
+    const result = await apiRequest(`/analytics/by-subreddit?${queryParams}`);
+    return result.data || [];
+}
+
+async function getPerformanceByDay(options = {}) {
+    const queryParams = new URLSearchParams();
+    if (options.startDate) queryParams.set('startDate', options.startDate);
+    if (options.endDate) queryParams.set('endDate', options.endDate);
+
+    const result = await apiRequest(`/analytics/by-day?${queryParams}`);
+    return result.data || [];
+}
+
+async function getRecommendations() {
+    const result = await apiRequest('/analytics/recommendations');
+    return result.data || [];
+}
+
+async function getDashboardSummary() {
+    const result = await apiRequest('/analytics/dashboard');
+    return result.data;
+}
+
+// ============================================
+// SAFETY PRE-SEND CHECK FUNCTIONS
+// ============================================
+
+async function preSendSafetyCheck(accountId, recipientUsername, message, subreddit = null) {
+    const result = await apiRequest('/safety/pre-send-check', {
+        method: 'POST',
+        body: JSON.stringify({ accountId, recipientUsername, message, subreddit })
+    });
+    return result.data;
+}
+
+async function getRiskAssessment(accountId) {
+    const result = await apiRequest(`/safety/risk-assessment/${accountId}`);
+    return result.data;
+}
+
+async function checkDuplicateRecipient(recipientUsername, excludeAccountId = null, lookbackDays = 30) {
+    const result = await apiRequest('/safety/check-duplicate', {
+        method: 'POST',
+        body: JSON.stringify({ recipientUsername, excludeAccountId, lookbackDays })
+    });
+    return result.data;
+}
+
+// =============================================================================
+// CONVERSATION AI (Automated Replies & Follow-ups)
+// =============================================================================
+
+async function getConversationsNeedingReply(accountId = null, limit = 50) {
+    const params = new URLSearchParams();
+    if (accountId) params.append('accountId', accountId);
+    params.append('limit', limit.toString());
+    const result = await apiRequest(`/conversations/needing-reply?${params}`);
+    return result.data;
+}
+
+async function analyzeReply(conversation, settings = null) {
+    const result = await apiRequest('/conversations/analyze-reply', {
+        method: 'POST',
+        body: JSON.stringify({ conversation, settings })
+    });
+    return result.data;
+}
+
+async function processPendingReplies(accountId = null, autoSend = false, settings = null) {
+    const result = await apiRequest('/conversations/process-pending-replies', {
+        method: 'POST',
+        body: JSON.stringify({ accountId, autoSend, settings })
+    });
+    return result.data;
+}
+
+async function getConversationsNeedingFollowUp(accountId = null, limit = 50) {
+    const params = new URLSearchParams();
+    if (accountId) params.append('accountId', accountId);
+    params.append('limit', limit.toString());
+    const result = await apiRequest(`/conversations/needing-follow-up?${params}`);
+    return result.data;
+}
+
+async function generateFollowUp(conversation, settings = null) {
+    const result = await apiRequest('/conversations/generate-follow-up', {
+        method: 'POST',
+        body: JSON.stringify({ conversation, settings })
+    });
+    return result.data;
+}
+
+async function processScheduledFollowUps(accountId = null, autoQueue = false, settings = null) {
+    const result = await apiRequest('/conversations/process-follow-ups', {
+        method: 'POST',
+        body: JSON.stringify({ accountId, autoQueue, settings })
+    });
+    return result.data;
+}
+
+async function getPrioritizedConversations(accountId = null, limit = 20) {
+    const params = new URLSearchParams();
+    if (accountId) params.append('accountId', accountId);
+    params.append('limit', limit.toString());
+    const result = await apiRequest(`/conversations/prioritized?${params}`);
+    return result.data;
+}
+
+async function getConversationSummary(accountId = null) {
+    const params = new URLSearchParams();
+    if (accountId) params.append('accountId', accountId);
+    const result = await apiRequest(`/conversations/summary?${params}`);
+    return result.data;
+}
+
+async function getConversationHealth(conversationId) {
+    const result = await apiRequest(`/conversations/${conversationId}/health`);
+    return result.data;
+}
+
+async function queueFollowUp(conversationId, message, accountId) {
+    const result = await apiRequest('/conversations/queue-follow-up', {
+        method: 'POST',
+        body: JSON.stringify({ conversationId, message, accountId })
+    });
+    return result.success;
+}
+
+// ES Module exports
+export {
+    // Config management
+    resetApiConfig,
+
+    // Original functions
+    isConfigured,
+    getStatus,
+    generateQuestion,
+    getAvailableModels,
+    logDM,
+    getDMHistory,
+    getDMsBySubreddit,
+    startAutomationSession,
+    updateAutomationSession,
+    getAutomationLogs,
+    getAnalytics,
+    saveSettings,
+    getSettings,
+    generateSessionId,
+
+    // Classification
+    classifyPost,
+    getClassificationStats,
+
+    // Qualification
+    qualifyUser,
+    getQualificationStats,
+    filterPost,
+
+    // Queue
+    getQueue,
+    addToQueue,
+    getQueueStats,
+    getNextQueueItem,
+    updateQueueItem,
+    approveQueueItem,
+    rejectQueueItem,
+    markQueueItemSent,
+    markQueueItemFailed,
+    bulkApproveQueue,
+    bulkRejectQueue,
+
+    // Accounts
+    getAccounts,
+    addAccount,
+    getAccount,
+    updateAccount,
+    deleteAccount,
+    getAccountCookies,
+    canAccountSend,
+    incrementAccountDM,
+    checkAccountShadowban,
+    getAccountSubreddits,
+    assignAccountToSubreddit,
+
+    // Rotation
+    getNextAccountForSubreddit,
+    getRotationStatus,
+    getNextAvailableAccount,
+
+    // Safety
+    getSafetyEvents,
+    logSafetyEvent,
+    getAccountHealth,
+
+    // Rules
+    getRules,
+    createRule,
+    updateRule,
+    deleteRule,
+    evaluateRules,
+    getRuleTemplates,
+
+    // Conversations
+    getConversations,
+    getConversation,
+    updateConversation,
+    getConversationStats,
+    syncConversation,
+    getReplySuggestion,
+
+    // User Analysis (Deep Profile)
+    analyzeUser,
+    getOptimalSendTime,
+    getSubredditCulture,
+
+    // Lead Scoring
+    calculateLeadScore,
+    scoreLeadsBatch,
+    getLeadScoreStats,
+
+    // Intent Detection
+    detectIntent,
+    getIntentTemplate,
+    analyzeSentimentTrajectory,
+
+    // A/B Testing
+    getExperiments,
+    createExperiment,
+    getExperiment,
+    getExperimentStats,
+    selectVariant,
+    recordExperimentOutcome,
+    checkExperimentSignificance,
+    pauseExperiment,
+    resumeExperiment,
+    promoteExperimentWinner,
+
+    // Analytics (Funnel & ROI)
+    getFunnelMetrics,
+    logFunnelEvent,
+    getROIMetrics,
+    logConversion,
+    getPerformanceBySubreddit,
+    getPerformanceByDay,
+    getRecommendations,
+    getDashboardSummary,
+
+    // Safety Pre-Send Check
+    preSendSafetyCheck,
+    getRiskAssessment,
+    checkDuplicateRecipient,
+
+    // Conversation AI (Automated Replies & Follow-ups)
+    getConversationsNeedingReply,
+    analyzeReply,
+    processPendingReplies,
+    getConversationsNeedingFollowUp,
+    generateFollowUp,
+    processScheduledFollowUps,
+    getPrioritizedConversations,
+    getConversationSummary,
+    getConversationHealth,
+    queueFollowUp
+};

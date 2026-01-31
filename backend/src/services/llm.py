@@ -7,8 +7,11 @@ import os
 from typing import Dict, Any, List, Optional
 import httpx
 
+# Import user analysis for personalization
+from . import user_analysis
+
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "tngtech/deepseek-r1t2-chimera:free"
+DEFAULT_MODEL = "deepseek/deepseek-v3.2"
 
 
 async def generate_question(input_data: Dict[str, Any]) -> str:
@@ -28,30 +31,86 @@ async def generate_question(input_data: Dict[str, Any]) -> str:
     if not api_key:
         raise ValueError("OpenRouter API key not configured")
 
-    model = settings.get("model", DEFAULT_MODEL)
+    model = settings.get("model") or DEFAULT_MODEL
+    print(f"[DEBUG] Using model: {model}")
 
-    system_prompt = f"""You are a helpful assistant for a founder/marketer.
-Your goal is to generate a single, natural, open-ended DM question with an introduction like hey or hi to a Reddit user based on their post.
+    # Fetch user profile for deep personalization
+    user_profile = None
+    personalization_context = {}
+    subreddit_culture = {}
 
-CONTEXT:
+    try:
+        author = post.get("author", "")
+        if author and author != "[deleted]":
+            user_profile = await user_analysis.get_or_analyze(author)
+            if user_profile and not user_profile.get("error"):
+                personalization_context = user_profile.get("personalization_context", {})
+                print(f"[DEBUG] User profile loaded for {author}")
+
+        # Get subreddit culture
+        subreddit = post.get("subreddit", "")
+        if subreddit:
+            subreddit_culture = await user_analysis.get_subreddit_culture(subreddit)
+    except Exception as e:
+        print(f"[DEBUG] Could not load user profile: {e}")
+
+    # Build enhanced system prompt with personalization
+    personalization_section = ""
+    if personalization_context:
+        sections = []
+        if personalization_context.get("interest_summary"):
+            sections.append(f"- {personalization_context['interest_summary']}")
+        if personalization_context.get("pain_summary"):
+            sections.append(f"- {personalization_context['pain_summary']}")
+        if personalization_context.get("professional_context"):
+            sections.append(f"- {personalization_context['professional_context']}")
+        if personalization_context.get("style_guidance"):
+            sections.append(f"- Style: {personalization_context['style_guidance']}")
+        if personalization_context.get("length_guidance"):
+            sections.append(f"- Length: {personalization_context['length_guidance']}")
+
+        if sections:
+            personalization_section = f"""
+USER PROFILE INSIGHTS:
+{chr(10).join(sections)}
+"""
+
+    subreddit_section = ""
+    if subreddit_culture:
+        subreddit_section = f"""
+SUBREDDIT CULTURE (r/{post.get('subreddit', 'unknown')}):
+- Typical Tone: {subreddit_culture.get('typical_tone', 'friendly')}
+- Greeting Style: {', '.join(subreddit_culture.get('greeting_examples', ['Hey', 'Hi']))}
+- Avoid: {', '.join(subreddit_culture.get('taboo_topics', []))}
+- Culture: {subreddit_culture.get('culture_notes', '')}
+"""
+
+    system_prompt = f"""You are a helpful assistant for a founder/marketer crafting highly personalized outreach.
+Your goal is to generate a single, natural, open-ended DM that feels like it's from someone who genuinely understands the user's situation.
+
+BUSINESS CONTEXT:
 Business: {settings.get('businessDesc', 'Not specified')}
 Target Persona: {settings.get('persona', 'General')}
 Insight Goal: {', '.join(settings.get('insightTypes', [])) or 'General insights'}
 Tone: {settings.get('tone', 'Curious')}
-
+{personalization_section}{subreddit_section}
 RULES:
 1. NO selling, pitching, or promoting.
 2. NO links or product mentions.
-3. Must feel like a personal, human message.
-4. Keep it short (1-2 sentences).
-5. Focus on the user's problem/situation.
-6. The output should be ONLY the message text, no quotes or explanations."""
+3. Must feel like a personal, human message from someone who "gets it".
+4. Keep it short (1-2 sentences max).
+5. Focus on their specific situation, not generic questions.
+6. If user profile insights are available, subtly reference relevant details.
+7. Match the subreddit culture and user's communication style.
+8. Start with an appropriate greeting based on subreddit culture.
+9. Output ONLY the message text, no quotes or explanations."""
 
     user_prompt = f"""Post Title: {post.get('title', 'No title')}
 Post Body: {post.get('body', 'No body')}
-Subreddit: {post.get('subreddit', 'Unknown')}
+Subreddit: r/{post.get('subreddit', 'Unknown')}
+Author: u/{post.get('author', 'unknown')}
 
-Generate a DM question:"""
+Generate a personalized DM:"""
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -74,6 +133,7 @@ Generate a DM question:"""
 
         if response.status_code != 200:
             error_data = response.json()
+            print(f"[DEBUG] OpenRouter error response: {error_data}")
             raise ValueError(error_data.get("error", {}).get("message", "Failed to generate question"))
 
         data = response.json()
@@ -88,7 +148,7 @@ Generate a DM question:"""
 def get_available_models() -> List[Dict[str, str]]:
     """Get list of available LLM models"""
     return [
-        {"id": "tngtech/deepseek-r1t2-chimera:free", "name": "DeepSeek R1T2 Chimera (Free)"},
+        {"id": "deepseek/deepseek-v3.2", "name": "DeepSeek V3"},
         {"id": "google/gemma-2-9b-it:free", "name": "Gemma 2 9B (Free)"},
         {"id": "meta-llama/llama-3.1-8b-instruct:free", "name": "Llama 3.1 8B (Free)"},
         {"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku"},
@@ -114,6 +174,19 @@ async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict
 
     model = settings.get("model", DEFAULT_MODEL)
 
+    # Fetch user profile for context
+    participant_username = conversation.get("participantUsername", "")
+    user_profile = None
+    personalization_context = {}
+
+    try:
+        if participant_username:
+            user_profile = await user_analysis.get_or_analyze(participant_username)
+            if user_profile and not user_profile.get("error"):
+                personalization_context = user_profile.get("personalization_context", {})
+    except Exception as e:
+        print(f"[DEBUG] Could not load user profile for reply: {e}")
+
     # Format conversation history
     messages = conversation.get("messages", [])
     conversation_context = "\n".join([
@@ -121,26 +194,44 @@ async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict
         for m in messages
     ])
 
+    # Build personalization section
+    personalization_section = ""
+    if personalization_context:
+        sections = []
+        if personalization_context.get("interest_summary"):
+            sections.append(f"- {personalization_context['interest_summary']}")
+        if personalization_context.get("style_guidance"):
+            sections.append(f"- Communication style: {personalization_context['style_guidance']}")
+        if personalization_context.get("length_guidance"):
+            sections.append(f"- {personalization_context['length_guidance']}")
+
+        if sections:
+            personalization_section = f"""
+USER PROFILE:
+{chr(10).join(sections)}
+"""
+
     system_prompt = f"""You are helping craft a follow-up reply in an ongoing Reddit DM conversation.
 
 CONTEXT:
 Business: {settings.get('businessDesc') or settings.get('business_desc', 'Not specified')}
 Goal: Gather insights, build relationship
 Conversation Status: {conversation.get('status', 'active')}
-
+{personalization_section}
 RULES:
 1. Keep the conversation natural and human
 2. Don't be pushy or salesy
-3. Match the tone of the conversation
+3. Match the tone of the conversation AND the user's communication style
 4. If they seem interested, gently move toward next steps
 5. If they seem cold, be gracious and leave door open
-6. Keep reply concise (1-3 sentences)
-7. Output ONLY the reply text, no quotes or explanations"""
+6. Keep reply concise - match their message length
+7. Reference their interests or context naturally if relevant
+8. Output ONLY the reply text, no quotes or explanations"""
 
     user_prompt = f"""Conversation so far:
 {conversation_context}
 
-Generate a follow-up reply:"""
+Generate a contextual follow-up reply:"""
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -199,12 +290,29 @@ async def generate_follow_up(
     model = settings.get("model", DEFAULT_MODEL)
     participant_username = conversation.get("participantUsername", "there")
 
+    # Get user profile for optimal timing and personalization
+    user_profile = None
+    personalization_hint = ""
+
+    try:
+        if participant_username and participant_username != "there":
+            user_profile = await user_analysis.get_or_analyze(participant_username)
+            if user_profile and not user_profile.get("error"):
+                # Get a relevant interest to potentially reference
+                interests = user_profile.get("interests", [])
+                if interests:
+                    top_interest = interests[0].get("topic", "")
+                    if top_interest:
+                        personalization_hint = f"\nNote: User is active in {top_interest} - you could reference this naturally"
+    except Exception as e:
+        print(f"[DEBUG] Could not load user profile for follow-up: {e}")
+
     system_prompt = f"""You are helping craft a gentle follow-up message for someone who hasn't replied to a previous DM.
 
 CONTEXT:
 Days since last message: {days_since_last_message}
 Their username: u/{participant_username}
-Conversation status: {conversation.get('status', 'no reply')}
+Conversation status: {conversation.get('status', 'no reply')}{personalization_hint}
 
 RULES:
 1. Be friendly and not pushy
@@ -212,7 +320,8 @@ RULES:
 3. Give them an easy out if not interested
 4. Keep it very short (1-2 sentences)
 5. Don't guilt them or be passive-aggressive
-6. Output ONLY the message text"""
+6. If referencing their interests, do so naturally and briefly
+7. Output ONLY the message text"""
 
     user_prompt = "Generate a gentle follow-up message:"
 

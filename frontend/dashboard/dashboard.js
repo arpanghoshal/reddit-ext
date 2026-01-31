@@ -1,4 +1,5 @@
 // Dashboard script for Reddit Automated DM
+console.log('Dashboard script starting...');
 
 // DOM Elements
 const apiWarning = document.getElementById('api-warning');
@@ -32,16 +33,19 @@ let analyticsData = null;
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-    await checkBackendConnection();
-    await loadStats();
-    await loadRateLimitStatus();
-    await loadSubreddits();
-    await loadActivity();
+    console.log('Dashboard init() called');
 
-    // Event listeners
+    // Attach event listeners FIRST so UI is interactive immediately
     settingsBtn.addEventListener('click', openSettings);
     configureBtn.addEventListener('click', openSettings);
     filterStatus.addEventListener('change', filterActivity);
+
+    // Load data in parallel (don't block on each other)
+    checkBackendConnection().then(() => console.log('Backend check done'));
+    loadStats().then(() => console.log('Stats loaded'));
+    loadRateLimitStatus().then(() => console.log('Rate limit loaded'));
+    loadSubreddits().then(() => console.log('Subreddits loaded'));
+    loadActivity().then(() => console.log('Activity loaded'));
 
     // Export modal event listeners
     exportBtn.addEventListener('click', openExportModal);
@@ -81,7 +85,15 @@ async function checkBackendConnection() {
         const data = await chrome.storage.local.get(['backendUrl']);
         const backendUrl = data.backendUrl || 'http://localhost:3000';
 
-        const response = await fetch(`${backendUrl}/api/status`);
+        // Add 3 second timeout to prevent hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+        const response = await fetch(`${backendUrl}/api/status`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
         if (!response.ok) {
             throw new Error('Backend not reachable');
         }
@@ -92,6 +104,7 @@ async function checkBackendConnection() {
             apiWarning.querySelector('span').textContent = 'LLM not configured on backend server.';
         }
     } catch (error) {
+        console.log('Backend connection failed:', error.message);
         apiWarning.classList.remove('hidden');
         apiWarning.querySelector('span').textContent = 'Cannot connect to backend server. Make sure it is running.';
     }

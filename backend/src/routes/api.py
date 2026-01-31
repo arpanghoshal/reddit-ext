@@ -18,6 +18,12 @@ from ..services import rotation
 from ..services import safety
 from ..services import rules
 from ..services import conversations
+from ..services import user_analysis
+from ..services import lead_scoring
+from ..services import intent_detection
+from ..services import ab_testing
+from ..services import analytics
+from ..services import conversation_ai
 
 router = APIRouter()
 
@@ -841,3 +847,557 @@ async def get_reply_suggestion_route(conversation_id: str):
     suggestion = await llm.generate_reply_suggestion(conv, settings or {})
 
     return {"success": True, "data": {"suggestion": suggestion}}
+
+
+# =============================================================================
+# USER ANALYSIS ROUTES (Deep Profile Analysis)
+# =============================================================================
+
+@router.get("/user-analysis/{username}")
+async def analyze_user_route(username: str, forceRefresh: bool = False):
+    """Get deep analysis of a Reddit user's profile"""
+    profile = await user_analysis.analyze_user(username, force_refresh=forceRefresh)
+    return {"success": True, "data": profile}
+
+
+@router.get("/user-analysis/{username}/optimal-time")
+async def get_optimal_send_time_route(username: str):
+    """Get optimal time to send a DM to this user"""
+    profile = await user_analysis.get_or_analyze(username)
+
+    if profile.get("error"):
+        raise HTTPException(status_code=404, detail=profile.get("message", "User not found"))
+
+    optimal_time = profile.get("optimal_send_time", {})
+    return {"success": True, "data": optimal_time}
+
+
+@router.get("/subreddit-culture/{subreddit}")
+async def get_subreddit_culture_route(subreddit: str):
+    """Get subreddit culture information for tone matching"""
+    culture = await user_analysis.get_subreddit_culture(subreddit)
+    return {"success": True, "data": culture}
+
+
+# =============================================================================
+# LEAD SCORING ROUTES
+# =============================================================================
+
+class LeadScoreRequest(BaseModel):
+    post: PostData
+    classification: Dict[str, Any]
+    qualification: Dict[str, Any]
+    userProfile: Optional[Dict[str, Any]] = None
+
+
+class LeadScoreBatchRequest(BaseModel):
+    leads: List[Dict[str, Any]]
+
+
+@router.post("/lead-score")
+async def calculate_lead_score_route(request: LeadScoreRequest):
+    """Calculate comprehensive lead score for a post/user"""
+    score = await lead_scoring.calculate_lead_score(
+        post=request.post.model_dump(),
+        classification=request.classification,
+        qualification=request.qualification,
+        user_profile=request.userProfile
+    )
+    return {"success": True, "data": score}
+
+
+@router.post("/lead-score/batch")
+async def score_leads_batch_route(request: LeadScoreBatchRequest):
+    """Score multiple leads in batch"""
+    results = await lead_scoring.score_batch(request.leads)
+    return {"success": True, "data": results}
+
+
+@router.get("/lead-score/stats")
+async def get_lead_score_stats_route(days: int = Query(7)):
+    """Get lead scoring statistics"""
+    stats = await lead_scoring.get_lead_score_stats(days)
+    return {"success": True, "data": stats}
+
+
+# =============================================================================
+# INTENT DETECTION ROUTES
+# =============================================================================
+
+class IntentDetectRequest(BaseModel):
+    message: str
+    conversationContext: Optional[str] = ""
+    useLlmFallback: Optional[bool] = True
+
+
+@router.post("/intent/detect")
+async def detect_intent_route(request: IntentDetectRequest):
+    """Detect intent from a user's reply message"""
+    result = await intent_detection.detect_intent(
+        message=request.message,
+        conversation_context=request.conversationContext or "",
+        use_llm_fallback=request.useLlmFallback
+    )
+    return {"success": True, "data": result}
+
+
+@router.get("/intent/{intent_name}/template")
+async def get_intent_template_route(intent_name: str):
+    """Get response template for a specific intent"""
+    template = intent_detection.get_response_template(intent_name)
+    return {"success": True, "data": template}
+
+
+class SentimentRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+
+
+@router.post("/intent/sentiment-trajectory")
+async def analyze_sentiment_route(request: SentimentRequest):
+    """Analyze sentiment trajectory across a conversation"""
+    result = intent_detection.analyze_sentiment_trajectory(request.messages)
+    return {"success": True, "data": result}
+
+
+# =============================================================================
+# A/B TESTING ROUTES
+# =============================================================================
+
+class ExperimentCreateRequest(BaseModel):
+    name: str
+    variants: List[Dict[str, Any]]
+    targetMetric: Optional[str] = "reply_rate"
+    minimumSample: Optional[int] = 100
+    confidenceLevel: Optional[float] = 0.95
+    description: Optional[str] = ""
+
+
+class OutcomeRecordRequest(BaseModel):
+    success: bool
+    dmId: Optional[str] = None
+
+
+@router.get("/experiments")
+async def get_experiments_route(status: Optional[str] = "running"):
+    """Get all experiments (optionally filter by status)"""
+    if status == "running":
+        experiments = await ab_testing.get_active_experiments()
+    else:
+        # Would need to add a get_all_experiments function for other statuses
+        experiments = await ab_testing.get_active_experiments()
+    return {"success": True, "data": experiments}
+
+
+@router.post("/experiments")
+async def create_experiment_route(request: ExperimentCreateRequest):
+    """Create a new A/B test experiment"""
+    experiment = await ab_testing.create_experiment(
+        name=request.name,
+        variants=request.variants,
+        target_metric=request.targetMetric,
+        minimum_sample=request.minimumSample,
+        confidence_level=request.confidenceLevel,
+        description=request.description
+    )
+    return {"success": True, "data": experiment}
+
+
+@router.get("/experiments/{experiment_id}")
+async def get_experiment_route(experiment_id: str):
+    """Get experiment details"""
+    experiment = await ab_testing.get_experiment(experiment_id)
+    if not experiment:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    return {"success": True, "data": experiment}
+
+
+@router.get("/experiments/{experiment_id}/stats")
+async def get_experiment_stats_route(experiment_id: str):
+    """Get detailed statistics for an experiment"""
+    stats = await ab_testing.get_experiment_stats(experiment_id)
+    return {"success": True, "data": stats}
+
+
+@router.post("/experiments/{experiment_id}/select-variant")
+async def select_variant_route(experiment_id: str):
+    """Select a variant using Thompson Sampling"""
+    result = await ab_testing.select_variant(experiment_id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return {"success": True, "data": result}
+
+
+@router.post("/experiments/{experiment_id}/variants/{variant_id}/outcome")
+async def record_outcome_route(
+    experiment_id: str,
+    variant_id: str,
+    request: OutcomeRecordRequest
+):
+    """Record the outcome of a variant (success/failure)"""
+    success = await ab_testing.record_outcome(
+        experiment_id=experiment_id,
+        variant_id=variant_id,
+        success=request.success,
+        dm_id=request.dmId
+    )
+    return {"success": success}
+
+
+@router.get("/experiments/{experiment_id}/significance")
+async def check_significance_route(experiment_id: str):
+    """Check statistical significance of an experiment"""
+    result = await ab_testing.check_statistical_significance(experiment_id)
+    return {"success": True, "data": result}
+
+
+@router.post("/experiments/{experiment_id}/pause")
+async def pause_experiment_route(experiment_id: str):
+    """Pause a running experiment"""
+    result = await ab_testing.pause_experiment(experiment_id)
+    return {"success": True, "data": result}
+
+
+@router.post("/experiments/{experiment_id}/resume")
+async def resume_experiment_route(experiment_id: str):
+    """Resume a paused experiment"""
+    result = await ab_testing.resume_experiment(experiment_id)
+    return {"success": True, "data": result}
+
+
+@router.post("/experiments/{experiment_id}/promote-winner")
+async def promote_winner_route(experiment_id: str):
+    """Promote winning variant to a template"""
+    result = await ab_testing.promote_winner_to_template(experiment_id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return {"success": True, "data": result}
+
+
+# =============================================================================
+# ANALYTICS ROUTES (Funnel & ROI)
+# =============================================================================
+
+class FunnelEventRequest(BaseModel):
+    stage: str
+    entityType: str
+    entityId: str
+    accountId: Optional[str] = None
+    subreddit: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ConversionLogRequest(BaseModel):
+    conversationId: str
+    conversionType: str
+    dealValue: Optional[float] = 0
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@router.get("/analytics/funnel")
+async def get_funnel_metrics_route(
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None,
+    accountId: Optional[str] = None,
+    subreddit: Optional[str] = None
+):
+    """Get conversion funnel metrics"""
+    from datetime import datetime
+
+    start = datetime.fromisoformat(startDate) if startDate else None
+    end = datetime.fromisoformat(endDate) if endDate else None
+
+    metrics = await analytics.get_funnel_metrics(
+        start_date=start,
+        end_date=end,
+        account_id=accountId,
+        subreddit=subreddit
+    )
+    return {"success": True, "data": metrics}
+
+
+@router.post("/analytics/funnel/event")
+async def log_funnel_event_route(request: FunnelEventRequest):
+    """Log a funnel event"""
+    event = await analytics.log_funnel_event(
+        stage=request.stage,
+        entity_type=request.entityType,
+        entity_id=request.entityId,
+        account_id=request.accountId,
+        subreddit=request.subreddit,
+        metadata=request.metadata
+    )
+    return {"success": True, "data": event}
+
+
+@router.get("/analytics/roi")
+async def get_roi_metrics_route(
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None
+):
+    """Get ROI metrics"""
+    from datetime import datetime
+
+    start = datetime.fromisoformat(startDate) if startDate else None
+    end = datetime.fromisoformat(endDate) if endDate else None
+
+    metrics = await analytics.get_roi_metrics(start_date=start, end_date=end)
+    return {"success": True, "data": metrics}
+
+
+@router.post("/analytics/conversion")
+async def log_conversion_route(request: ConversionLogRequest):
+    """Log a conversion event"""
+    conversion = await analytics.log_conversion(
+        conversation_id=request.conversationId,
+        conversion_type=request.conversionType,
+        deal_value=request.dealValue,
+        metadata=request.metadata
+    )
+    return {"success": True, "data": conversion}
+
+
+@router.get("/analytics/by-subreddit")
+async def get_performance_by_subreddit_route(
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None,
+    limit: int = Query(10)
+):
+    """Get performance metrics by subreddit"""
+    from datetime import datetime
+
+    start = datetime.fromisoformat(startDate) if startDate else None
+    end = datetime.fromisoformat(endDate) if endDate else None
+
+    performance = await analytics.get_performance_by_subreddit(
+        start_date=start,
+        end_date=end,
+        limit=limit
+    )
+    return {"success": True, "data": performance}
+
+
+@router.get("/analytics/by-day")
+async def get_performance_by_day_route(
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None
+):
+    """Get daily performance metrics"""
+    from datetime import datetime
+
+    start = datetime.fromisoformat(startDate) if startDate else None
+    end = datetime.fromisoformat(endDate) if endDate else None
+
+    performance = await analytics.get_performance_by_day(
+        start_date=start,
+        end_date=end
+    )
+    return {"success": True, "data": performance}
+
+
+@router.get("/analytics/recommendations")
+async def get_recommendations_route():
+    """Get actionable recommendations based on analytics"""
+    recommendations = await analytics.generate_recommendations()
+    return {"success": True, "data": recommendations}
+
+
+@router.get("/analytics/dashboard")
+async def get_dashboard_summary_route():
+    """Get dashboard summary data"""
+    summary = await analytics.get_dashboard_summary()
+    return {"success": True, "data": summary}
+
+
+# =============================================================================
+# SAFETY PRE-SEND CHECK ROUTES
+# =============================================================================
+
+class PreSendCheckRequest(BaseModel):
+    accountId: str
+    recipientUsername: str
+    message: str
+    subreddit: Optional[str] = None
+
+
+@router.post("/safety/pre-send-check")
+async def pre_send_safety_check_route(request: PreSendCheckRequest):
+    """Comprehensive pre-send safety check"""
+    result = await safety.pre_send_safety_check(
+        account_id=request.accountId,
+        recipient_username=request.recipientUsername,
+        message=request.message,
+        subreddit=request.subreddit
+    )
+    return {"success": True, "data": result}
+
+
+@router.get("/safety/risk-assessment/{account_id}")
+async def get_risk_assessment_route(account_id: str):
+    """Get current risk assessment for an account"""
+    result = await safety.assess_risk_level(account_id)
+    return {"success": True, "data": result}
+
+
+class DuplicateCheckRequest(BaseModel):
+    recipientUsername: str
+    excludeAccountId: Optional[str] = None
+    lookbackDays: Optional[int] = 30
+
+
+@router.post("/safety/check-duplicate")
+async def check_duplicate_recipient_route(request: DuplicateCheckRequest):
+    """Check if recipient was already contacted"""
+    result = await safety.check_duplicate_recipient(
+        recipient_username=request.recipientUsername,
+        exclude_account_id=request.excludeAccountId,
+        lookback_days=request.lookbackDays
+    )
+    return {"success": True, "data": result}
+
+
+# =============================================================================
+# CONVERSATION AI ROUTES (Automated Replies & Follow-ups)
+# =============================================================================
+
+@router.get("/conversations/needing-reply")
+async def get_conversations_needing_reply_route(
+    accountId: Optional[str] = None,
+    limit: int = Query(50, le=100)
+):
+    """Get conversations with unhandled incoming replies"""
+    conversations = await conversation_ai.get_conversations_needing_reply(
+        account_id=accountId,
+        limit=limit
+    )
+    return {"success": True, "data": conversations}
+
+
+class AnalyzeReplyRequest(BaseModel):
+    conversation: Dict[str, Any]
+    settings: Optional[Dict[str, Any]] = None
+
+
+@router.post("/conversations/analyze-reply")
+async def analyze_reply_route(request: AnalyzeReplyRequest):
+    """Analyze incoming reply and generate suggested response"""
+    result = await conversation_ai.analyze_reply_and_suggest_response(
+        conversation=request.conversation,
+        settings=request.settings
+    )
+    return {"success": True, "data": result}
+
+
+class ProcessRepliesRequest(BaseModel):
+    accountId: Optional[str] = None
+    autoSend: Optional[bool] = False
+    settings: Optional[Dict[str, Any]] = None
+
+
+@router.post("/conversations/process-pending-replies")
+async def process_pending_replies_route(request: ProcessRepliesRequest):
+    """Process all pending replies for an account"""
+    result = await conversation_ai.process_pending_replies(
+        account_id=request.accountId,
+        auto_send=request.autoSend,
+        settings=request.settings
+    )
+    return {"success": True, "data": result}
+
+
+@router.get("/conversations/needing-follow-up")
+async def get_conversations_needing_follow_up_route(
+    accountId: Optional[str] = None,
+    limit: int = Query(50, le=100)
+):
+    """Get conversations that need follow-up based on timing rules"""
+    conversations = await conversation_ai.get_conversations_needing_follow_up(
+        account_id=accountId,
+        limit=limit
+    )
+    return {"success": True, "data": conversations}
+
+
+class GenerateFollowUpRequest(BaseModel):
+    conversation: Dict[str, Any]
+    settings: Optional[Dict[str, Any]] = None
+
+
+@router.post("/conversations/generate-follow-up")
+async def generate_follow_up_route(request: GenerateFollowUpRequest):
+    """Generate a follow-up message for a conversation"""
+    result = await conversation_ai.generate_follow_up_for_conversation(
+        conversation=request.conversation,
+        settings=request.settings
+    )
+    return {"success": True, "data": result}
+
+
+class ProcessFollowUpsRequest(BaseModel):
+    accountId: Optional[str] = None
+    autoQueue: Optional[bool] = False
+    settings: Optional[Dict[str, Any]] = None
+
+
+@router.post("/conversations/process-follow-ups")
+async def process_follow_ups_route(request: ProcessFollowUpsRequest):
+    """Process all due follow-ups and generate messages"""
+    result = await conversation_ai.process_scheduled_follow_ups(
+        account_id=request.accountId,
+        auto_queue=request.autoQueue,
+        settings=request.settings
+    )
+    return {"success": True, "data": result}
+
+
+@router.get("/conversations/prioritized")
+async def get_prioritized_conversations_route(
+    accountId: Optional[str] = None,
+    limit: int = Query(20, le=50)
+):
+    """Get conversations prioritized by urgency and opportunity"""
+    conversations = await conversation_ai.get_prioritized_conversations(
+        account_id=accountId,
+        limit=limit
+    )
+    return {"success": True, "data": conversations}
+
+
+@router.get("/conversations/summary")
+async def get_conversation_summary_route(accountId: Optional[str] = None):
+    """Get summary of conversation statuses and priorities"""
+    summary = await conversation_ai.get_conversation_summary(account_id=accountId)
+    return {"success": True, "data": summary}
+
+
+@router.get("/conversations/{conversation_id}/health")
+async def get_conversation_health_route(conversation_id: str):
+    """Get health score for a specific conversation"""
+    # Fetch conversation
+    client = supabase.get_client()
+    if not client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    result = client.table("conversations").select("*").eq("id", conversation_id).single().execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    health = conversation_ai.calculate_conversation_health(result.data)
+    return {"success": True, "data": health}
+
+
+class QueueFollowUpRequest(BaseModel):
+    conversationId: str
+    message: str
+    accountId: str
+
+
+@router.post("/conversations/queue-follow-up")
+async def queue_follow_up_route(request: QueueFollowUpRequest):
+    """Queue a follow-up message for sending"""
+    success = await conversation_ai.queue_follow_up(
+        conversation_id=request.conversationId,
+        message=request.message,
+        account_id=request.accountId
+    )
+    return {"success": success}

@@ -1,7 +1,8 @@
-console.log('Reddit Automated DM: Background service worker loaded');
+// --- Import API Client (ES Module) ---
+import * as api from '../lib/api.js';
 
-// --- Import API Client ---
-importScripts('../lib/api.js');
+console.log('Reddit Automated DM: Background service worker loaded');
+console.log('API module loaded:', Object.keys(api));
 
 // --- Automation State Management ---
 const AutomationState = {
@@ -39,7 +40,7 @@ function cleanupTask(tabId) {
     if (subredditQueues[tabId]) {
         const queue = subredditQueues[tabId];
         if (queue.sessionId && queue.isActive) {
-            globalThis.api.updateAutomationSession(queue.sessionId, {
+            api.updateAutomationSession(queue.sessionId, {
                 processedCount: queue.currentIndex,
                 successCount: queue.successCount || 0,
                 failedCount: queue.failedCount || 0,
@@ -128,7 +129,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Start Supabase automation session
         (async () => {
-            const session = await globalThis.api.startAutomationSession({
+            const session = await api.startAutomationSession({
                 subreddit: request.data.subreddit,
                 totalPosts: validPosts.length
             });
@@ -175,7 +176,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             // Mark Supabase session as stopped
             if (queue.sessionId) {
-                globalThis.api.updateAutomationSession(queue.sessionId, {
+                api.updateAutomationSession(queue.sessionId, {
                     processedCount: queue.currentIndex,
                     successCount: queue.successCount || 0,
                     failedCount: queue.failedCount || 0,
@@ -239,7 +240,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             // Update Supabase session
             if (queue.sessionId) {
-                globalThis.api.updateAutomationSession(queue.sessionId, {
+                api.updateAutomationSession(queue.sessionId, {
                     processedCount: queue.currentIndex,
                     successCount: queue.successCount,
                     failedCount: queue.failedCount
@@ -488,7 +489,7 @@ function handleStepCompletion(tabId, result) {
 
             // Log DM to Supabase
             const queue = subredditQueues[tabId];
-            globalThis.api.logDM({
+            api.logDM({
                 recipientUsername: task.data.targetUser,
                 postUrl: task.data.postUrl || null,
                 postTitle: task.data.postTitle || null,
@@ -512,7 +513,7 @@ function handleStepCompletion(tabId, result) {
 
                 // Update Supabase session progress
                 if (queue.sessionId) {
-                    globalThis.api.updateAutomationSession(queue.sessionId, {
+                    api.updateAutomationSession(queue.sessionId, {
                         processedCount: queue.currentIndex + 1,
                         successCount: queue.successCount,
                         failedCount: queue.failedCount
@@ -531,7 +532,7 @@ function handleStepCompletion(tabId, result) {
 
                         queue.isActive = false;
                         if (queue.sessionId) {
-                            globalThis.api.updateAutomationSession(queue.sessionId, {
+                            api.updateAutomationSession(queue.sessionId, {
                                 status: 'stopped',
                                 processedCount: queue.currentIndex + 1
                             });
@@ -558,7 +559,11 @@ function handleStepCompletion(tabId, result) {
                     });
                 });
             } else {
+                // Single automation completed - notify content script to refresh UI
                 delete activeTasks[tabId];
+                chrome.tabs.sendMessage(tabId, {
+                    action: 'AUTOMATION_STOPPED'
+                }).catch(() => {});
             }
         }
     } else {
@@ -593,7 +598,7 @@ function handleStepCompletion(tabId, result) {
 
                 // Log failed DM attempt
                 if (task && task.data && task.data.targetUser) {
-                    globalThis.api.logDM({
+                    api.logDM({
                         recipientUsername: task.data.targetUser,
                         postUrl: task.data.postUrl || null,
                         postTitle: task.data.postTitle || null,
@@ -607,7 +612,7 @@ function handleStepCompletion(tabId, result) {
 
                 // Update Supabase session progress
                 if (queue.sessionId) {
-                    globalThis.api.updateAutomationSession(queue.sessionId, {
+                    api.updateAutomationSession(queue.sessionId, {
                         processedCount: queue.currentIndex + 1,
                         successCount: queue.successCount,
                         failedCount: queue.failedCount
@@ -648,7 +653,7 @@ async function processNextQueueItem(tabId) {
 
         // Mark Supabase session as completed
         if (queue.sessionId) {
-            globalThis.api.updateAutomationSession(queue.sessionId, {
+            api.updateAutomationSession(queue.sessionId, {
                 processedCount: queue.urls.length,
                 successCount: queue.successCount,
                 failedCount: queue.failedCount,
@@ -683,7 +688,7 @@ async function generateQuestion(inputData) {
 
     try {
         // Call backend API for LLM generation
-        const message = await globalThis.api.generateQuestion(post, settings);
+        const message = await api.generateQuestion(post, settings);
         return message;
     } catch (error) {
         console.error('LLM Generation Error:', error);
@@ -781,7 +786,7 @@ chrome.commands.onCommand.addListener(async (command) => {
         if (subredditQueues[tab.id]) {
             const queue = subredditQueues[tab.id];
             if (queue.sessionId) {
-                globalThis.api.updateAutomationSession(queue.sessionId, {
+                api.updateAutomationSession(queue.sessionId, {
                     processedCount: queue.currentIndex,
                     successCount: queue.successCount || 0,
                     failedCount: queue.failedCount || 0,
@@ -805,6 +810,8 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'SETTINGS_UPDATED') {
         console.log('Settings updated:', request.settings);
+        // Reset API config cache so new settings are used
+        api.resetApiConfig();
         // Re-initialize rate limiter with new settings
         initRateLimiter();
     }
@@ -815,17 +822,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'GET_ANALYTICS') {
-        globalThis.api.getAnalytics().then(analytics => sendResponse(analytics));
+        api.getAnalytics().then(analytics => sendResponse(analytics));
         return true;
     }
 
     if (request.action === 'GET_SUBREDDITS') {
-        globalThis.api.getDMsBySubreddit(10).then(data => sendResponse(data));
+        api.getDMsBySubreddit(10).then(data => sendResponse(data));
         return true;
     }
 
     if (request.action === 'GET_DM_HISTORY') {
-        globalThis.api.getDMHistory(request.limit || 50).then(history => sendResponse(history));
+        api.getDMHistory(request.limit || 50).then(history => sendResponse(history));
+        return true;
+    }
+
+    // Queue management
+    if (request.action === 'GET_QUEUE_STATS') {
+        api.getQueueStats().then(stats => sendResponse(stats)).catch(() => sendResponse({ pending: 0, sent: 0 }));
+        return true;
+    }
+
+    if (request.action === 'GET_QUEUE') {
+        api.getQueue(request.status || 'pending', request.limit || 10).then(items => sendResponse(items)).catch(() => sendResponse([]));
+        return true;
+    }
+
+    if (request.action === 'APPROVE_QUEUE_ITEM') {
+        api.approveQueueItem(request.itemId).then(() => sendResponse({ success: true })).catch(e => sendResponse({ success: false, error: e.message }));
+        return true;
+    }
+
+    if (request.action === 'REJECT_QUEUE_ITEM') {
+        api.rejectQueueItem(request.itemId).then(() => sendResponse({ success: true })).catch(e => sendResponse({ success: false, error: e.message }));
         return true;
     }
 });
