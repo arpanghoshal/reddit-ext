@@ -1,0 +1,299 @@
+/* Main Styles - Dark Mode */
+:host {
+    all: initial;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --bg-color: #1a1a1b;
+    --text-color: #d7dadc;
+    --accent-color: #0079d3;
+    --secondary-bg: #272729;
+    --border-color: #343536;
+    --hover-bg: #343536;
+}
+
+/* Floating Toggle Button */
+.floating-toggle {
+    position: fixed;
+    top: 100px;
+    right: 0;
+    width: 48px;
+    height: 48px;
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-right: none;
+    border-radius: 8px 0 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2147483647;
+    box-shadow: -2px 2px 8px rgba(0, 0, 0, 0.3);
+    transition: background-color 0.2s;
+    pointer-events: auto;
+}
+
+.floating-toggle:hover {
+    background-color: var(--hover-bg);
+}
+
+.floating-toggle svg {
+    width: 24px;
+    height: 24px;
+}
+
+/* Sidebar / Sleeve */
+.sidebar-container {
+    max-height: 600px;
+    width: 320px;
+    background-color: var(--bg-color);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    position: fixed;
+    top: 100px;
+    right: 60px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    z-index: 2147483646;
+    color: var(--text-color);
+    pointer-events: auto;
+}
+
+.container {
+    padding: 16px;
+    overflow-y: auto;
+    height: auto;
+    flex: 1;
+    box-sizing: border-box;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Typography */
+h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    color: #ffffff;
+}
+
+.subtitle {
+    color: #818384;
+    font-size: 12px;
+    margin: 0 0 16px 0;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 16px;
+}
+
+label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: #d7dadc;
+}
+
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--secondary-bg);
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 14px;
+    color: #d7dadc;
+    transition: border-color 0.2s;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+textarea {
+    resize: vertical;
+    min-height: 60px;
+}
+
+/* Checkboxes */
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.checkbox-group label {
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+/* Buttons */
+.btn-primary {
+    width: 100%;
+    padding: 10px;
+    background-color: #d93a00;
+    color: white;
+    border: none;
+    border-radius: 9999px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+    background-color: #ff4500;
+}
+
+.btn-primary:disabled {
+    background-color: #555;
+    cursor: not-allowed;
+}
+
+.btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-color);
+}
+
+.btn-icon:hover {
+    background-color: var(--hover-bg);
+}
+
+/* Main Header */
+.main-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 16px;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--text-color);
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.dot.inactive {
+    background-color: #555;
+}
+
+.dot.ready {
+    background-color: #24a0ed;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    color: #818384;
+    padding: 20px 0;
+}
+
+/* Post Info */
+.post-info {
+    background-color: var(--secondary-bg);
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.meta {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: #818384;
+    margin-bottom: 4px;
+}
+
+.subreddit {
+    font-weight: 700;
+    color: #d7dadc;
+}
+
+.post-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    line-height: 1.4;
+    color: #ffffff;
+}
+
+/* Preview Box */
+.preview-box {
+    margin-top: 16px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 16px;
+}
+
+.preview-box label {
+    margin-bottom: 8px;
+}
+
+.actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.btn-secondary {
+    flex: 1;
+    padding: 10px;
+    background-color: transparent;
+    color: var(--accent-color);
+    border: 1px solid var(--accent-color);
+    border-radius: 9999px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-secondary:hover {
+    background-color: rgba(0, 121, 211, 0.1);
+}
+
+.btn-text {
+    background: none;
+    border: none;
+    color: #818384;
+    font-size: 12px;
+    margin-top: 12px;
+    cursor: pointer;
+    width: 100%;
+    text-decoration: underline;
+}
+
+.btn-text:hover {
+    color: #d7dadc;
+}
