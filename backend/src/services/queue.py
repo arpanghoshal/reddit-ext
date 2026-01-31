@@ -1,0 +1,359 @@
+"""
+DM Queue Service
+Manages the queue of pending, approved, and sent DMs
+"""
+
+import os
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
+from supabase import create_client, Client
+
+_supabase: Optional[Client] = None
+
+
+def get_client() -> Optional[Client]:
+    """Get or create Supabase client"""
+    global _supabase
+    if _supabase is None:
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+        if url and key:
+            _supabase = create_client(url, key)
+    return _supabase
+
+
+def transform_queue_item(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Transform database row to API format"""
+    if not row:
+        return None
+
+    return {
+        "id": row.get("id"),
+        "accountId": row.get("account_id"),
+        "recipientUsername": row.get("recipient_username"),
+        "subreddit": row.get("subreddit"),
+        "postUrl": row.get("post_url"),
+        "postTitle": row.get("post_title"),
+        "postBody": row.get("post_body"),
+        "classificationId": row.get("classification_id"),
+        "classificationScore": row.get("classification_score"),
+        "classificationCategory": row.get("classification_category"),
+        "generatedMessage": row.get("generated_message"),
+        "editedMessage": row.get("edited_message"),
+        "finalMessage": row.get("edited_message") or row.get("generated_message"),
+        "status": row.get("status"),
+        "queueMode": row.get("queue_mode"),
+        "scheduledAt": row.get("scheduled_at"),
+        "approvedAt": row.get("approved_at"),
+        "approvedBy": row.get("approved_by"),
+        "sentAt": row.get("sent_at"),
+        "failedReason": row.get("failed_reason"),
+        "retryCount": row.get("retry_count"),
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at")
+    }
+
+
+async def add_to_queue(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Add item to queue"""
+    client = get_client()
+    if not client:
+        print("Supabase not configured - cannot add to queue")
+        return None
+
+    try:
+        result = client.table("dm_queue").insert({
+            "account_id": item.get("accountId"),
+            "recipient_username": item.get("recipientUsername"),
+            "subreddit": item.get("subreddit"),
+            "post_url": item.get("postUrl"),
+            "post_title": item.get("postTitle"),
+            "post_body": item.get("postBody"),
+            "classification_id": item.get("classificationId"),
+            "classification_score": item.get("classificationScore"),
+            "classification_category": item.get("classificationCategory"),
+            "generated_message": item.get("generatedMessage"),
+            "edited_message": item.get("editedMessage"),
+            "status": item.get("status", "pending"),
+            "queue_mode": item.get("queueMode", "review"),
+            "scheduled_at": item.get("scheduledAt")
+        }).execute()
+
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error adding to queue: {e}")
+        return None
+
+
+async def get_queue(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    """Get queue items with filters"""
+    client = get_client()
+    if not client:
+        return []
+
+    filters = filters or {}
+
+    try:
+        query = client.table("dm_queue").select("*").order("created_at", desc=True)
+
+        # Apply filters
+        if filters.get("status"):
+            status = filters["status"]
+            if isinstance(status, list):
+                query = query.in_("status", status)
+            else:
+                query = query.eq("status", status)
+
+        if filters.get("accountId"):
+            query = query.eq("account_id", filters["accountId"])
+
+        if filters.get("subreddit"):
+            query = query.eq("subreddit", filters["subreddit"])
+
+        if filters.get("queueMode"):
+            query = query.eq("queue_mode", filters["queueMode"])
+
+        if filters.get("minScore"):
+            query = query.gte("classification_score", filters["minScore"])
+
+        limit = filters.get("limit", 50)
+        offset = filters.get("offset", 0)
+
+        if offset:
+            query = query.range(offset, offset + limit - 1)
+        else:
+            query = query.limit(limit)
+
+        result = query.execute()
+        return [transform_queue_item(row) for row in result.data] if result.data else []
+    except Exception as e:
+        print(f"Error fetching queue: {e}")
+        return []
+
+
+async def get_queue_item(item_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single queue item by ID"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        result = client.table("dm_queue").select("*").eq("id", item_id).execute()
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error fetching queue item: {e}")
+        return None
+
+
+async def update_queue_item(item_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update a queue item"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        update_data = {"updated_at": datetime.utcnow().isoformat()}
+
+        if "editedMessage" in updates:
+            update_data["edited_message"] = updates["editedMessage"]
+        if "status" in updates:
+            update_data["status"] = updates["status"]
+        if "accountId" in updates:
+            update_data["account_id"] = updates["accountId"]
+        if "scheduledAt" in updates:
+            update_data["scheduled_at"] = updates["scheduledAt"]
+
+        result = client.table("dm_queue").update(update_data).eq("id", item_id).execute()
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error updating queue item: {e}")
+        return None
+
+
+async def delete_queue_item(item_id: str) -> bool:
+    """Delete a queue item"""
+    client = get_client()
+    if not client:
+        return False
+
+    try:
+        client.table("dm_queue").delete().eq("id", item_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error deleting queue item: {e}")
+        return False
+
+
+async def approve_queue_item(item_id: str, approved_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Approve a queue item"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        result = client.table("dm_queue").update({
+            "status": "approved",
+            "approved_at": datetime.utcnow().isoformat(),
+            "approved_by": approved_by,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", item_id).eq("status", "pending").execute()
+
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error approving queue item: {e}")
+        return None
+
+
+async def reject_queue_item(item_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Reject a queue item"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        result = client.table("dm_queue").update({
+            "status": "rejected",
+            "failed_reason": reason,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", item_id).eq("status", "pending").execute()
+
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error rejecting queue item: {e}")
+        return None
+
+
+async def bulk_approve(ids: List[str], approved_by: Optional[str] = None) -> Dict[str, int]:
+    """Bulk approve queue items"""
+    client = get_client()
+    if not client:
+        return {"success": 0, "failed": len(ids)}
+
+    try:
+        result = client.table("dm_queue").update({
+            "status": "approved",
+            "approved_at": datetime.utcnow().isoformat(),
+            "approved_by": approved_by,
+            "updated_at": datetime.utcnow().isoformat()
+        }).in_("id", ids).eq("status", "pending").execute()
+
+        success_count = len(result.data) if result.data else 0
+        return {"success": success_count, "failed": len(ids) - success_count}
+    except Exception as e:
+        print(f"Error bulk approving: {e}")
+        return {"success": 0, "failed": len(ids)}
+
+
+async def bulk_reject(ids: List[str], reason: Optional[str] = None) -> Dict[str, int]:
+    """Bulk reject queue items"""
+    client = get_client()
+    if not client:
+        return {"success": 0, "failed": len(ids)}
+
+    try:
+        result = client.table("dm_queue").update({
+            "status": "rejected",
+            "failed_reason": reason,
+            "updated_at": datetime.utcnow().isoformat()
+        }).in_("id", ids).eq("status", "pending").execute()
+
+        success_count = len(result.data) if result.data else 0
+        return {"success": success_count, "failed": len(ids) - success_count}
+    except Exception as e:
+        print(f"Error bulk rejecting: {e}")
+        return {"success": 0, "failed": len(ids)}
+
+
+async def get_next_to_send(account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get the next approved item to send"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        query = client.table("dm_queue").select("*").eq(
+            "status", "approved"
+        ).order("approved_at").limit(1)
+
+        if account_id:
+            query = query.eq("account_id", account_id)
+
+        result = query.execute()
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        # PGRST116 = no rows found
+        if "PGRST116" not in str(e):
+            print(f"Error getting next to send: {e}")
+        return None
+
+
+async def mark_as_sent(item_id: str) -> Optional[Dict[str, Any]]:
+    """Mark item as sent"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        result = client.table("dm_queue").update({
+            "status": "sent",
+            "sent_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", item_id).execute()
+
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error marking as sent: {e}")
+        return None
+
+
+async def mark_as_failed(item_id: str, reason: str) -> Optional[Dict[str, Any]]:
+    """Mark item as failed"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        # First get current retry count
+        current = client.table("dm_queue").select("retry_count").eq("id", item_id).execute()
+        retry_count = (current.data[0].get("retry_count") or 0) + 1 if current.data else 1
+
+        result = client.table("dm_queue").update({
+            "status": "failed",
+            "failed_reason": reason,
+            "retry_count": retry_count,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", item_id).execute()
+
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error marking as failed: {e}")
+        return None
+
+
+async def get_queue_stats() -> Dict[str, int]:
+    """Get queue statistics"""
+    client = get_client()
+    if not client:
+        return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
+
+    try:
+        seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        result = client.table("dm_queue").select("status").gte(
+            "created_at", seven_days_ago
+        ).execute()
+
+        if not result.data:
+            return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
+
+        data = result.data
+        return {
+            "pending": len([d for d in data if d.get("status") == "pending"]),
+            "approved": len([d for d in data if d.get("status") == "approved"]),
+            "sent": len([d for d in data if d.get("status") == "sent"]),
+            "failed": len([d for d in data if d.get("status") == "failed"]),
+            "rejected": len([d for d in data if d.get("status") == "rejected"]),
+            "total": len(data)
+        }
+    except Exception as e:
+        print(f"Error fetching queue stats: {e}")
+        return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}

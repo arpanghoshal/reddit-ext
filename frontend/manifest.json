@@ -8,7 +8,9 @@
     "activeTab",
     "scripting",
     "alarms",
-    "downloads"
+    "downloads",
+    "cookies",
+    "notifications"
   ],
   "host_permissions": [
     "*://*.reddit.com/*",
