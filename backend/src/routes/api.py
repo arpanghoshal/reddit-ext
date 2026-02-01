@@ -24,6 +24,9 @@ from ..services import intent_detection
 from ..services import ab_testing
 from ..services import analytics
 from ..services import conversation_ai
+from ..services import automation_settings
+from ..services import campaigns
+from ..services import skipped_posts
 
 router = APIRouter()
 
@@ -1401,3 +1404,146 @@ async def queue_follow_up_route(request: QueueFollowUpRequest):
         account_id=request.accountId
     )
     return {"success": success}
+
+
+# =============================================================================
+# AUTOMATION SETTINGS ROUTES
+# =============================================================================
+
+class AutomationSettingsSaveRequest(BaseModel):
+    defaultQueueMode: Optional[str] = None
+    minRelevanceScore: Optional[int] = None
+    allowWeakMatches: Optional[bool] = None
+    minAccountAgeDays: Optional[int] = None
+    minKarma: Optional[int] = None
+    blockSuspectedBots: Optional[bool] = None
+    globalDailyLimit: Optional[int] = None
+    delayBetweenDmsMin: Optional[int] = None
+    delayBetweenDmsMax: Optional[int] = None
+    enableSessionBreaks: Optional[bool] = None
+    sessionBreakAfterMin: Optional[int] = None
+    sessionBreakAfterMax: Optional[int] = None
+    sessionBreakDurationMin: Optional[int] = None
+    sessionBreakDurationMax: Optional[int] = None
+    typingSpeedMin: Optional[int] = None
+    typingSpeedMax: Optional[int] = None
+    enableTypoSimulation: Optional[bool] = None
+
+
+@router.get("/automation-settings")
+async def get_automation_settings_route():
+    """Get automation settings"""
+    settings = await automation_settings.get_automation_settings()
+    return {"success": True, "data": settings}
+
+
+@router.post("/automation-settings")
+async def save_automation_settings_route(request: AutomationSettingsSaveRequest):
+    """Save automation settings"""
+    result = await automation_settings.save_automation_settings(request.model_dump(exclude_none=True))
+    return {"success": True, "data": result}
+
+
+# =============================================================================
+# CAMPAIGNS ROUTES
+# =============================================================================
+
+class CampaignCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    subreddits: Optional[List[str]] = None
+    messageTone: Optional[str] = None
+    targetPersona: Optional[str] = None
+    businessContext: Optional[str] = None
+    status: Optional[str] = "draft"
+
+
+class CampaignUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    subreddits: Optional[List[str]] = None
+    messageTone: Optional[str] = None
+    targetPersona: Optional[str] = None
+    businessContext: Optional[str] = None
+    status: Optional[str] = None
+
+
+@router.get("/campaigns")
+async def get_campaigns_route(
+    status: Optional[str] = None,
+    limit: int = Query(50)
+):
+    """Get all campaigns"""
+    filters = {"status": status, "limit": limit}
+    campaign_list = await campaigns.get_campaigns(filters)
+    return {"success": True, "data": campaign_list}
+
+
+@router.post("/campaigns")
+async def create_campaign_route(request: CampaignCreateRequest):
+    """Create a new campaign"""
+    campaign = await campaigns.create_campaign(request.model_dump())
+    return {"success": True, "data": campaign}
+
+
+@router.get("/campaigns/{campaign_id}")
+async def get_campaign_route(campaign_id: str):
+    """Get a single campaign"""
+    campaign = await campaigns.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return {"success": True, "data": campaign}
+
+
+@router.patch("/campaigns/{campaign_id}")
+async def update_campaign_route(campaign_id: str, request: CampaignUpdateRequest):
+    """Update a campaign"""
+    campaign = await campaigns.update_campaign(campaign_id, request.model_dump(exclude_none=True))
+    return {"success": True, "data": campaign}
+
+
+@router.delete("/campaigns/{campaign_id}")
+async def delete_campaign_route(campaign_id: str):
+    """Delete a campaign"""
+    success = await campaigns.delete_campaign(campaign_id)
+    return {"success": success}
+
+
+@router.get("/campaigns/{campaign_id}/stats")
+async def get_campaign_stats_route(campaign_id: str):
+    """Get campaign statistics"""
+    stats = await campaigns.get_campaign_stats(campaign_id)
+    return {"success": True, "data": stats}
+
+
+# =============================================================================
+# SKIPPED POSTS ROUTES
+# =============================================================================
+
+@router.get("/skipped-posts")
+async def get_skipped_posts_route(
+    subreddit: Optional[str] = None,
+    skipReason: Optional[str] = None,
+    sessionId: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    limit: int = Query(100),
+    offset: int = Query(0)
+):
+    """Get skipped posts with optional filtering"""
+    filters = {
+        "subreddit": subreddit,
+        "skipReason": skipReason,
+        "sessionId": sessionId,
+        "campaignId": campaignId,
+        "limit": limit,
+        "offset": offset
+    }
+    posts = await skipped_posts.get_skipped_posts(filters)
+    return {"success": True, "data": posts}
+
+
+@router.get("/skipped-posts/stats")
+async def get_skip_stats_route():
+    """Get statistics about skipped posts"""
+    stats = await skipped_posts.get_skip_stats()
+    return {"success": True, "data": stats}

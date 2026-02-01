@@ -42,13 +42,14 @@ def generate_session_id() -> str:
 # --- DM History ---
 
 async def log_dm(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Log a DM to the database"""
+    """Log a DM to the database and create a conversation"""
     client = get_client()
     if not client:
         print("Supabase not configured - skipping DM logging")
         return None
 
     try:
+        # Insert DM record
         result = client.table("dm_history").insert({
             "recipient_username": data.get("recipientUsername"),
             "post_url": data.get("postUrl"),
@@ -57,16 +58,81 @@ async def log_dm(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "message_content": data.get("messageContent"),
             "status": data.get("status", "sent"),
             "automation_type": data.get("automationType", "single"),
-            "session_id": data.get("sessionId")
+            "session_id": data.get("sessionId"),
+            "account_id": data.get("accountId")
         }).execute()
 
         if result.data:
-            print(f"DM logged to Supabase: {result.data[0]}")
-            return result.data[0]
+            dm_record = result.data[0]
+            print(f"DM logged to Supabase: {dm_record}")
+
+            # Auto-create conversation for this DM
+            recipient = data.get("recipientUsername", "").lower()
+            if recipient:
+                await _create_or_update_conversation(client, recipient, dm_record, data)
+
+            return dm_record
         return None
     except Exception as e:
         print(f"Failed to log DM: {e}")
         return None
+
+
+async def _create_or_update_conversation(
+    client: Client,
+    recipient: str,
+    dm_record: Dict[str, Any],
+    data: Dict[str, Any]
+) -> None:
+    """Create or update conversation when DM is sent"""
+    try:
+        # Check if conversation already exists for this recipient
+        existing = client.table("conversations").select("id, total_messages").eq(
+            "participant_username", recipient
+        ).limit(1).execute()
+
+        conversation_id = None
+        now = datetime.utcnow().isoformat()
+
+        if existing.data and len(existing.data) > 0:
+            # Update existing conversation
+            conversation_id = existing.data[0]["id"]
+            new_total = (existing.data[0].get("total_messages") or 0) + 1
+            client.table("conversations").update({
+                "last_message_at": now,
+                "last_message_direction": "outbound",
+                "total_messages": new_total,
+                "updated_at": now
+            }).eq("id", conversation_id).execute()
+        else:
+            # Create new conversation
+            conv_result = client.table("conversations").insert({
+                "participant_username": recipient,
+                "account_id": data.get("accountId"),
+                "initial_dm_id": dm_record.get("id"),
+                "status": "active",
+                "last_message_at": now,
+                "last_message_direction": "outbound",
+                "total_messages": 1,
+                "has_reply": False
+            }).execute()
+            if conv_result.data:
+                conversation_id = conv_result.data[0]["id"]
+                print(f"Conversation created for {recipient}")
+
+        # Add the message to the messages table
+        if conversation_id and data.get("messageContent"):
+            client.table("messages").insert({
+                "conversation_id": conversation_id,
+                "direction": "outbound",
+                "content": data.get("messageContent"),
+                "sent_at": now,
+                "is_ai_generated": True
+            }).execute()
+            print(f"Message added to conversation {conversation_id}")
+
+    except Exception as e:
+        print(f"Failed to create/update conversation: {e}")
 
 
 async def get_dm_history(limit: int = 50) -> List[Dict[str, Any]]:
@@ -240,16 +306,32 @@ async def get_analytics() -> Dict[str, Any]:
 
         dms = result.data
         now = datetime.utcnow()
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_ago = today - timedelta(days=7)
+        # Use last 24 hours instead of "UTC today" to be timezone-agnostic
+        twenty_four_hours_ago = now - timedelta(hours=24)
+        week_ago = now - timedelta(days=7)
 
-        today_dms = [dm for dm in dms if datetime.fromisoformat(
-            dm["created_at"].replace("Z", "+00:00")
-        ).replace(tzinfo=None) >= today]
+        def parse_timestamp(ts_str):
+            """Parse timestamp string to naive UTC datetime"""
+            try:
+                # Handle different timestamp formats
+                ts = ts_str.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(ts)
+                # Convert to UTC naive datetime for comparison
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                return dt
+            except Exception:
+                return None
 
-        week_dms = [dm for dm in dms if datetime.fromisoformat(
-            dm["created_at"].replace("Z", "+00:00")
-        ).replace(tzinfo=None) >= week_ago]
+        today_dms = []
+        week_dms = []
+        for dm in dms:
+            created = parse_timestamp(dm.get("created_at", ""))
+            if created:
+                if created >= twenty_four_hours_ago:
+                    today_dms.append(dm)
+                if created >= week_ago:
+                    week_dms.append(dm)
 
         success_dms = [dm for dm in dms if dm.get("status") == "sent"]
 
