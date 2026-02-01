@@ -19,8 +19,8 @@
     "http://127.0.0.1:*/*"
   ],
   "action": {
-    "default_popup": "dashboard/dashboard.html",
-    "default_title": "Reddit Automated DM",
+    "default_popup": "popup/popup.html",
+    "default_title": "Reddit Insight",
     "default_icon": {
       "16": "icons/icon.svg",
       "32": "icons/icon.svg",
@@ -33,10 +33,6 @@
     "32": "icons/icon.svg",
     "48": "icons/icon.svg",
     "128": "icons/icon.svg"
-  },
-  "options_ui": {
-    "page": "options/options.html",
-    "open_in_tab": true
   },
   "commands": {
     "toggle-sidebar": {
@@ -61,7 +57,8 @@
   "content_scripts": [
     {
       "matches": [
-        "*://*.reddit.com/*"
+        "*://*.reddit.com/*",
+        "*://chat.reddit.com/*"
       ],
       "js": [
         "content/content.js"

@@ -409,6 +409,24 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // --- Automation Logic ---
 
+// Send automation progress to content script (auto-opens sidebar)
+function notifyAutomationProgress(tabId) {
+    const task = activeTasks[tabId];
+    const queue = subredditQueues[tabId];
+
+    chrome.tabs.sendMessage(tabId, {
+        action: 'AUTOMATION_PROGRESS',
+        status: {
+            isActive: !!task || (queue && queue.isActive),
+            status: task ? task.status : 'IDLE',
+            queueProgress: queue ? `${queue.currentIndex + 1}/${queue.urls.length}` : '',
+            subreddit: queue ? queue.subreddit : '',
+            awaitingConfirmation: task ? task.status === AutomationState.AWAITING_CONFIRMATION : false,
+            pendingDM: task && task.status === AutomationState.AWAITING_CONFIRMATION ? task.data : null
+        }
+    }).catch(() => {}); // Ignore errors if content script not ready
+}
+
 async function startAutomation(tabId, data) {
     console.log(`Starting automation for user: ${data.targetUser}`);
 
@@ -417,6 +435,9 @@ async function startAutomation(tabId, data) {
         data: data,
         retries: 0
     };
+
+    // Notify content script to show sidebar with progress
+    notifyAutomationProgress(tabId);
 
     // Step 1: Navigate to User Profile
     const profileUrl = `https://www.reddit.com/user/${data.targetUser}/`;
@@ -764,6 +785,9 @@ async function processNextQueueItem(tabId) {
         retries: 0
     };
 
+    // Notify content script to show sidebar with progress
+    notifyAutomationProgress(tabId);
+
     // Navigate to post
     await chrome.tabs.update(tabId, { url: nextUrl });
     activeTasks[tabId].status = AutomationState.WAITING_FOR_POST;
@@ -943,6 +967,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'REJECT_QUEUE_ITEM') {
         api.rejectQueueItem(request.itemId).then(() => sendResponse({ success: true })).catch(e => sendResponse({ success: false, error: e.message }));
+        return true;
+    }
+
+    // Chat message sync (for reply detection)
+    if (request.action === 'SYNC_CHAT_MESSAGES') {
+        const syncData = request.data;
+        if (syncData && syncData.participantUsername && syncData.messages) {
+            api.syncConversation({
+                participantUsername: syncData.participantUsername,
+                messages: syncData.messages
+            }).then(result => {
+                console.log('Chat sync completed:', result);
+                sendResponse({ success: true, data: result });
+            }).catch(err => {
+                console.error('Chat sync failed:', err);
+                sendResponse({ success: false, error: err.message });
+            });
+            return true;
+        }
+        sendResponse({ success: false, error: 'Invalid sync data' });
+        return true;
+    }
+
+    // Get conversation stats (for popup)
+    if (request.action === 'GET_CONVERSATION_STATS') {
+        api.getConversationStats().then(stats => sendResponse(stats)).catch(() => sendResponse({ total: 0, withReplies: 0 }));
         return true;
     }
 });

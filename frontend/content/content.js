@@ -6,6 +6,340 @@ let sidebarWidth = 400;
 let shadowRoot = null;
 let sidebarContainer = null;
 let isSidebarInjecting = false; // Prevent race condition in sidebar injection
+let lastSyncedMessages = new Set(); // Track already synced messages to avoid duplicates
+let chatSyncInterval = null; // Interval for periodic chat syncing
+
+// --- Chat Reply Sync ---
+function isOnChatPage() {
+    // Check both chat.reddit.com and reddit.com/chat/
+    return window.location.hostname === 'chat.reddit.com' ||
+           (window.location.hostname.includes('reddit.com') && window.location.pathname.startsWith('/chat'));
+}
+
+function isChatPanelOpen() {
+    // Check for Reddit's side chat panel (appears on any page)
+    const chatPanel = document.querySelector('[data-testid="chat-room"]') ||
+                      document.querySelector('[class*="ChatRoom"]') ||
+                      document.querySelector('[class*="chat-room"]') ||
+                      document.querySelector('div[style*="chat"]') ||
+                      document.querySelector('#chat-app') ||
+                      document.querySelector('[class*="ChatPanel"]');
+    return !!chatPanel;
+}
+
+function hasChatElements() {
+    // Check if any chat-related elements exist in DOM
+    return isOnChatPage() || isChatPanelOpen();
+}
+
+async function syncChatMessages() {
+    if (!isOnChatPage()) return;
+
+    console.log('🔄 Syncing chat messages...');
+
+    try {
+        // Find all chat conversations on the page
+        const conversations = extractChatConversations();
+
+        for (const conv of conversations) {
+            if (conv.messages.length === 0) continue;
+
+            // Create a unique key for this sync batch to avoid duplicates
+            const syncKey = `${conv.participantUsername}_${conv.messages.length}_${conv.messages[conv.messages.length - 1]?.content?.substring(0, 20)}`;
+            if (lastSyncedMessages.has(syncKey)) continue;
+
+            // Sync to backend
+            try {
+                await chrome.runtime.sendMessage({
+                    action: 'SYNC_CHAT_MESSAGES',
+                    data: conv
+                });
+                lastSyncedMessages.add(syncKey);
+                console.log(`✅ Synced conversation with ${conv.participantUsername}: ${conv.messages.length} messages`);
+            } catch (err) {
+                console.warn('Failed to sync conversation:', err);
+            }
+        }
+    } catch (err) {
+        console.error('Chat sync error:', err);
+    }
+}
+
+function extractChatConversations() {
+    const conversations = [];
+
+    let participantUsername = null;
+
+    // Strategy 1: Chat header with user link
+    const headerSelectors = [
+        '[data-testid="conversation-header"]',
+        '[class*="ChatHeader"]',
+        '[class*="chat-header"]',
+        '[class*="RoomHeader"]',
+        'header[class*="chat"]',
+    ];
+
+    for (const selector of headerSelectors) {
+        const header = document.querySelector(selector);
+        if (header) {
+            const usernameLink = header.querySelector('a[href*="/user/"]');
+            if (usernameLink) {
+                const match = usernameLink.href.match(/\/user\/([^\/\?]+)/);
+                if (match) {
+                    participantUsername = match[1];
+                    break;
+                }
+            }
+            // Also check for text content like "u/username"
+            const headerText = header.textContent;
+            const uMatch = headerText.match(/u\/(\w+)/);
+            if (uMatch) {
+                participantUsername = uMatch[1];
+                break;
+            }
+        }
+    }
+
+    // Strategy 2: Page title
+    if (!participantUsername) {
+        const titleMatch = document.title.match(/(?:Chat with |Messages? - )(\w+)/i);
+        if (titleMatch) {
+            participantUsername = titleMatch[1];
+        }
+    }
+
+    // Strategy 3: URL patterns
+    if (!participantUsername) {
+        const userMatch = window.location.href.match(/\/user\/([^\/\?]+)/);
+        if (userMatch) {
+            participantUsername = userMatch[1];
+        }
+    }
+
+    // Strategy 4: Find username from chat area (not own messages)
+    if (!participantUsername) {
+        // Look for username displays in the chat
+        const usernameElements = document.querySelectorAll('a[href*="/user/"], [class*="username"], [class*="author"]');
+        const currentUser = document.querySelector('[class*="current-user"]')?.textContent?.trim();
+
+        for (const el of usernameElements) {
+            let username = null;
+            if (el.href) {
+                const match = el.href.match(/\/user\/([^\/\?]+)/);
+                if (match) username = match[1];
+            } else {
+                username = el.textContent?.trim()?.replace(/^u\//, '');
+            }
+
+            // Skip if it's the current user or common UI text
+            if (username && username !== currentUser && username !== 'me' &&
+                !['user', 'profile', 'settings'].includes(username.toLowerCase())) {
+                participantUsername = username;
+                break;
+            }
+        }
+    }
+
+    if (!participantUsername) {
+        console.log('Could not determine chat participant');
+        return conversations;
+    }
+
+    console.log(`Chat participant: ${participantUsername}`);
+
+    // Extract messages
+    const messages = extractMessagesFromDOM(participantUsername);
+
+    if (messages.length > 0) {
+        conversations.push({
+            participantUsername,
+            messages
+        });
+    }
+
+    return conversations;
+}
+
+function extractMessagesFromDOM(participantUsername) {
+    const messages = [];
+    const seenContent = new Set(); // Avoid duplicates
+
+    // Try multiple strategies to find messages
+
+    // Strategy 1: Find the chat/message container first
+    const chatContainers = [
+        document.querySelector('[data-testid="chat-room"]'),
+        document.querySelector('[data-testid="message-list"]'),
+        document.querySelector('[class*="ChatRoom"]'),
+        document.querySelector('[class*="MessageList"]'),
+        document.querySelector('[class*="chat-messages"]'),
+        document.querySelector('[role="log"]'), // Accessibility role for chat
+        document.querySelector('div[class*="room"]'),
+        // Side panel selectors
+        document.querySelector('aside [class*="message"]')?.closest('div'),
+        document.querySelector('[class*="Thread"]'),
+    ].find(el => el !== null);
+
+    if (!chatContainers) {
+        console.log('Could not find chat container');
+        return messages;
+    }
+
+    // Strategy 2: Find message elements within container
+    const messageSelectors = [
+        '[data-testid="message"]',
+        '[class*="Message_container"]',
+        '[class*="message-container"]',
+        '[class*="ChatMessage"]',
+        'div[class*="message"]:not([class*="messages"])',
+        '[role="listitem"]', // Accessibility role for messages
+    ];
+
+    let messageElements = [];
+    for (const selector of messageSelectors) {
+        const elements = chatContainers.querySelectorAll(selector);
+        if (elements.length > 0) {
+            messageElements = Array.from(elements);
+            console.log(`Found ${elements.length} messages with selector: ${selector}`);
+            break;
+        }
+    }
+
+    // Fallback: Try to find any elements that look like messages
+    if (messageElements.length === 0) {
+        const allDivs = chatContainers.querySelectorAll('div');
+        messageElements = Array.from(allDivs).filter(div => {
+            const text = div.textContent?.trim();
+            // Messages typically have some text and aren't too long (not containers)
+            return text && text.length > 5 && text.length < 2000 &&
+                   div.children.length < 10; // Likely a leaf node
+        });
+    }
+
+    // Extract message data
+    messageElements.forEach((el) => {
+        // Get message content - try multiple approaches
+        let content = '';
+
+        // Try to find the actual text content element
+        const textEl = el.querySelector('[class*="content"]') ||
+                      el.querySelector('[class*="text"]') ||
+                      el.querySelector('p') ||
+                      el;
+
+        content = textEl?.textContent?.trim() || '';
+
+        // Skip if no content, too short, or already seen
+        if (!content || content.length < 2 || content.length > 5000 || seenContent.has(content)) {
+            return;
+        }
+
+        // Skip UI elements (buttons, timestamps alone, etc.)
+        if (content.match(/^(Send|Reply|Edit|Delete|Cancel|Save|\d{1,2}:\d{2}|Today|Yesterday)$/i)) {
+            return;
+        }
+
+        seenContent.add(content);
+
+        // Determine direction (outbound = sent by user, inbound = received)
+        // Reddit typically marks own messages differently
+        const isOutbound = el.classList.toString().toLowerCase().includes('own') ||
+                          el.classList.toString().toLowerCase().includes('self') ||
+                          el.classList.toString().toLowerCase().includes('sent') ||
+                          el.closest('[class*="own"]') !== null ||
+                          el.closest('[class*="self"]') !== null ||
+                          el.closest('[class*="outgoing"]') !== null ||
+                          el.getAttribute('data-is-own') === 'true' ||
+                          // Check computed style - own messages often aligned right
+                          (el.style.marginLeft === 'auto' ||
+                           getComputedStyle(el).marginLeft === 'auto');
+
+        // Try to get timestamp
+        const timeEl = el.querySelector('time') ||
+                      el.querySelector('[class*="time"]') ||
+                      el.querySelector('[class*="timestamp"]') ||
+                      el.querySelector('[datetime]');
+        const sentAt = timeEl?.getAttribute('datetime') ||
+                      timeEl?.getAttribute('title') ||
+                      new Date().toISOString();
+
+        messages.push({
+            direction: isOutbound ? 'outbound' : 'inbound',
+            content: content,
+            sentAt: sentAt,
+            isAiGenerated: false
+        });
+    });
+
+    console.log(`Extracted ${messages.length} messages`);
+    return messages;
+}
+
+function startChatSync() {
+    if (chatSyncInterval) return; // Already running
+
+    console.log('📡 Starting chat sync monitoring...');
+
+    // Function to check and sync if chat is visible
+    const checkAndSync = () => {
+        if (hasChatElements()) {
+            console.log('🔄 Chat detected, syncing...');
+            syncChatMessages();
+        }
+    };
+
+    // Initial check after page load
+    setTimeout(checkAndSync, 2000);
+
+    // Periodic sync every 30 seconds
+    chatSyncInterval = setInterval(checkAndSync, 30000);
+
+    // Watch for chat panel opening (DOM mutations)
+    const chatObserver = new MutationObserver((mutations) => {
+        // Check if chat elements were added
+        for (const mutation of mutations) {
+            if (mutation.addedNodes.length > 0) {
+                // Small delay to let chat fully render
+                setTimeout(() => {
+                    if (hasChatElements()) {
+                        console.log('💬 Chat panel opened, syncing...');
+                        syncChatMessages();
+                    }
+                }, 1500);
+                break;
+            }
+        }
+    });
+
+    // Observe body for chat panel additions
+    chatObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    // Also sync on visibility change (when user switches back to tab)
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && hasChatElements()) {
+            syncChatMessages();
+        }
+    });
+
+    // Sync on URL changes (for SPAs)
+    let lastUrl = location.href;
+    new MutationObserver(() => {
+        if (location.href !== lastUrl) {
+            lastUrl = location.href;
+            setTimeout(checkAndSync, 1000);
+        }
+    }).observe(document, { subtree: true, childList: true });
+}
+
+function stopChatSync() {
+    if (chatSyncInterval) {
+        clearInterval(chatSyncInterval);
+        chatSyncInterval = null;
+    }
+}
 
 // --- Initialization ---
 async function init() {
@@ -17,6 +351,11 @@ async function init() {
 
     if (isSidebarOpen) {
         injectSidebar();
+    }
+
+    // Start chat sync on all Reddit pages (side panel can open anywhere)
+    if (window.location.hostname.includes('reddit.com')) {
+        startChatSync();
     }
 
     // Listen for messages from background script
@@ -35,12 +374,18 @@ async function init() {
             showToast('Automation stopped', 'info');
             checkPageStatus();
         } else if (request.action === 'AUTOMATION_ERROR') {
-            renderErrorState(request.error, request.context);
+            ensureSidebarVisible();
+            setTimeout(() => renderErrorState(request.error, request.context), 300);
         } else if (request.action === 'SHOW_TOAST') {
             showToast(request.message, request.type);
         } else if (request.action === 'SHOW_DM_CONFIRMATION') {
-            // Show confirmation dialog before sending DM
-            renderDMConfirmation(request.data);
+            // Show confirmation dialog before sending DM - auto-open sidebar
+            ensureSidebarVisible();
+            setTimeout(() => renderDMConfirmation(request.data), 300);
+        } else if (request.action === 'AUTOMATION_PROGRESS') {
+            // Show automation progress - auto-open sidebar
+            ensureSidebarVisible();
+            setTimeout(() => renderRunningState(request.status), 300);
         }
         return true;
     });
@@ -49,10 +394,7 @@ async function init() {
     chrome.runtime.sendMessage({ action: 'GET_AUTOMATION_STATUS' }, (status) => {
         if (status && status.isActive) {
             console.log('Resuming automation UI:', status);
-            if (!isSidebarOpen) {
-                isSidebarOpen = true;
-                injectSidebar();
-            }
+            ensureSidebarVisible();
             // We need to wait for sidebar to inject
             setTimeout(() => renderRunningState(status), 500);
         }
@@ -577,6 +919,16 @@ function toggleSidebar(isOpen) {
         injectSidebar();
     } else {
         removeSidebar();
+    }
+}
+
+// Ensure sidebar is visible (auto-open when automation is running)
+function ensureSidebarVisible() {
+    if (!isSidebarOpen) {
+        console.log('🔓 Auto-opening sidebar for automation');
+        isSidebarOpen = true;
+        chrome.storage.local.set({ isSidebarOpen: true });
+        injectSidebar();
     }
 }
 

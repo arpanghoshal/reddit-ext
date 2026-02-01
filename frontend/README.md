@@ -32,24 +32,34 @@ Chrome extension frontend for the Reddit Insight Gatherer.
 
 ## Structure
 
-```
+```text
 frontend/
 ├── manifest.json        # Extension configuration
 ├── background/          # Service worker
 │   └── background.js
 ├── content/             # Content script for Reddit
 │   └── content.js
-├── dashboard/           # Popup UI
-│   ├── dashboard.html
-│   ├── dashboard.js
-│   └── dashboard.css
-├── options/             # Settings page
-│   ├── options.html
-│   ├── options.js
-│   └── options.css
+├── popup/               # Extension popup (quick stats + settings)
+│   ├── popup.html
+│   ├── popup.js
+│   └── popup.css
 ├── lib/                 # Shared libraries
 │   ├── api.js           # Backend API client
 │   └── templates.js     # Message templates
 └── styles/              # Shared styles
     └── main.css
 ```
+
+## Dashboard
+
+The full dashboard UI is now in a separate app: `../dashboard-app/`
+
+Run it with:
+
+```bash
+cd ../dashboard-app
+npm install
+npm run dev
+```
+
+Then open <http://localhost:5173> in your browser.
