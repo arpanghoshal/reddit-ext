@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Filter, Users, Shield, Settings as SettingsIcon } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Filter, Users, Shield, Settings as SettingsIcon, Target, XCircle } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Queue from './pages/Queue';
 import Inbox from './pages/Inbox';
 import Accounts from './pages/Accounts';
 import Rules from './pages/Rules';
-import Settings from './components/Settings';
+import Settings from './pages/Settings';
+import Campaigns from './pages/Campaigns';
+import Skipped from './pages/Skipped';
+import SettingsModal from './components/Settings';
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -16,8 +19,11 @@ function App() {
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/queue', icon: MessageSquare, label: 'Queue' },
     { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
+    { to: '/campaigns', icon: Target, label: 'Campaigns' },
     { to: '/accounts', icon: Users, label: 'Accounts' },
     { to: '/rules', icon: Filter, label: 'Rules' },
+    { to: '/skipped', icon: XCircle, label: 'Skipped' },
+    { to: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
 
   const handleAuthChange = () => {
@@ -63,12 +69,12 @@ function App() {
               onClick={() => setSettingsOpen(true)}
               className="flex items-center gap-2 w-full px-4 py-2 text-[#818384] hover:text-white hover:bg-[#272729] rounded-lg transition-colors"
             >
-              <SettingsIcon size={16} />
-              <span>Settings</span>
+              <Shield size={16} />
+              <span>API Key</span>
             </button>
             <div className="flex items-center gap-2 text-sm text-[#818384] px-4">
               <Shield size={16} />
-              <span>v1.1.0</span>
+              <span>v1.2.0</span>
             </div>
           </div>
         </aside>
@@ -79,13 +85,16 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/queue" element={<Queue />} />
             <Route path="/inbox" element={<Inbox />} />
+            <Route path="/campaigns" element={<Campaigns />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/rules" element={<Rules />} />
+            <Route path="/skipped" element={<Skipped />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
 
-        {/* Settings Modal */}
-        <Settings
+        {/* API Key Modal */}
+        <SettingsModal
           isOpen={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           onAuthChange={handleAuthChange}

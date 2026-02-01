@@ -274,3 +274,90 @@ export async function getSessionLogs(limit = 20) {
     const result = await apiRequest(`/session/logs?limit=${limit}`);
     return result.data;
 }
+
+// User Settings
+export async function getUserSettings() {
+    const result = await apiRequest('/settings');
+    return result.data;
+}
+
+export async function saveUserSettings(data) {
+    const result = await apiRequest('/settings', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+    return result.data;
+}
+
+// Automation Settings
+export async function getAutomationSettings() {
+    const result = await apiRequest('/automation-settings');
+    return result.data;
+}
+
+export async function saveAutomationSettings(data) {
+    const result = await apiRequest('/automation-settings', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+    return result.data;
+}
+
+// Campaigns
+export async function getCampaigns(filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const result = await apiRequest(`/campaigns?${params}`);
+    return result.data;
+}
+
+export async function getCampaign(id) {
+    const result = await apiRequest(`/campaigns/${id}`);
+    return result.data;
+}
+
+export async function createCampaign(data) {
+    const result = await apiRequest('/campaigns', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+    return result.data;
+}
+
+export async function updateCampaign(id, data) {
+    const result = await apiRequest(`/campaigns/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+    });
+    return result.data;
+}
+
+export async function deleteCampaign(id) {
+    await apiRequest(`/campaigns/${id}`, { method: 'DELETE' });
+}
+
+export async function getCampaignStats(id) {
+    const result = await apiRequest(`/campaigns/${id}/stats`);
+    return result.data;
+}
+
+// Skipped Posts
+export async function getSkippedPosts(filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const result = await apiRequest(`/skipped-posts?${params}`);
+    return result.data;
+}
+
+export async function getSkipStats() {
+    const result = await apiRequest('/skipped-posts/stats');
+    return result.data;
+}
