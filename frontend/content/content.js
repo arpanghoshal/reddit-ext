@@ -417,10 +417,15 @@ async function init() {
 
     // Fallback keyboard shortcut listener (in case chrome.commands doesn't work)
     document.addEventListener('keydown', (e) => {
-        // Alt+R to toggle sidebar
-        if (e.altKey && e.key.toLowerCase() === 'r') {
+        // Ctrl+Shift+R (Windows/Linux) or Alt+R (Mac) to toggle sidebar
+        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+        const isToggleShortcut = isMac
+            ? (e.altKey && e.key.toLowerCase() === 'r')
+            : (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'r');
+
+        if (isToggleShortcut) {
             e.preventDefault();
-            console.log('Alt+R pressed (fallback handler)');
+            console.log('Toggle sidebar shortcut pressed (fallback handler)');
             const newState = !isSidebarOpen;
             chrome.storage.local.set({ isSidebarOpen: newState });
             toggleSidebar(newState);
@@ -1508,7 +1513,7 @@ function renderRunningState(status) {
 
         <p class="progress-step">${statusMessage}</p>
 
-        <p class="shortcut-hint">Press <kbd>Alt</kbd>+<kbd>S</kbd> to stop</p>
+        <p class="shortcut-hint">Press ${navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '<kbd>Alt</kbd>+<kbd>S</kbd>' : '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>'} to stop</p>
 
         <button id="stop-auto-btn" class="btn-danger" style="margin-top: 16px;">STOP AUTOMATION</button>
       </div>

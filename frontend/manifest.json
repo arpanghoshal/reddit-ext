@@ -37,14 +37,14 @@
   "commands": {
     "toggle-sidebar": {
       "suggested_key": {
-        "default": "Alt+R",
+        "default": "Ctrl+Shift+R",
         "mac": "Alt+R"
       },
       "description": "Toggle the sidebar"
     },
     "stop-automation": {
       "suggested_key": {
-        "default": "Alt+S",
+        "default": "Ctrl+Shift+S",
         "mac": "Alt+S"
       },
       "description": "Stop current automation"
