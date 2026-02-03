@@ -100,7 +100,7 @@ async def create_conversation(conversation_data: Dict[str, Any]) -> Optional[Dic
             "status": conversation_data.get("status", "active"),
             "last_message_at": datetime.utcnow().isoformat(),
             "last_message_direction": "outbound",
-            "total_messages": 1,
+            "total_messages": 0,
             "has_reply": False,
             "notes": conversation_data.get("notes"),
             "tags": conversation_data.get("tags", [])

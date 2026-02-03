@@ -6,6 +6,7 @@ let sidebarWidth = 400;
 let shadowRoot = null;
 let sidebarContainer = null;
 let isSidebarInjecting = false; // Prevent race condition in sidebar injection
+let isAutomationRunning = false; // Track if automation is running to prevent sidebar toggle
 let lastSyncedMessages = new Set(); // Track already synced messages to avoid duplicates
 let chatSyncInterval = null; // Interval for periodic chat syncing
 
@@ -855,20 +856,26 @@ function extractMessagesFromDOM(participantUsername) {
     // Try multiple strategies to find messages (with Shadow DOM support)
 
     // Strategy 1: Find the chat/message container first (search shadow DOMs too)
+    // NOTE: Order matters - more specific selectors first to avoid matching single messages
     const containerSelectors = [
+        // Reddit's rs-room component (the main chat room element)
+        'rs-room',
         '[data-testid="chat-room"]',
         '[data-testid="message-list"]',
         '[class*="ChatRoom"]',
         '[class*="MessageList"]',
         '[class*="chat-messages"]',
         '[role="log"]', // Accessibility role for chat
-        'div[class*="room"]',
         '[class*="Thread"]',
         // Reddit Matrix chat selectors
         '[class*="mx_RoomView_body"]',
         '[class*="mx_MessagePanel"]',
         '[class*="mx_RoomView_MessageList"]',
         '[class*="mx_ScrollPanel"]',
+        // Generic room container - but NOT single messages
+        'div[class*="room"]:not([class*="room-message"])',
+        '[class*="room-timeline"]',
+        '[class*="timeline"]',
     ];
 
     let chatContainer = null;
@@ -890,30 +897,95 @@ function extractMessagesFromDOM(participantUsername) {
     if (!chatContainer) {
         console.log('Could not find chat container, trying to find messages directly...');
         // Fall back to finding messages anywhere in the page
+    } else {
+        // Debug: Show what's inside the chat container
+        console.log('🔍 Chat container tag:', chatContainer.tagName, 'classes:', chatContainer.className);
+
+        // Look for nested shadow roots (Reddit uses many layers)
+        const childrenWithShadow = [];
+        chatContainer.querySelectorAll('*').forEach(el => {
+            if (el.shadowRoot) {
+                childrenWithShadow.push(el.tagName.toLowerCase());
+            }
+        });
+        if (childrenWithShadow.length > 0) {
+            console.log('🔍 Elements with shadow roots inside container:', [...new Set(childrenWithShadow)]);
+        }
+
+        // Try to find the actual timeline/events container
+        const timelineSelectors = [
+            'rs-room-timeline',
+            'rs-timeline',
+            '[class*="timeline"]',
+            '[class*="Timeline"]',
+            '[class*="event-list"]',
+            '[class*="EventList"]',
+            '[role="list"]',
+            '[class*="ScrollPanel"]',
+        ];
+
+        for (const ts of timelineSelectors) {
+            const timeline = chatContainer.querySelector(ts) || querySelectorOneDeep(ts, chatContainer);
+            if (timeline) {
+                console.log('🔍 Found timeline element:', ts, 'tag:', timeline.tagName);
+                // Use this as the search root for messages
+                if (timeline.shadowRoot) {
+                    console.log('🔍 Timeline has shadow root, searching inside...');
+                }
+            }
+        }
     }
 
     // Strategy 2: Find message elements within container (with Shadow DOM support)
     const messageSelectors = [
+        // Reddit's rs-* custom elements for events/messages
+        'rs-timeline-event',  // Main event wrapper in Reddit chat
+        'rs-event',
+        'rs-message',
+        'rs-text-message',
+        'rs-room-event',
+        // Room message elements (the actual message bubbles)
+        '.room-message',
+        'div.room-message',
+        // Matrix event tiles
+        '[class*="mx_EventTile"]',
+        '[class*="mx_EventTile_body"]',
+        '[class*="mx_MTextBody"]',
+        // Reddit room timeline events
+        '[class*="timeline-event"]',
+        '[class*="TimelineEvent"]',
+        '[class*="event-tile"]',
+        '[class*="EventTile"]',
+        // Standard message selectors
         '[data-testid="message"]',
         '[class*="Message_container"]',
         '[class*="message-container"]',
         '[class*="ChatMessage"]',
-        'div[class*="message"]:not([class*="messages"])',
-        '[role="listitem"]', // Accessibility role for messages
-        // Reddit Matrix chat selectors
-        '[class*="mx_EventTile"]',
-        '[class*="mx_MTextBody"]',
-        '[class*="mx_EventTile_content"]',
+        // Role-based selectors
+        '[role="listitem"]',
+        '[role="article"]',
+        // Generic message selectors - lower priority
+        'div[class*="message"]:not([class*="messages"]):not([class*="room-message"])',
+        'article[class*="message"]',
+        '[class*="bubble"]',
     ];
 
     let messageElements = [];
     const searchRoot = chatContainer || document.body;
 
+    // If searchRoot is a custom element with shadow DOM, search inside its shadow root
+    const actualSearchRoot = searchRoot.shadowRoot || searchRoot;
+    console.log(`🔍 Searching for messages in: ${searchRoot.tagName}, has shadowRoot: ${!!searchRoot.shadowRoot}`);
+
     for (const selector of messageSelectors) {
         // Try regular DOM first
-        let elements = searchRoot.querySelectorAll(selector);
+        let elements = actualSearchRoot.querySelectorAll(selector);
+        if (elements.length === 0 && searchRoot.shadowRoot) {
+            // Search deeper in nested shadow DOMs
+            elements = querySelectorDeep(selector, searchRoot.shadowRoot);
+        }
         if (elements.length === 0) {
-            // Try shadow DOM
+            // Try from the original searchRoot with deep search
             elements = querySelectorDeep(selector, searchRoot);
         }
         if (elements.length > 0) {
@@ -925,61 +997,185 @@ function extractMessagesFromDOM(participantUsername) {
 
     // Fallback: Try to find any elements that look like messages
     if (messageElements.length === 0 && chatContainer) {
-        const allDivs = chatContainer.querySelectorAll('div');
+        // Search in shadow root if available
+        const fallbackRoot = chatContainer.shadowRoot || chatContainer;
+        const allDivs = querySelectorDeep('div', fallbackRoot);
+        console.log(`🔍 Fallback: found ${allDivs.length} divs in container`);
+
         messageElements = Array.from(allDivs).filter(div => {
             const text = div.textContent?.trim();
             // Messages typically have some text and aren't too long (not containers)
-            return text && text.length > 5 && text.length < 2000 &&
-                   div.children.length < 10; // Likely a leaf node
+            // Also check for message-related classes
+            const hasMessageClass = div.className?.includes('message') || div.className?.includes('room-message');
+            return text && text.length > 10 && text.length < 2000 &&
+                   (div.children.length < 10 || hasMessageClass);
         });
+        console.log(`🔍 Fallback: ${messageElements.length} potential message elements after filtering`);
     }
 
     // Extract message data
-    messageElements.forEach((el) => {
+    console.log(`🔍 Processing ${messageElements.length} message elements...`);
+    messageElements.forEach((el, index) => {
         // Get message content - try multiple approaches
         let content = '';
 
-        // Try to find the actual text content element
-        const textEl = el.querySelector('[class*="content"]') ||
-                      el.querySelector('[class*="text"]') ||
-                      el.querySelector('p') ||
-                      el;
+        // For custom elements like rs-timeline-event, content is inside their shadow DOM
+        const searchRoot = el.shadowRoot || el;
 
-        content = textEl?.textContent?.trim() || '';
+        // Try to find the actual text content element - search in shadow root if available
+        let textEl = searchRoot.querySelector('[class*="message-body"]') ||
+                     searchRoot.querySelector('[class*="message-text"]') ||
+                     searchRoot.querySelector('[class*="room-message-body"]') ||
+                     searchRoot.querySelector('[class*="content"]') ||
+                     searchRoot.querySelector('[class*="text"]') ||
+                     searchRoot.querySelector('[class*="body"]') ||
+                     searchRoot.querySelector('p');
+
+        // If not found in direct shadow root, search deeper
+        if (!textEl && el.shadowRoot) {
+            textEl = querySelectorOneDeep('[class*="message"]', el.shadowRoot) ||
+                     querySelectorOneDeep('[class*="body"]', el.shadowRoot) ||
+                     querySelectorOneDeep('p', el.shadowRoot);
+        }
+
+        // If still not found, try getDeepTextContent on the element
+        if (!textEl) {
+            content = getDeepTextContent(el);
+        } else {
+            content = textEl.textContent?.trim() || '';
+        }
+
+        // Debug: show what we found
+        console.log(`  [${index}] Element: ${el.tagName}, hasShadow: ${!!el.shadowRoot}`);
+        console.log(`  [${index}] Content preview: "${content?.substring(0, 60)}..."`);
 
         // Skip if no content, too short, or already seen
-        if (!content || content.length < 2 || content.length > 5000 || seenContent.has(content)) {
+        if (!content || content.length < 2 || content.length > 5000) {
+            console.log(`  [${index}] ❌ Skipped: content length ${content?.length || 0}`);
+            return;
+        }
+        if (seenContent.has(content)) {
+            console.log(`  [${index}] ❌ Skipped: duplicate content`);
             return;
         }
 
         // Skip UI elements (buttons, timestamps alone, etc.)
         if (content.match(/^(Send|Reply|Edit|Delete|Cancel|Save|\d{1,2}:\d{2}|Today|Yesterday)$/i)) {
+            console.log(`  [${index}] ❌ Skipped: UI element`);
+            return;
+        }
+
+        // Skip content that's exactly the current user's name or participant name (UI headers)
+        const currentUserName = getCurrentUsername();
+        if (currentUserName && content.toLowerCase() === currentUserName.toLowerCase()) {
+            console.log(`  [${index}] ❌ Skipped: current user name`);
             return;
         }
 
         seenContent.add(content);
+        console.log(`  [${index}] ✓ Accepted message`);
 
         // Determine direction (outbound = sent by user, inbound = received)
-        // Reddit typically marks own messages differently
-        const isOutbound = el.classList.toString().toLowerCase().includes('own') ||
-                          el.classList.toString().toLowerCase().includes('self') ||
-                          el.classList.toString().toLowerCase().includes('sent') ||
-                          el.closest('[class*="own"]') !== null ||
-                          el.closest('[class*="self"]') !== null ||
-                          el.closest('[class*="outgoing"]') !== null ||
-                          el.getAttribute('data-is-own') === 'true' ||
-                          // Check computed style - own messages often aligned right
-                          (el.style.marginLeft === 'auto' ||
-                           getComputedStyle(el).marginLeft === 'auto');
+        // For Reddit's rs-timeline-event, we need to look inside Shadow DOM for author
+        let isOutbound = false;
+        const currentUser = getCurrentUsername();
 
-        // Try to get timestamp
-        const timeEl = el.querySelector('time') ||
-                      el.querySelector('[class*="time"]') ||
-                      el.querySelector('[class*="timestamp"]') ||
-                      el.querySelector('[datetime]');
+        // Debug: Log Shadow DOM inner HTML structure (first 500 chars)
+        if (el.shadowRoot) {
+            const shadowHTML = el.shadowRoot.innerHTML?.substring(0, 500) || '';
+            console.log(`  [${index}] Shadow DOM preview: ${shadowHTML}...`);
+        }
+
+        // Method 1: Find span.user-name element inside Shadow DOM
+        let authorEl = null;
+        let authorName = '';
+
+        if (el.shadowRoot) {
+            // Priority 1: Look for span.user-name (most reliable)
+            authorEl = querySelectorOneDeep('span.user-name', el.shadowRoot) ||
+                      querySelectorOneDeep('.user-name', el.shadowRoot) ||
+                      querySelectorOneDeep('[class*="user-name"]', el.shadowRoot);
+
+            // Priority 2: Try user links
+            if (!authorEl) {
+                authorEl = querySelectorOneDeep('a[href*="/user/"]', el.shadowRoot) ||
+                          querySelectorOneDeep('[class*="author"]', el.shadowRoot) ||
+                          querySelectorOneDeep('[class*="sender"]', el.shadowRoot);
+            }
+        }
+
+        // Also try direct search if deep search failed
+        if (!authorEl) {
+            const authorSearchRoot = el.shadowRoot || el;
+            authorEl = authorSearchRoot.querySelector('span.user-name') ||
+                      authorSearchRoot.querySelector('.user-name') ||
+                      authorSearchRoot.querySelector('a[href*="/user/"]');
+        }
+
+        if (authorEl) {
+            // Extract username from href if it's a link, otherwise get text content
+            if (authorEl.href && authorEl.href.includes('/user/')) {
+                const match = authorEl.href.match(/\/user\/([^\/\?]+)/);
+                authorName = match ? match[1].toLowerCase() : '';
+            }
+            if (!authorName) {
+                authorName = authorEl.textContent?.trim().replace(/^u\//, '').toLowerCase() || '';
+            }
+            console.log(`  [${index}] Author found from .user-name: "${authorName}", currentUser: "${currentUser}"`);
+            if (currentUser && authorName === currentUser.toLowerCase()) {
+                isOutbound = true;
+            }
+        } else {
+            console.log(`  [${index}] No author element found in Shadow DOM`);
+        }
+
+        // Method 2: Check element attributes
+        if (!isOutbound) {
+            const elAttrs = Array.from(el.attributes || []).map(a => `${a.name}=${a.value}`).join(', ');
+            console.log(`  [${index}] Element attrs: ${elAttrs}`);
+
+            isOutbound = el.getAttribute('data-is-own') === 'true' ||
+                        el.getAttribute('data-sender') === currentUser ||
+                        el.classList.toString().toLowerCase().includes('own') ||
+                        el.classList.toString().toLowerCase().includes('self') ||
+                        el.classList.toString().toLowerCase().includes('sent') ||
+                        el.classList.toString().toLowerCase().includes('outgoing');
+        }
+
+        // Method 3: Check inside Shadow DOM for 'own' or 'self' classes (deep search)
+        if (!isOutbound && el.shadowRoot) {
+            const innerContainer = querySelectorOneDeep('[class*="own"]', el.shadowRoot) ||
+                                  querySelectorOneDeep('[class*="self"]', el.shadowRoot) ||
+                                  querySelectorOneDeep('[class*="outgoing"]', el.shadowRoot) ||
+                                  querySelectorOneDeep('[class*="local"]', el.shadowRoot) ||
+                                  querySelectorOneDeep('[class*="mine"]', el.shadowRoot);
+            if (innerContainer) {
+                isOutbound = true;
+                console.log(`  [${index}] Found own/self/local class inside Shadow DOM: ${innerContainer.className}`);
+            }
+        }
+
+        console.log(`  [${index}] Direction: ${isOutbound ? 'outbound' : 'inbound'}`);
+
+        // Try to get timestamp - search in Shadow DOM first
+        const timeSearchRoot = el.shadowRoot || el;
+        let timeEl = timeSearchRoot.querySelector('time') ||
+                    timeSearchRoot.querySelector('[class*="time"]') ||
+                    timeSearchRoot.querySelector('[class*="timestamp"]') ||
+                    timeSearchRoot.querySelector('[datetime]');
+
+        // If not found, search deeper in Shadow DOM
+        if (!timeEl && el.shadowRoot) {
+            timeEl = querySelectorOneDeep('time', el.shadowRoot) ||
+                    querySelectorOneDeep('[datetime]', el.shadowRoot);
+        }
+
         const sentAt = timeEl?.getAttribute('datetime') ||
                       timeEl?.getAttribute('title') ||
+                      timeEl?.textContent?.trim() ||
                       new Date().toISOString();
+
+        console.log(`  [${index}] Timestamp: ${sentAt}`);
 
         messages.push({
             direction: isOutbound ? 'outbound' : 'inbound',
@@ -998,6 +1194,29 @@ function startChatSync() {
 
     console.log('📡 Starting chat sync monitoring...');
 
+    // Track last synced room to detect room changes
+    let lastSyncedRoomId = null;
+    let syncDebounceTimer = null;
+
+    // Debounced sync function to avoid multiple rapid syncs
+    const debouncedSync = (reason = 'unknown') => {
+        if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = setTimeout(() => {
+            if (hasChatElements()) {
+                // Extract current room ID from URL
+                const urlMatch = location.href.match(/\/chat\/room\/([^\/\?]+)/);
+                const currentRoomId = urlMatch ? urlMatch[1] : null;
+
+                // Only sync if room changed or it's been a while
+                if (currentRoomId !== lastSyncedRoomId || reason === 'periodic') {
+                    console.log(`🔄 Syncing chat (${reason})...`);
+                    lastSyncedRoomId = currentRoomId;
+                    syncChatMessages();
+                }
+            }
+        }, 1000); // 1 second debounce
+    };
+
     // Function to check and sync if chat is visible
     const checkAndSync = () => {
         if (hasChatElements()) {
@@ -1010,7 +1229,7 @@ function startChatSync() {
     setTimeout(checkAndSync, 2000);
 
     // Periodic sync every 30 seconds
-    chatSyncInterval = setInterval(checkAndSync, 30000);
+    chatSyncInterval = setInterval(() => debouncedSync('periodic'), 30000);
 
     // Watch for chat panel opening (DOM mutations)
     const chatObserver = new MutationObserver((mutations) => {
@@ -1047,9 +1266,51 @@ function startChatSync() {
     new MutationObserver(() => {
         if (location.href !== lastUrl) {
             lastUrl = location.href;
-            setTimeout(checkAndSync, 1000);
+            console.log('📍 URL changed, triggering sync...');
+            debouncedSync('url-change');
         }
     }).observe(document, { subtree: true, childList: true });
+
+    // Listen for History API navigation (pushState/replaceState)
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function(...args) {
+        originalPushState.apply(this, args);
+        console.log('📍 pushState navigation detected');
+        debouncedSync('pushstate');
+    };
+
+    history.replaceState = function(...args) {
+        originalReplaceState.apply(this, args);
+        debouncedSync('replacestate');
+    };
+
+    // Listen for popstate (back/forward buttons)
+    window.addEventListener('popstate', () => {
+        console.log('📍 popstate navigation detected');
+        debouncedSync('popstate');
+    });
+
+    // Click listener for chat-related clicks
+    document.addEventListener('click', (e) => {
+        const target = e.target;
+
+        // Check if click is on a chat room element or inside chat area
+        const isChatClick =
+            target.closest('rs-rooms-nav-room') ||
+            target.closest('rs-room') ||
+            target.closest('[class*="room"]') ||
+            target.closest('[class*="chat"]') ||
+            target.closest('[class*="conversation"]') ||
+            target.closest('a[href*="/chat/"]') ||
+            (target.tagName === 'A' && target.href?.includes('/chat/'));
+
+        if (isChatClick) {
+            console.log('🖱️ Chat click detected, will sync...');
+            debouncedSync('click');
+        }
+    }, true); // Use capture phase to catch clicks early
 }
 
 function stopChatSync() {
@@ -1394,7 +1655,7 @@ function injectSidebar() {
 
     // Inject HTML Structure
     const container = document.createElement('div');
-    container.className = 'sidebar-container hidden';
+    container.className = 'sidebar-container';
     container.style.width = `${sidebarWidth}px`;
     container.style.pointerEvents = 'auto';
     container.innerHTML = `
@@ -1623,6 +1884,11 @@ function makeDraggable(element, sidebar) {
         document.removeEventListener('mouseup', onMouseUp);
 
         if (!hasMoved) {
+            // Don't allow hiding sidebar during automation
+            if (isAutomationRunning && !sidebar.classList.contains('hidden')) {
+                console.log('🔒 Sidebar toggle prevented - automation is running');
+                return;
+            }
             sidebar.classList.toggle('hidden');
         }
     }
@@ -1647,6 +1913,7 @@ function toggleSidebar(isOpen) {
 
 // Ensure sidebar is visible (auto-open when automation is running)
 function ensureSidebarVisible() {
+    isAutomationRunning = true; // Prevent sidebar from being hidden during automation
     if (!isSidebarOpen) {
         console.log('🔓 Auto-opening sidebar for automation');
         isSidebarOpen = true;
@@ -1984,6 +2251,9 @@ function checkPageStatus() {
             return;
         }
 
+        // Automation is not active, allow sidebar toggle again
+        isAutomationRunning = false;
+
         const statusDot = shadowRoot.getElementById('status-dot');
         const statusText = shadowRoot.getElementById('status-text');
         const contentArea = shadowRoot.getElementById('content-area');
@@ -2174,6 +2444,7 @@ function renderPostInfo(data, container) {
 
 function renderRunningState(status) {
     if (!shadowRoot) return;
+    isAutomationRunning = true; // Prevent sidebar from being hidden during automation
     const contentArea = shadowRoot.getElementById('content-area');
     const statusDot = shadowRoot.getElementById('status-dot');
     const statusText = shadowRoot.getElementById('status-text');
