@@ -4,8 +4,9 @@ Manages conversation threads and messages for the inbox
 """
 
 import os
+import hashlib
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from supabase import create_client, Client
 
 _supabase: Optional[Client] = None
@@ -69,6 +70,17 @@ def transform_message(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]
         "isAiGenerated": row.get("is_ai_generated"),
         "createdAt": row.get("created_at")
     }
+
+
+def create_message_fingerprint(content: str, direction: str, sent_at: str = None) -> str:
+    """
+    Create unique fingerprint for message deduplication.
+    Uses content + direction only (no timestamp) since frontend timestamps are unreliable.
+    This means the same exact message can only appear once per conversation.
+    """
+    normalized_content = " ".join((content or "").lower().strip().split())
+    composite = f"{normalized_content}|{direction}"
+    return hashlib.sha256(composite.encode('utf-8')).hexdigest()[:16]
 
 
 async def create_conversation(conversation_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -295,47 +307,87 @@ async def get_messages(conversation_id: str, options: Dict[str, Any] = None) -> 
 
 
 async def sync_conversation(sync_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Sync a conversation from Reddit chat data"""
+    """
+    Sync a conversation from Reddit chat data.
+    Uses content-based deduplication to handle:
+    - Partial syncs (missing messages from DOM)
+    - Reordered messages
+    - Repeated syncs (idempotency)
+    """
     participant_username = sync_data.get("participantUsername")
     reddit_conversation_id = sync_data.get("redditConversationId")
     messages = sync_data.get("messages", [])
     account_id = sync_data.get("accountId")
 
-    # Check if conversation exists
+    if not participant_username:
+        print("Missing participant username")
+        return None
+
+    # Get or create conversation
     conversation = await get_conversation_by_participant(participant_username)
 
     if not conversation:
-        # Create new conversation
         conversation = await create_conversation({
             "participantUsername": participant_username,
             "redditConversationId": reddit_conversation_id,
             "accountId": account_id
         })
-
         if not conversation:
             return None
 
-    # Add new messages
-    client = get_client()
-    if not client:
-        return conversation
+    # Early exit if no messages to sync
+    if not messages:
+        return await get_conversation(conversation["id"])
 
-    # Get existing message count to avoid duplicates
+    # Build fingerprint set of existing messages
     existing_messages = await get_messages(conversation["id"])
-    existing_count = len(existing_messages)
+    existing_fingerprints: Set[str] = set()
 
-    # Only add messages that are new
-    new_messages = messages[existing_count:]
+    for msg in existing_messages:
+        fp = create_message_fingerprint(
+            msg.get("content", ""),
+            msg.get("direction", ""),
+            msg.get("sentAt")
+        )
+        existing_fingerprints.add(fp)
 
-    for msg in new_messages:
-        await add_message({
+    # Identify and add new messages
+    added_count = 0
+
+    for msg in messages:
+        content = (msg.get("content") or "").strip()
+        direction = msg.get("direction", "")
+        sent_at = msg.get("sentAt")
+
+        # Skip empty messages
+        if not content:
+            continue
+
+        # Check fingerprint
+        fingerprint = create_message_fingerprint(content, direction, sent_at)
+
+        if fingerprint in existing_fingerprints:
+            continue  # Already exists, skip
+
+        # Mark as seen (prevent duplicates within same sync batch)
+        existing_fingerprints.add(fingerprint)
+
+        # Add new message
+        result = await add_message({
             "conversationId": conversation["id"],
-            "direction": msg.get("direction"),
-            "content": msg.get("content"),
-            "sentAt": msg.get("sentAt")
+            "direction": direction,
+            "content": content,
+            "sentAt": sent_at,
+            "isAiGenerated": msg.get("isAiGenerated", False)
         })
 
-    # Refresh conversation data
+        if result:
+            added_count += 1
+
+    print(f"Sync for {participant_username}: {added_count} new messages added "
+          f"(received {len(messages)}, existing {len(existing_messages)})")
+
+    # Return updated conversation
     return await get_conversation(conversation["id"])
 
 

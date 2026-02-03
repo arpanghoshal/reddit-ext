@@ -129,13 +129,304 @@ function getDeepTextContent(root = document.body) {
     return text;
 }
 
+// Get the current logged-in user's username
+function getCurrentUsername() {
+    // PRIORITY: rs-current-user element (Reddit chat specific)
+    const rsCurrentUser = document.querySelector('rs-current-user');
+    if (rsCurrentUser) {
+        // Check display-name attribute FIRST (this is what Reddit uses!)
+        const displayName = rsCurrentUser.getAttribute('display-name');
+        if (displayName && /^[a-zA-Z0-9_-]{3,20}$/.test(displayName)) {
+            console.log('👤 Current user from rs-current-user display-name:', displayName);
+            return displayName.toLowerCase();
+        }
+
+        // Check other possible attributes
+        const attrs = ['username', 'user', 'name', 'data-username', 'data-user'];
+        for (const attr of attrs) {
+            const val = rsCurrentUser.getAttribute(attr);
+            if (val && /^[a-zA-Z0-9_-]{3,20}$/.test(val)) {
+                console.log('👤 Current user from rs-current-user attr:', val);
+                return val.toLowerCase();
+            }
+        }
+
+        // Check shadow root
+        if (rsCurrentUser.shadowRoot) {
+            const userEl = rsCurrentUser.shadowRoot.querySelector('a[href*="/user/"]');
+            if (userEl) {
+                const match = userEl.href.match(/\/user\/([^\/\?]+)/);
+                if (match) {
+                    console.log('👤 Current user from rs-current-user shadow:', match[1]);
+                    return match[1].toLowerCase();
+                }
+            }
+        }
+
+        // Log attributes for debugging if we still didn't find it
+        console.log('🔍 rs-current-user found but username not extracted');
+    }
+
+    // Strategy 1: Reddit's user dropdown/menu (most reliable on main Reddit)
+    const userDropdown = document.querySelector('[data-testid="user-dropdown-button"]');
+    if (userDropdown) {
+        const nameEl = userDropdown.querySelector('span');
+        if (nameEl?.textContent) {
+            const username = nameEl.textContent.trim();
+            if (username && /^[a-zA-Z0-9_-]{3,20}$/.test(username)) {
+                console.log('👤 Current user from dropdown:', username);
+                return username.toLowerCase();
+            }
+        }
+    }
+
+    // Strategy 2: Look in shreddit-app for user attribute
+    const shredditApp = document.querySelector('shreddit-app');
+    if (shredditApp) {
+        const currentUserAttr = shredditApp.getAttribute('user') ||
+                                shredditApp.getAttribute('data-user');
+        if (currentUserAttr) {
+            console.log('👤 Current user from shreddit-app:', currentUserAttr);
+            return currentUserAttr.toLowerCase();
+        }
+    }
+
+    // Strategy 3: Check script tags for logged-in user data
+    const scripts = document.querySelectorAll('script');
+    for (const script of scripts) {
+        const content = script.textContent || '';
+        const usernameMatch = content.match(/"(?:username|userName|logged)":\s*"([a-zA-Z0-9_-]{3,20})"/i);
+        if (usernameMatch) {
+            console.log('👤 Current user from script data:', usernameMatch[1]);
+            return usernameMatch[1].toLowerCase();
+        }
+    }
+
+    // Strategy 4: Profile link in header/navigation
+    const profileLinks = document.querySelectorAll('a[href*="/user/"]');
+    for (const link of profileLinks) {
+        const isProfileLink = link.closest('header') ||
+                             link.closest('nav') ||
+                             link.classList.toString().includes('profile') ||
+                             link.getAttribute('aria-label')?.toLowerCase().includes('profile');
+        if (isProfileLink) {
+            const match = link.href.match(/\/user\/([^\/\?]+)/);
+            if (match && match[1]) {
+                console.log('👤 Current user from profile link:', match[1]);
+                return match[1].toLowerCase();
+            }
+        }
+    }
+
+    // Strategy 5: Reddit's __REDDIT__ global data
+    try {
+        const redditData = window.__REDDIT__;
+        if (redditData?.config?.user?.name) {
+            console.log('👤 Current user from __REDDIT__:', redditData.config.user.name);
+            return redditData.config.user.name.toLowerCase();
+        }
+    } catch (e) {}
+
+    // Strategy 6: Reddit's r.config (old Reddit)
+    try {
+        if (window.r?.config?.logged) {
+            console.log('👤 Current user from r.config:', window.r.config.logged);
+            return window.r.config.logged.toLowerCase();
+        }
+    } catch (e) {}
+
+    // Strategy 7: Check localStorage for Reddit user session data
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.includes('user') || key.includes('session'))) {
+                const value = localStorage.getItem(key);
+                if (value) {
+                    const match = value.match(/"?(?:name|username)"?\s*[:=]\s*"?([a-zA-Z0-9_-]{3,20})"?/i);
+                    if (match) {
+                        console.log('👤 Current user from localStorage:', match[1]);
+                        return match[1].toLowerCase();
+                    }
+                }
+            }
+        }
+    } catch (e) {}
+
+    // Strategy 8: In chat, messages aligned right are typically from current user
+    // Find right-aligned messages and extract username
+    const allMessages = querySelectorDeep('div[class*="message"]');
+    for (const msg of allMessages) {
+        const style = getComputedStyle(msg);
+        const parent = msg.parentElement;
+        const parentStyle = parent ? getComputedStyle(parent) : null;
+
+        // Check if message is right-aligned (own message)
+        const isRightAligned = style.marginLeft === 'auto' ||
+                              style.alignSelf === 'flex-end' ||
+                              style.justifySelf === 'flex-end' ||
+                              (parentStyle && parentStyle.justifyContent === 'flex-end');
+
+        if (isRightAligned) {
+            const userLink = msg.querySelector('a[href*="/user/"]') ||
+                            querySelectorOneDeep('a[href*="/user/"]', msg);
+            if (userLink) {
+                const match = userLink.href.match(/\/user\/([^\/\?]+)/);
+                if (match && match[1]) {
+                    console.log('👤 Current user from right-aligned message:', match[1]);
+                    return match[1].toLowerCase();
+                }
+            }
+        }
+    }
+
+    console.log('⚠️ Could not determine current username');
+    return null;
+}
+
 function extractChatConversations() {
     const conversations = [];
 
     let participantUsername = null;
 
+    // Get current user to filter out from participant detection
+    const currentUser = getCurrentUsername();
+    console.log('👤 Current logged-in user:', currentUser);
+
+    // Helper to validate participant is not current user
+    const isValidParticipant = (username) => {
+        if (!username) return false;
+        const normalized = username.toLowerCase().trim();
+        if (currentUser && normalized === currentUser) {
+            console.log('⚠️ Skipping current user as participant:', username);
+            return false;
+        }
+        return true;
+    };
+
     // Debug: Log available elements to help identify correct selectors
     console.log('🔍 Debugging chat DOM (with Shadow DOM support)...');
+
+    // PRIORITY Strategy: Look for the chat room header title
+    // In a DM, the header shows ONLY the other person's name, never your own
+    // This is the most reliable way to get the participant
+    const roomHeaderSelectors = [
+        // Reddit chat room header selectors
+        'rs-room-header',
+        'rs-room',
+        '[class*="RoomHeader"]',
+        '[class*="room-header"]',
+        '[class*="ChatHeader"]',
+        '[class*="chat-header"]',
+        '[data-testid="room-header"]',
+        '[data-testid="chat-header"]',
+        // Matrix-style selectors
+        '[class*="mx_RoomHeader"]',
+        '[class*="mx_Room"]',
+    ];
+
+    // Debug: Log what custom elements exist
+    const customElements = document.querySelectorAll('*');
+    const rsElements = [];
+    customElements.forEach(el => {
+        if (el.tagName && el.tagName.toLowerCase().startsWith('rs-')) {
+            rsElements.push(el.tagName.toLowerCase());
+        }
+    });
+    if (rsElements.length > 0) {
+        console.log('🔍 Found Reddit custom elements (rs-*):', [...new Set(rsElements)]);
+    }
+
+    for (const selector of roomHeaderSelectors) {
+        let header = document.querySelector(selector) || querySelectorOneDeep(selector);
+        if (header) {
+            console.log('📍 Found room header with selector:', selector);
+
+            // Check shadow root if exists
+            const root = header.shadowRoot || header;
+
+            // Debug: log shadow root contents
+            if (header.shadowRoot) {
+                const shadowHTML = header.shadowRoot.innerHTML?.substring(0, 500);
+                console.log('🔍 Shadow DOM preview:', shadowHTML);
+            }
+
+            // Look for the room name/title element - try many selectors
+            const titleSelectors = [
+                '.room-name', '[class*="room-name"]', '[class*="roomName"]',
+                '[class*="title"]', '[class*="Title"]',
+                '[class*="name"]', '[class*="Name"]',
+                'h1', 'h2', 'h3',
+                'a[href*="/user/"]',
+                '[class*="header"] span', '[class*="Header"] span',
+                'span[class]', // Generic span with class
+            ];
+
+            let titleEl = null;
+            for (const ts of titleSelectors) {
+                titleEl = root.querySelector(ts);
+                if (titleEl) {
+                    console.log('📍 Found title element with selector:', ts);
+                    break;
+                }
+            }
+
+            // Also search deeper in nested shadow DOMs
+            if (!titleEl && header.shadowRoot) {
+                titleEl = querySelectorOneDeep('a[href*="/user/"]', header.shadowRoot) ||
+                         querySelectorOneDeep('[class*="name"]', header.shadowRoot);
+            }
+
+            if (titleEl) {
+                let candidate = null;
+                if (titleEl.href) {
+                    const match = titleEl.href.match(/\/user\/([^\/\?]+)/);
+                    if (match) candidate = match[1];
+                } else {
+                    candidate = titleEl.textContent?.trim();
+                }
+
+                if (candidate && /^[a-zA-Z0-9_-]{3,20}$/.test(candidate) && isValidParticipant(candidate)) {
+                    participantUsername = candidate;
+                    console.log('✓ Found participant from room header:', participantUsername);
+                    break;
+                } else if (candidate && !isValidParticipant(candidate)) {
+                    console.log('⚠️ Room header returned current user, skipping:', candidate);
+                }
+            }
+        }
+    }
+
+    // Additional priority: Look for the participant name in the page's main content area
+    // The chat UI typically has a header showing "Username" with karma info like "Redditor for 2y · 6 karma"
+    if (!participantUsername) {
+        // Strategy A: Look for "Redditor for" text and find username near it
+        const allText = getDeepTextContent(document.body);
+        const redditorMatch = allText.match(/([a-zA-Z0-9_-]{3,20})\s*Redditor for/i);
+        if (redditorMatch && isValidParticipant(redditorMatch[1])) {
+            participantUsername = redditorMatch[1];
+            console.log('✓ Found participant from "Redditor for" pattern:', participantUsername);
+        }
+
+        // Strategy B: Look for elements that show user karma
+        if (!participantUsername) {
+            const karmaElements = querySelectorDeep('[class*="karma"], [class*="Karma"]');
+            for (const karmaEl of karmaElements) {
+                const container = karmaEl.closest('div') || karmaEl.parentElement;
+                if (container) {
+                    const userLink = container.querySelector('a[href*="/user/"]') ||
+                                    container.parentElement?.querySelector('a[href*="/user/"]');
+                    if (userLink) {
+                        const match = userLink.href.match(/\/user\/([^\/\?]+)/);
+                        if (match && match[1] && /^[a-zA-Z0-9_-]{3,20}$/.test(match[1]) && isValidParticipant(match[1])) {
+                            participantUsername = match[1];
+                            console.log('✓ Found participant from karma area:', participantUsername);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Strategy 1: Use rs-rooms-nav activeroom attribute to find the active room
     // This works on both dedicated chat page and side panel
@@ -152,7 +443,7 @@ function extractChatConversations() {
                 const ariaLabel = chatLink.getAttribute('aria-label');
                 console.log('📍 Found aria-label from activeroom:', ariaLabel);
                 const match = ariaLabel?.match(/Direct chat with ([^\s]+)/i);
-                if (match) {
+                if (match && isValidParticipant(match[1])) {
                     participantUsername = match[1];
                     console.log('✓ Found username from activeroom:', participantUsername);
                 }
@@ -160,8 +451,11 @@ function extractChatConversations() {
             if (!participantUsername) {
                 const roomName = activeRoom.shadowRoot.querySelector('.room-name');
                 if (roomName) {
-                    participantUsername = roomName.textContent?.trim();
-                    console.log('✓ Found username from activeroom .room-name:', participantUsername);
+                    const candidate = roomName.textContent?.trim();
+                    if (isValidParticipant(candidate)) {
+                        participantUsername = candidate;
+                        console.log('✓ Found username from activeroom .room-name:', participantUsername);
+                    }
                 }
             }
         }
@@ -182,7 +476,7 @@ function extractChatConversations() {
                     console.log('📍 Found aria-label:', ariaLabel);
                     // Pattern: "Direct chat with {username}"
                     const match = ariaLabel.match(/Direct chat with ([^\s]+)/i);
-                    if (match) {
+                    if (match && isValidParticipant(match[1])) {
                         participantUsername = match[1];
                         console.log('✓ Found username from aria-label:', participantUsername);
                     }
@@ -192,8 +486,11 @@ function extractChatConversations() {
                 if (!participantUsername) {
                     const roomName = selectedRoom.shadowRoot.querySelector('.room-name');
                     if (roomName) {
-                        participantUsername = roomName.textContent?.trim();
-                        console.log('✓ Found username from .room-name:', participantUsername);
+                        const candidate = roomName.textContent?.trim();
+                        if (isValidParticipant(candidate)) {
+                            participantUsername = candidate;
+                            console.log('✓ Found username from .room-name:', participantUsername);
+                        }
                     }
                 }
             }
@@ -212,7 +509,7 @@ function extractChatConversations() {
                 if (chatLink) {
                     const ariaLabel = chatLink.getAttribute('aria-label');
                     const match = ariaLabel?.match(/Direct chat with ([^\s]+)/i);
-                    if (match) {
+                    if (match && isValidParticipant(match[1])) {
                         // Check if this room is selected (has 'selected' class or attribute)
                         const isSelected = room.hasAttribute('selected') ||
                                           chatLink.classList.contains('selected') ||
@@ -242,7 +539,7 @@ function extractChatConversations() {
                 if (chatLink) {
                     const ariaLabel = chatLink.getAttribute('aria-label');
                     const match = ariaLabel?.match(/Direct chat with ([^\s]+)/i);
-                    if (match) {
+                    if (match && isValidParticipant(match[1])) {
                         participantUsername = match[1];
                         console.log('✓ Found username from room URL match:', participantUsername);
                     }
@@ -251,8 +548,11 @@ function extractChatConversations() {
                 if (!participantUsername) {
                     const roomName = matchingRoom.shadowRoot.querySelector('.room-name');
                     if (roomName) {
-                        participantUsername = roomName.textContent?.trim();
-                        console.log('✓ Found username from .room-name (URL match):', participantUsername);
+                        const candidate = roomName.textContent?.trim();
+                        if (isValidParticipant(candidate)) {
+                            participantUsername = candidate;
+                            console.log('✓ Found username from .room-name (URL match):', participantUsername);
+                        }
                     }
                 }
             }
@@ -298,7 +598,7 @@ function extractChatConversations() {
             const usernameLink = header.querySelector('a[href*="/user/"]') || querySelectorOneDeep('a[href*="/user/"]', header);
             if (usernameLink) {
                 const match = usernameLink.href.match(/\/user\/([^\/\?]+)/);
-                if (match) {
+                if (match && isValidParticipant(match[1])) {
                     participantUsername = match[1];
                     console.log('✓ Found username from link:', participantUsername);
                     break;
@@ -308,7 +608,7 @@ function extractChatConversations() {
             // Check for u/username pattern in text
             const headerText = header.textContent;
             const uMatch = headerText.match(/u\/(\w+)/);
-            if (uMatch) {
+            if (uMatch && isValidParticipant(uMatch[1])) {
                 participantUsername = uMatch[1];
                 console.log('✓ Found username from u/ pattern:', participantUsername);
                 break;
@@ -317,7 +617,7 @@ function extractChatConversations() {
             // Check for plain username (often the header just shows the username)
             // Look for text that looks like a username (alphanumeric, underscores, hyphens)
             const cleanText = header.textContent?.trim();
-            if (cleanText && /^[a-zA-Z0-9_-]{3,20}$/.test(cleanText)) {
+            if (cleanText && /^[a-zA-Z0-9_-]{3,20}$/.test(cleanText) && isValidParticipant(cleanText)) {
                 participantUsername = cleanText;
                 console.log('✓ Found username from header text:', participantUsername);
                 break;
@@ -325,18 +625,52 @@ function extractChatConversations() {
         }
     }
 
-    // Strategy 2b: Look for any user links in shadow DOM throughout the page
+    // Strategy 2b: Look for user links, but prioritize finding the PARTICIPANT
+    // In a DM, there are 2 users. We need to find the OTHER person.
     if (!participantUsername) {
         const allUserLinks = querySelectorDeep('a[href*="/user/"]');
         console.log('🔍 Found', allUserLinks.length, 'user links in DOM (including shadow)');
+
+        // Collect all unique usernames
+        const usernames = new Set();
         for (const link of allUserLinks) {
             const match = link.href.match(/\/user\/([^\/\?]+)/);
             if (match && match[1] && match[1].length >= 3 && match[1].length <= 20) {
-                // Skip common non-username paths
                 if (!['preferences', 'settings', 'me', 'undefined'].includes(match[1].toLowerCase())) {
-                    participantUsername = match[1];
-                    console.log('✓ Found username from user link in shadow DOM:', participantUsername);
+                    usernames.add(match[1].toLowerCase());
+                }
+            }
+        }
+
+        console.log('🔍 Unique usernames found:', [...usernames]);
+
+        // If we found exactly 2 usernames in a DM, and we know currentUser, use the other one
+        if (usernames.size === 2 && currentUser) {
+            for (const username of usernames) {
+                if (username !== currentUser) {
+                    participantUsername = username;
+                    console.log('✓ Found participant by elimination (2 users, excluding current):', participantUsername);
                     break;
+                }
+            }
+        }
+
+        // If we still don't have participant, try to find user link in message area (not navigation)
+        if (!participantUsername) {
+            for (const link of allUserLinks) {
+                const match = link.href.match(/\/user\/([^\/\?]+)/);
+                if (match && match[1] && match[1].length >= 3 && match[1].length <= 20) {
+                    // Skip if it's in navigation/header (likely current user's profile)
+                    const isInNav = link.closest('nav') || link.closest('header') ||
+                                   link.closest('[class*="nav"]') || link.closest('[class*="sidebar"]');
+                    if (!isInNav) {
+                        const username = match[1].toLowerCase();
+                        if (!['preferences', 'settings', 'me', 'undefined'].includes(username) && isValidParticipant(username)) {
+                            participantUsername = username;
+                            console.log('✓ Found username from user link (not in nav):', participantUsername);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -357,7 +691,7 @@ function extractChatConversations() {
 
         for (const pattern of titlePatterns) {
             const titleMatch = title.match(pattern);
-            if (titleMatch) {
+            if (titleMatch && isValidParticipant(titleMatch[1])) {
                 participantUsername = titleMatch[1];
                 console.log('✓ Found username from title:', participantUsername);
                 break;
@@ -368,7 +702,7 @@ function extractChatConversations() {
     // Strategy 4: URL patterns
     if (!participantUsername) {
         const userMatch = window.location.href.match(/\/user\/([^\/\?]+)/);
-        if (userMatch) {
+        if (userMatch && isValidParticipant(userMatch[1])) {
             participantUsername = userMatch[1];
             console.log('✓ Found username from URL:', participantUsername);
         }
@@ -396,10 +730,6 @@ function extractChatConversations() {
             '[class*="mx_BaseAvatar"]',
         ];
 
-        const currentUserEl = querySelectorOneDeep('[class*="current-user"], [class*="CurrentUser"], [class*="self"], [class*="mx_MyUser"]');
-        const currentUser = currentUserEl?.textContent?.trim();
-        console.log('👤 Current user detected:', currentUser);
-
         for (const selector of usernameSelectors) {
             // Use deep query to search shadow DOMs
             const elements = querySelectorDeep(selector);
@@ -414,7 +744,7 @@ function extractChatConversations() {
 
                 // Skip if it's the current user, common UI text, or too short/long
                 if (username &&
-                    username !== currentUser &&
+                    isValidParticipant(username) &&
                     username !== 'me' &&
                     username.length >= 3 &&
                     username.length <= 20 &&
@@ -438,8 +768,11 @@ function extractChatConversations() {
                 const match = usernameEl.href?.match(/\/user\/([^\/\?]+)/) ||
                              usernameEl.textContent?.match(/^u\/(\w+)$|^(\w+)$/);
                 if (match) {
-                    participantUsername = match[1] || match[2];
-                    console.log('✓ Found username from active conversation:', participantUsername);
+                    const candidate = match[1] || match[2];
+                    if (isValidParticipant(candidate)) {
+                        participantUsername = candidate;
+                        console.log('✓ Found username from active conversation:', participantUsername);
+                    }
                 }
             }
         }
@@ -484,10 +817,10 @@ function extractChatConversations() {
         const usernameMatches = pageText.match(/u\/([a-zA-Z0-9_-]{3,20})/g);
         if (usernameMatches && usernameMatches.length > 0) {
             console.log('🔍 Found u/username patterns in page text:', [...new Set(usernameMatches)].slice(0, 5));
-            // Try to use the first non-common username
+            // Try to use the first non-common username that isn't the current user
             for (const match of usernameMatches) {
                 const username = match.replace('u/', '');
-                if (!['me', 'user', 'reddit', 'admin'].includes(username.toLowerCase())) {
+                if (!['me', 'user', 'reddit', 'admin'].includes(username.toLowerCase()) && isValidParticipant(username)) {
                     participantUsername = username;
                     console.log('✓ Found username from page text:', participantUsername);
                     break;
