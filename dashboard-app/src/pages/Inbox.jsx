@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageSquare, RefreshCw, Sparkles, Tag, ChevronRight } from 'lucide-react';
+import { MessageSquare, RefreshCw, Sparkles, Tag, ChevronRight, Send, Clock, Edit3, Check } from 'lucide-react';
 import * as api from '../api/client';
 
 const STATUS_OPTIONS = ['active', 'interested', 'cold', 'closed', 'converted'];
@@ -53,10 +53,15 @@ function ConversationDetail({ conversation, onUpdate }) {
   const [suggestion, setSuggestion] = useState('');
   const [loading, setLoading] = useState(false);
   const [generatingSuggestion, setGeneratingSuggestion] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [isQueueing, setIsQueueing] = useState(false);
+  const [queuedReply, setQueuedReply] = useState(null);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     if (conversation) {
       loadConversation();
+      checkQueuedReply();
     }
   }, [conversation?.id]);
 
@@ -70,6 +75,16 @@ function ConversationDetail({ conversation, onUpdate }) {
       console.error('Failed to load conversation:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkQueuedReply = async () => {
+    if (!conversation) return;
+    try {
+      const pending = await api.getPendingReplyForConversation(conversation.id);
+      setQueuedReply(pending);
+    } catch (err) {
+      console.error('Failed to check queued reply:', err);
     }
   };
 
@@ -94,6 +109,43 @@ function ConversationDetail({ conversation, onUpdate }) {
     }
   };
 
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleAddToQueue = async (autoApprove = false) => {
+    if (!replyText.trim()) {
+      showToast('Please enter a reply message', 'error');
+      return;
+    }
+    setIsQueueing(true);
+    try {
+      await api.addReplyToQueue({
+        conversationId: conversation.id,
+        recipientUsername: conversation.participantUsername,
+        generatedMessage: suggestion || replyText,
+        editedMessage: replyText !== suggestion ? replyText : null,
+        status: autoApprove ? 'approved' : 'pending'
+      });
+      setReplyText('');
+      setSuggestion('');
+      await checkQueuedReply();
+      showToast(autoApprove ? 'Reply approved and queued for sending!' : 'Reply added to queue!');
+    } catch (err) {
+      console.error('Failed to add to queue:', err);
+      showToast('Failed to add to queue', 'error');
+    } finally {
+      setIsQueueing(false);
+    }
+  };
+
+  const useSuggestion = () => {
+    if (suggestion) {
+      setReplyText(suggestion);
+    }
+  };
+
   if (!conversation) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400">
@@ -104,6 +156,15 @@ function ConversationDetail({ conversation, onUpdate }) {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Toast */}
+      {toast && (
+        <div className={`absolute top-4 right-4 px-4 py-2 rounded-lg text-sm font-medium z-50 ${
+          toast.type === 'error' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+        }`}>
+          {toast.message}
+        </div>
+      )}
+
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
@@ -154,30 +215,58 @@ function ConversationDetail({ conversation, onUpdate }) {
         )}
       </div>
 
-      {/* AI Suggestion */}
-      <div className="p-4 border-t border-gray-200">
-        <button
-          onClick={generateSuggestion}
-          disabled={generatingSuggestion}
-          className="flex items-center gap-2 px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 disabled:opacity-50"
-        >
-          {generatingSuggestion ? (
-            <RefreshCw size={16} className="animate-spin" />
-          ) : (
-            <Sparkles size={16} />
-          )}
-          Generate Reply Suggestion
-        </button>
+      {/* Queued Reply Indicator */}
+      {queuedReply && (
+        <div className="mx-4 mb-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <div className="flex items-center gap-2 text-yellow-800">
+            <Clock size={16} />
+            <span className="text-sm font-medium">
+              Reply {queuedReply.status === 'approved' ? 'approved & ready to send' : 'pending approval'}
+            </span>
+          </div>
+          <p className="text-xs text-yellow-700 mt-1 truncate">
+            {queuedReply.finalMessage}
+          </p>
+        </div>
+      )}
 
-        {suggestion && (
-          <div className="mt-3 p-3 bg-purple-50 rounded-lg">
+      {/* Reply Composer */}
+      <div className="p-4 border-t border-gray-200 space-y-3">
+        {/* AI Suggestion Section */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={generateSuggestion}
+            disabled={generatingSuggestion}
+            className="flex items-center gap-2 px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 disabled:opacity-50 text-sm"
+          >
+            {generatingSuggestion ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : (
+              <Sparkles size={14} />
+            )}
+            Generate AI Reply
+          </button>
+          {suggestion && (
+            <button
+              onClick={useSuggestion}
+              className="flex items-center gap-1 px-3 py-1.5 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 text-sm"
+            >
+              <Edit3 size={14} />
+              Use Suggestion
+            </button>
+          )}
+        </div>
+
+        {/* AI Suggestion Preview */}
+        {suggestion && !replyText && (
+          <div className="p-3 bg-purple-50 rounded-lg">
             <p className="text-sm text-purple-900">{suggestion}</p>
             <div className="flex gap-2 mt-2">
               <button
-                onClick={() => navigator.clipboard.writeText(suggestion)}
-                className="text-xs text-purple-600 hover:text-purple-800"
+                onClick={useSuggestion}
+                className="text-xs text-purple-600 hover:text-purple-800 font-medium"
               >
-                Copy to clipboard
+                Edit & Use
               </button>
               <button
                 onClick={generateSuggestion}
@@ -188,6 +277,51 @@ function ConversationDetail({ conversation, onUpdate }) {
             </div>
           </div>
         )}
+
+        {/* Reply Textarea */}
+        <textarea
+          value={replyText}
+          onChange={(e) => setReplyText(e.target.value)}
+          placeholder="Write your reply or use AI suggestion..."
+          className="w-full p-3 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+          rows={3}
+        />
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleAddToQueue(false)}
+            disabled={isQueueing || !replyText.trim()}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
+          >
+            {isQueueing ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : (
+              <Clock size={14} />
+            )}
+            Add to Queue
+          </button>
+          <button
+            onClick={() => handleAddToQueue(true)}
+            disabled={isQueueing || !replyText.trim()}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 text-sm"
+          >
+            {isQueueing ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : (
+              <Send size={14} />
+            )}
+            Send Now
+          </button>
+          {replyText && (
+            <button
+              onClick={() => { setReplyText(''); setSuggestion(''); }}
+              className="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

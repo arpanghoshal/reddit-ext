@@ -625,6 +625,37 @@ async function getReplySuggestion(conversationId) {
     return result.data?.suggestion;
 }
 
+async function addConversationMessage(conversationId, messageData) {
+    const result = await apiRequest(`/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify(messageData)
+    });
+    return result.data;
+}
+
+// ============================================
+// REPLY QUEUE FUNCTIONS
+// ============================================
+
+async function addReplyToQueue(item) {
+    const result = await apiRequest('/queue/reply', {
+        method: 'POST',
+        body: JSON.stringify(item)
+    });
+    return result.data;
+}
+
+async function getNextReplyToSend(accountId = null) {
+    const url = accountId ? `/queue/next-reply?accountId=${accountId}` : '/queue/next-reply';
+    const result = await apiRequest(url);
+    return result.data;
+}
+
+async function getPendingReplyForConversation(conversationId) {
+    const result = await apiRequest(`/queue/pending-reply/${conversationId}`);
+    return result.data;
+}
+
 // ============================================
 // USER ANALYSIS FUNCTIONS (Deep Profile)
 // ============================================
@@ -1017,6 +1048,12 @@ export {
     getConversationStats,
     syncConversation,
     getReplySuggestion,
+    addConversationMessage,
+
+    // Reply Queue
+    addReplyToQueue,
+    getNextReplyToSend,
+    getPendingReplyForConversation,
 
     // User Analysis (Deep Profile)
     analyzeUser,

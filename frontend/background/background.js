@@ -422,7 +422,8 @@ function notifyAutomationProgress(tabId) {
             queueProgress: queue ? `${queue.currentIndex + 1}/${queue.urls.length}` : '',
             subreddit: queue ? queue.subreddit : '',
             awaitingConfirmation: task ? task.status === AutomationState.AWAITING_CONFIRMATION : false,
-            pendingDM: task && task.status === AutomationState.AWAITING_CONFIRMATION ? task.data : null
+            pendingDM: task && task.status === AutomationState.AWAITING_CONFIRMATION ? task.data : null,
+            currentClassification: task?.data?.classification || null
         }
     }).catch(() => {}); // Ignore errors if content script not ready
 }
@@ -465,21 +466,40 @@ async function processNextStep(tabId) {
                         return;
                     }
 
-                    // 2. Generate DM
+                    // 2. Classify post and Generate DM
                     try {
                         // Get settings from storage
                         const settings = await chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone']);
+
+                        // Classify post first to determine usefulness
+                        let classification = null;
+                        try {
+                            console.log('Classifying post...');
+                            classification = await api.classifyPost({
+                                url: postData.url,
+                                title: postData.title,
+                                body: postData.body,
+                                subreddit: postData.subreddit,
+                                author: postData.author
+                            }, settings);
+                            console.log('Classification result:', classification);
+                        } catch (classifyErr) {
+                            console.warn('Classification failed, continuing without:', classifyErr);
+                        }
+
+                        // Generate DM
                         const message = await generateQuestion({ post: postData, settings });
 
                         console.log('DM Generated:', message);
 
-                        // 3. Update task data with the new user and message
+                        // 3. Update task data with the new user, message, and classification
                         task.data = {
                             targetUser: postData.author,
                             message: message,
                             postUrl: postData.url,
                             postTitle: postData.title,
-                            subreddit: postData.subreddit
+                            subreddit: postData.subreddit,
+                            classification: classification
                         };
 
                         // Check DM send mode
@@ -495,7 +515,8 @@ async function processNextStep(tabId) {
                                     targetUser: postData.author,
                                     message: message,
                                     postTitle: postData.title,
-                                    subreddit: postData.subreddit
+                                    subreddit: postData.subreddit,
+                                    classification: classification
                                 }
                             }).catch(err => {
                                 console.error('Failed to show confirmation dialog:', err);
@@ -597,6 +618,27 @@ function handleStepCompletion(tabId, result) {
             // Record DM sent for rate limiting
             recordDMSent();
 
+            // Handle reply queue items
+            if (task.data.isReply && task.data.queueItemId) {
+                console.log('Marking reply queue item as sent:', task.data.queueItemId);
+
+                // Mark queue item as sent
+                api.markQueueItemSent(task.data.queueItemId).catch(err => {
+                    console.error('Failed to mark queue item as sent:', err);
+                });
+
+                // Add message to conversation
+                if (task.data.conversationId) {
+                    api.addConversationMessage(task.data.conversationId, {
+                        direction: 'outbound',
+                        content: task.data.message,
+                        isAiGenerated: true
+                    }).catch(err => {
+                        console.error('Failed to add message to conversation:', err);
+                    });
+                }
+            }
+
             // Log DM to Supabase
             const queue = subredditQueues[tabId];
             api.logDM({
@@ -606,7 +648,7 @@ function handleStepCompletion(tabId, result) {
                 subreddit: queue ? queue.subreddit : null,
                 messageContent: task.data.message,
                 status: 'sent',
-                automationType: queue ? 'batch' : 'single',
+                automationType: task.data.isReply ? 'reply' : (queue ? 'batch' : 'single'),
                 sessionId: queue ? queue.sessionId : null
             });
 
@@ -995,5 +1037,135 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         api.getConversationStats().then(stats => sendResponse(stats)).catch(() => sendResponse({ total: 0, withReplies: 0 }));
         return true;
     }
+
+    // Reply Queue Management
+    if (request.action === 'START_REPLY_QUEUE_POLLING') {
+        startReplyQueuePolling();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (request.action === 'STOP_REPLY_QUEUE_POLLING') {
+        stopReplyQueuePolling();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (request.action === 'GET_REPLY_QUEUE_STATUS') {
+        sendResponse({
+            isPolling: replyQueueInterval !== null,
+            isProcessing: replyQueueProcessing
+        });
+        return true;
+    }
 });
+
+// =============================================================================
+// REPLY QUEUE PROCESSING
+// =============================================================================
+
+let replyQueueInterval = null;
+let replyQueueProcessing = false;
+
+function startReplyQueuePolling() {
+    if (replyQueueInterval) {
+        console.log('Reply queue polling already active');
+        return;
+    }
+
+    console.log('Starting reply queue polling...');
+
+    // Poll every 10 seconds for approved replies
+    replyQueueInterval = setInterval(async () => {
+        if (replyQueueProcessing) {
+            console.log('Reply queue: already processing, skipping poll');
+            return;
+        }
+
+        try {
+            const nextReply = await api.getNextReplyToSend();
+
+            if (nextReply) {
+                console.log('Found approved reply to send:', nextReply.id);
+                replyQueueProcessing = true;
+                await processReplyQueueItem(nextReply);
+                replyQueueProcessing = false;
+            }
+        } catch (err) {
+            console.error('Reply queue poll error:', err);
+            replyQueueProcessing = false;
+        }
+    }, 10000);
+
+    // Immediately check for items
+    (async () => {
+        try {
+            const nextReply = await api.getNextReplyToSend();
+            if (nextReply) {
+                console.log('Found approved reply to send (immediate):', nextReply.id);
+                replyQueueProcessing = true;
+                await processReplyQueueItem(nextReply);
+                replyQueueProcessing = false;
+            }
+        } catch (err) {
+            console.error('Reply queue immediate check error:', err);
+        }
+    })();
+}
+
+function stopReplyQueuePolling() {
+    if (replyQueueInterval) {
+        console.log('Stopping reply queue polling...');
+        clearInterval(replyQueueInterval);
+        replyQueueInterval = null;
+    }
+}
+
+async function processReplyQueueItem(item) {
+    console.log(`Processing reply queue item: ${item.id} to u/${item.recipientUsername}`);
+
+    // Find an active Reddit tab or notify user
+    const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+    let tabId = tabs[0]?.id;
+
+    if (!tabId) {
+        console.log('No Reddit tab found - creating notification');
+        chrome.notifications.create({
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icons/icon48.png'),
+            title: 'Reply Queue',
+            message: `Please open a Reddit tab to send reply to u/${item.recipientUsername}`
+        });
+        return;
+    }
+
+    // Start automation task for this reply
+    activeTasks[tabId] = {
+        status: AutomationState.NAVIGATING_PROFILE,
+        data: {
+            targetUser: item.recipientUsername,
+            message: item.finalMessage,
+            queueItemId: item.id,
+            conversationId: item.conversationId,
+            isReply: true
+        },
+        retries: 0
+    };
+
+    // Notify content script to show sidebar with progress
+    notifyAutomationProgress(tabId);
+
+    // Navigate to user's profile
+    const profileUrl = `https://www.reddit.com/user/${item.recipientUsername}/`;
+    await chrome.tabs.update(tabId, { url: profileUrl });
+    activeTasks[tabId].status = AutomationState.WAITING_FOR_PROFILE;
+
+    // The existing automation flow will handle clicking chat and typing the message
+    // When complete, handleStepCompletion will mark the queue item as sent
+}
+
+// Extend handleStepCompletion to handle reply queue items
+const originalHandleStepCompletion = handleStepCompletion;
+// Note: We can't easily override the function, so we add this logic inline in the existing function
+// The logic is already handled above - on successful TYPE_MESSAGE, we check for task.data.isReply
 

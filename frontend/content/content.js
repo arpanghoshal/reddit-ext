@@ -2299,30 +2299,9 @@ function renderSubredditInfo(data, container) {
     shadowRoot.getElementById('start-sub-auto-btn').addEventListener('click', async () => {
         const btn = shadowRoot.getElementById('start-sub-auto-btn');
 
-        // Get fresh list of links
-        const links = getPostLinks();
-
-        if (links.length === 0) {
-            showToast('No posts found to automate!', 'error');
-            return;
-        }
-
-        // Show confirmation dialog
-        const confirmed = confirm(
-            `Start automation for ${links.length} posts in r/${escapeHtml(data.name)}?\n\n` +
-            `This will:\n` +
-            `• Navigate to each post\n` +
-            `• Generate a personalized DM\n` +
-            `• Send the DM to the post author\n\n` +
-            `You can stop at any time by pressing Alt+S.`
-        );
-
-        if (!confirmed) {
-            return;
-        }
-
+        // Show loading state while scrolling
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Starting...';
+        btn.innerHTML = '<span class="spinner"></span> Loading posts...';
         btn.classList.add('loading');
 
         // Add spinner styles if not present
@@ -2351,6 +2330,44 @@ function renderSubredditInfo(data, container) {
             `;
             shadowRoot.appendChild(style);
         }
+
+        // Scroll to load 28 posts first
+        console.log('Scrolling to load 28 posts...');
+        await scrollToLoadPosts(28);
+
+        // Scroll back to top after loading posts
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Get fresh list of links after scrolling
+        const links = getPostLinks();
+
+        if (links.length === 0) {
+            showToast('No posts found to automate!', 'error');
+            btn.disabled = false;
+            btn.innerHTML = 'Start Subreddit Automation';
+            btn.classList.remove('loading');
+            return;
+        }
+
+        // Show confirmation dialog
+        const confirmed = confirm(
+            `Start automation for ${links.length} posts in r/${escapeHtml(data.name)}?\n\n` +
+            `This will:\n` +
+            `• Navigate to each post\n` +
+            `• Generate a personalized DM\n` +
+            `• Send the DM to the post author\n\n` +
+            `You can stop at any time by pressing Alt+S.`
+        );
+
+        if (!confirmed) {
+            btn.disabled = false;
+            btn.innerHTML = 'Start Subreddit Automation';
+            btn.classList.remove('loading');
+            return;
+        }
+
+        btn.innerHTML = '<span class="spinner"></span> Starting...';
 
         console.log(`Starting automation on ${links.length} posts`);
 
@@ -2481,6 +2498,16 @@ function renderRunningState(status) {
         }
     }
 
+    // Build classification display if available
+    const classificationHtml = status.currentClassification ? `
+        <div class="running-classification">
+            <div class="classification-badge classification-${status.currentClassification.category}">
+                <span class="classification-label">${formatCategory(status.currentClassification.category)}</span>
+                <span class="classification-score">${status.currentClassification.relevanceScore || 0}%</span>
+            </div>
+        </div>
+    ` : '';
+
     contentArea.innerHTML = `
       <div class="post-info running-state">
         <div class="loader-container">
@@ -2499,6 +2526,8 @@ function renderRunningState(status) {
             </div>
         </div>
         ` : ''}
+
+        ${classificationHtml}
 
         <p class="progress-step">${statusMessage}</p>
 
@@ -2654,6 +2683,33 @@ function renderDMConfirmation(data) {
         shadowRoot.appendChild(style);
     }
 
+    // Build classification display for confirmation dialog
+    const classificationHtml = data.classification ? `
+        <div class="confirmation-classification">
+            <div class="classification-header">
+                <div class="classification-badge classification-${data.classification.category}">
+                    <span class="classification-label">${formatCategory(data.classification.category)}</span>
+                </div>
+                <span class="relevance-score">${data.classification.relevanceScore || 0}% relevance</span>
+            </div>
+            <div class="classification-scores">
+                <div class="score-item">
+                    <span class="score-label">Buyer Intent</span>
+                    <span class="score-value">${data.classification.buyerIntent || 0}</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Problem Awareness</span>
+                    <span class="score-value">${data.classification.problemAwareness || 0}</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Product Fit</span>
+                    <span class="score-value">${data.classification.productFit || 0}</span>
+                </div>
+            </div>
+            ${data.classification.reasoning ? `<p class="classification-reasoning">"${escapeHtml(data.classification.reasoning)}"</p>` : ''}
+        </div>
+    ` : '';
+
     contentArea.innerHTML = `
         <div class="post-info">
             <div class="confirmation-box">
@@ -2666,6 +2722,7 @@ function renderDMConfirmation(data) {
                     ${data.subreddit ? `<span>r/${escapeHtml(data.subreddit)}</span>` : ''}
                 </div>
                 ${data.postTitle ? `<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">"${escapeHtml(truncateText(data.postTitle, 60))}"</div>` : ''}
+                ${classificationHtml}
                 <div class="confirmation-message-label">Message (you can edit):</div>
                 <textarea class="confirmation-message" id="confirm-message">${escapeHtml(data.message)}</textarea>
                 <div class="confirmation-actions">
@@ -2937,12 +2994,75 @@ function truncateText(str, n) {
     return (str.length > n) ? str.substring(0, n - 1) + '…' : str;
 }
 
+// Format classification category for display
+function formatCategory(category) {
+    const labels = {
+        'strong_match': 'Strong Match',
+        'weak_match': 'Weak Match',
+        'not_relevant': 'Not Relevant'
+    };
+    return labels[category] || category || 'Unknown';
+}
+
 // --- Extraction Logic ---
+
+// Scroll to load more posts (scrolls past 28 posts to trigger infinite scroll)
+async function scrollToLoadPosts(targetPostCount = 28) {
+    return new Promise((resolve) => {
+        let lastPostCount = 0;
+        let scrollAttempts = 0;
+        const maxScrollAttempts = 15; // Prevent infinite scrolling
+
+        const scrollInterval = setInterval(() => {
+            const currentPosts = document.querySelectorAll('shreddit-post');
+            const currentPostCount = currentPosts.length;
+
+            console.log(`Scroll attempt ${scrollAttempts + 1}: Found ${currentPostCount} posts`);
+
+            // If we have enough posts or no new posts loaded after scrolling, stop
+            if (currentPostCount >= targetPostCount ||
+                (scrollAttempts > 3 && currentPostCount === lastPostCount) ||
+                scrollAttempts >= maxScrollAttempts) {
+                clearInterval(scrollInterval);
+                console.log(`Scrolling complete. Total posts found: ${currentPostCount}`);
+                resolve(currentPostCount);
+                return;
+            }
+
+            lastPostCount = currentPostCount;
+            scrollAttempts++;
+
+            // Scroll down to trigger loading more posts
+            window.scrollBy({
+                top: window.innerHeight * 2,
+                behavior: 'smooth'
+            });
+        }, 1000); // Wait 1 second between scrolls for posts to load
+    });
+}
+
 function extractSubredditData() {
     const url = window.location.href;
     const match = url.match(/\/r\/([^/]+)\/?(?:$|hot|new|top|rising)/);
 
     if (match) {
+        const posts = getPostLinks();
+        if (posts.length > 0) {
+            return { valid: true, name: match[1], postCount: posts.length };
+        }
+    }
+    return { valid: false };
+}
+
+// Async version that scrolls to load 28 posts first
+async function extractSubredditDataWithScroll() {
+    const url = window.location.href;
+    const match = url.match(/\/r\/([^/]+)\/?(?:$|hot|new|top|rising)/);
+
+    if (match) {
+        // Scroll to load at least 28 posts
+        await scrollToLoadPosts(28);
+
         const posts = getPostLinks();
         if (posts.length > 0) {
             return { valid: true, name: match[1], postCount: posts.length };

@@ -896,3 +896,181 @@ textarea {
 .queue-list::-webkit-scrollbar-thumb:hover {
     background: #666;
 }
+
+/* ============================================
+   CLASSIFICATION DISPLAY STYLES
+   ============================================ */
+
+/* Classification Badge */
+.classification-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.classification-badge.classification-strong_match {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.classification-badge.classification-weak_match {
+    background: rgba(234, 179, 8, 0.2);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.classification-badge.classification-not_relevant {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.classification-label {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.classification-score {
+    font-weight: 700;
+}
+
+/* Classification Section in Post Info */
+.classification-section {
+    margin: 12px 0;
+    padding: 10px;
+    background: var(--secondary-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.classification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.relevance-score {
+    font-size: 12px;
+    color: #d7dadc;
+    font-weight: 600;
+}
+
+/* Score Bars */
+.classification-details {
+    margin-top: 8px;
+}
+
+.score-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+}
+
+.score-row:last-child {
+    margin-bottom: 0;
+}
+
+.score-row > span:first-child {
+    width: 110px;
+    color: #818384;
+    flex-shrink: 0;
+}
+
+.score-bar {
+    flex: 1;
+    height: 6px;
+    background: #343536;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.score-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0079d3, #24a0ed);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.score-row > span:last-child {
+    width: 30px;
+    text-align: right;
+    color: #d7dadc;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+/* Classification Reasoning */
+.classification-reasoning {
+    font-size: 11px;
+    color: #818384;
+    font-style: italic;
+    margin: 8px 0 0 0;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    border-left: 2px solid var(--accent-color);
+    line-height: 1.4;
+}
+
+/* Running State Classification */
+.running-classification {
+    margin: 12px 0;
+    text-align: center;
+}
+
+.running-classification .classification-badge {
+    font-size: 13px;
+    padding: 6px 14px;
+}
+
+/* Confirmation Dialog Classification */
+.confirmation-classification {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    margin: 12px 0;
+}
+
+.confirmation-classification .classification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.classification-scores {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.score-item {
+    text-align: center;
+    padding: 6px;
+    background: var(--secondary-bg);
+    border-radius: 6px;
+}
+
+.score-item .score-label {
+    display: block;
+    font-size: 10px;
+    color: #818384;
+    margin-bottom: 2px;
+}
+
+.score-item .score-value {
+    display: block;
+    font-size: 16px;
+    font-weight: 700;
+    color: #d7dadc;
+}

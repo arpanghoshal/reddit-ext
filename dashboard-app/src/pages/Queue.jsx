@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Check, X, Edit2, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
+import { Check, X, Edit2, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Send, Inbox } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import * as api from '../api/client';
 
-function QueueItem({ item, onApprove, onReject, onSelect, isSelected }) {
+function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQueue }) {
   const [expanded, setExpanded] = useState(false);
 
   const statusColors = {
@@ -44,22 +45,41 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected }) {
               >
                 u/{item.recipientUsername}
               </a>
-              <span className="text-gray-400">in</span>
-              <span className="text-gray-600">r/{item.subreddit}</span>
+              {!isReplyQueue && item.subreddit && (
+                <>
+                  <span className="text-gray-400">in</span>
+                  <span className="text-gray-600">r/{item.subreddit}</span>
+                </>
+              )}
+              {isReplyQueue && (
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                  Reply
+                </span>
+              )}
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[item.status]}`}>
                 {item.status}
               </span>
-              {item.classificationScore && (
+              {item.classificationScore && !isReplyQueue && (
                 <span className={`text-sm font-medium ${scoreColor}`}>
                   {Math.round(item.classificationScore)}% match
                 </span>
               )}
             </div>
 
-            {item.postTitle && (
+            {!isReplyQueue && item.postTitle && (
               <p className="text-sm text-gray-500 mt-1 truncate">
                 Post: {item.postTitle}
               </p>
+            )}
+
+            {isReplyQueue && item.conversationId && (
+              <Link
+                to={`/inbox?conversation=${item.conversationId}`}
+                className="flex items-center gap-1 text-sm text-purple-600 mt-1 hover:text-purple-800"
+              >
+                <Inbox size={14} />
+                View Conversation
+              </Link>
             )}
 
             <button
@@ -109,13 +129,18 @@ export default function Queue() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('pending');
+  const [messageType, setMessageType] = useState('outreach');
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const loadData = async () => {
     setLoading(true);
     try {
       const [queueItems, queueStats] = await Promise.all([
-        api.getQueue({ status: filter !== 'all' ? filter : undefined, limit: 100 }),
+        api.getQueue({
+          status: filter !== 'all' ? filter : undefined,
+          messageType: messageType,
+          limit: 100
+        }),
         api.getQueueStats()
       ]);
       setItems(queueItems || []);
@@ -129,7 +154,8 @@ export default function Queue() {
 
   useEffect(() => {
     loadData();
-  }, [filter]);
+    setSelectedIds(new Set());
+  }, [filter, messageType]);
 
   const handleApprove = async (id) => {
     try {
@@ -212,7 +238,33 @@ export default function Queue() {
         </button>
       </div>
 
-      {/* Filters */}
+      {/* Message Type Toggle */}
+      <div className="flex items-center gap-2 mb-4 p-1 bg-gray-100 rounded-lg w-fit">
+        <button
+          onClick={() => setMessageType('outreach')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            messageType === 'outreach'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <Send size={16} />
+          Outreach
+        </button>
+        <button
+          onClick={() => setMessageType('reply')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            messageType === 'reply'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <MessageSquare size={16} />
+          Replies
+        </button>
+      </div>
+
+      {/* Status Filters */}
       <div className="flex items-center gap-2 mb-4 overflow-x-auto">
         {filters.map(f => (
           <button
@@ -290,6 +342,7 @@ export default function Queue() {
               onReject={handleReject}
               onSelect={toggleSelect}
               isSelected={selectedIds.has(item.id)}
+              isReplyQueue={messageType === 'reply'}
             />
           ))}
         </div>

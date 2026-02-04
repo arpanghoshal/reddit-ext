@@ -43,6 +43,8 @@ def transform_queue_item(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
         "finalMessage": row.get("edited_message") or row.get("generated_message"),
         "status": row.get("status"),
         "queueMode": row.get("queue_mode"),
+        "messageType": row.get("message_type", "outreach"),
+        "conversationId": row.get("conversation_id"),
         "scheduledAt": row.get("scheduled_at"),
         "approvedAt": row.get("approved_at"),
         "approvedBy": row.get("approved_by"),
@@ -62,7 +64,7 @@ async def add_to_queue(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        result = client.table("dm_queue").insert({
+        insert_data = {
             "account_id": item.get("accountId"),
             "recipient_username": item.get("recipientUsername"),
             "subreddit": item.get("subreddit"),
@@ -76,8 +78,15 @@ async def add_to_queue(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "edited_message": item.get("editedMessage"),
             "status": item.get("status", "pending"),
             "queue_mode": item.get("queueMode", "review"),
+            "message_type": item.get("messageType", "outreach"),
             "scheduled_at": item.get("scheduledAt")
-        }).execute()
+        }
+
+        # Add conversation_id if provided (for reply messages)
+        if item.get("conversationId"):
+            insert_data["conversation_id"] = item.get("conversationId")
+
+        result = client.table("dm_queue").insert(insert_data).execute()
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -115,6 +124,14 @@ async def get_queue(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
 
         if filters.get("minScore"):
             query = query.gte("classification_score", filters["minScore"])
+
+        # Filter by message type (outreach or reply)
+        if filters.get("messageType"):
+            query = query.eq("message_type", filters["messageType"])
+
+        # Filter by conversation ID (for replies)
+        if filters.get("conversationId"):
+            query = query.eq("conversation_id", filters["conversationId"])
 
         limit = filters.get("limit", 50)
         offset = filters.get("offset", 0)
@@ -264,7 +281,7 @@ async def bulk_reject(ids: List[str], reason: Optional[str] = None) -> Dict[str,
         return {"success": 0, "failed": len(ids)}
 
 
-async def get_next_to_send(account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def get_next_to_send(account_id: Optional[str] = None, message_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get the next approved item to send"""
     client = get_client()
     if not client:
@@ -278,6 +295,9 @@ async def get_next_to_send(account_id: Optional[str] = None) -> Optional[Dict[st
         if account_id:
             query = query.eq("account_id", account_id)
 
+        if message_type:
+            query = query.eq("message_type", message_type)
+
         result = query.execute()
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -285,6 +305,11 @@ async def get_next_to_send(account_id: Optional[str] = None) -> Optional[Dict[st
         if "PGRST116" not in str(e):
             print(f"Error getting next to send: {e}")
         return None
+
+
+async def get_next_reply_to_send(account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get the next approved reply to send"""
+    return await get_next_to_send(account_id=account_id, message_type="reply")
 
 
 async def mark_as_sent(item_id: str) -> Optional[Dict[str, Any]]:
@@ -330,17 +355,22 @@ async def mark_as_failed(item_id: str, reason: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_queue_stats() -> Dict[str, int]:
-    """Get queue statistics"""
+async def get_queue_stats(message_type: Optional[str] = None) -> Dict[str, int]:
+    """Get queue statistics, optionally filtered by message type"""
     client = get_client()
     if not client:
         return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
 
     try:
         seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        result = client.table("dm_queue").select("status").gte(
+        query = client.table("dm_queue").select("status").gte(
             "created_at", seven_days_ago
-        ).execute()
+        )
+
+        if message_type:
+            query = query.eq("message_type", message_type)
+
+        result = query.execute()
 
         if not result.data:
             return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
@@ -357,3 +387,24 @@ async def get_queue_stats() -> Dict[str, int]:
     except Exception as e:
         print(f"Error fetching queue stats: {e}")
         return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
+
+
+async def get_pending_reply_for_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """Check if a conversation has a pending or approved reply in queue"""
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        result = client.table("dm_queue").select("*").eq(
+            "conversation_id", conversation_id
+        ).eq(
+            "message_type", "reply"
+        ).in_(
+            "status", ["pending", "approved"]
+        ).order("created_at", desc=True).limit(1).execute()
+
+        return transform_queue_item(result.data[0]) if result.data else None
+    except Exception as e:
+        print(f"Error checking pending reply: {e}")
+        return None

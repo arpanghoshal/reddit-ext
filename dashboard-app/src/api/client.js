@@ -134,6 +134,35 @@ export async function bulkReject(ids, reason) {
     return result.data;
 }
 
+// Reply Queue
+export async function addReplyToQueue(data) {
+    const result = await apiRequest('/queue/reply', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+    return result.data;
+}
+
+export async function getReplyQueue(filters = {}) {
+    return getQueue({ ...filters, messageType: 'reply' });
+}
+
+export async function getReplyQueueStats() {
+    const result = await apiRequest('/queue/stats?messageType=reply');
+    return result.data;
+}
+
+export async function getNextReplyToSend(accountId = null) {
+    const params = accountId ? `?accountId=${accountId}` : '';
+    const result = await apiRequest(`/queue/next-reply${params}`);
+    return result.data;
+}
+
+export async function getPendingReplyForConversation(conversationId) {
+    const result = await apiRequest(`/queue/pending-reply/${conversationId}`);
+    return result.data;
+}
+
 // Accounts
 export async function getAccounts() {
     const result = await apiRequest('/accounts');

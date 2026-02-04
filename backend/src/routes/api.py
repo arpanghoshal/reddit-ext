@@ -118,7 +118,18 @@ class QueueAddRequest(BaseModel):
     editedMessage: Optional[str] = None
     status: Optional[str] = "pending"
     queueMode: Optional[str] = "review"
+    messageType: Optional[str] = "outreach"
+    conversationId: Optional[str] = None
     scheduledAt: Optional[str] = None
+
+
+class ReplyQueueAddRequest(BaseModel):
+    conversationId: str
+    recipientUsername: str
+    generatedMessage: str
+    editedMessage: Optional[str] = None
+    status: Optional[str] = "pending"
+    accountId: Optional[str] = None
 
 
 class QueueUpdateRequest(BaseModel):
@@ -470,6 +481,8 @@ async def get_queue_route(
     accountId: Optional[str] = None,
     subreddit: Optional[str] = None,
     mode: Optional[str] = None,
+    messageType: Optional[str] = None,
+    conversationId: Optional[str] = None,
     limit: int = Query(50),
     offset: int = Query(0)
 ):
@@ -478,6 +491,8 @@ async def get_queue_route(
         "accountId": accountId,
         "subreddit": subreddit,
         "queueMode": mode,
+        "messageType": messageType,
+        "conversationId": conversationId,
         "limit": limit,
         "offset": offset
     }
@@ -491,15 +506,45 @@ async def add_to_queue_route(request: QueueAddRequest):
     return {"success": True, "data": item}
 
 
+@router.post("/queue/reply")
+async def add_reply_to_queue_route(request: ReplyQueueAddRequest):
+    """Add a reply message to the queue"""
+    item = await queue.add_to_queue({
+        "conversationId": request.conversationId,
+        "recipientUsername": request.recipientUsername,
+        "generatedMessage": request.generatedMessage,
+        "editedMessage": request.editedMessage,
+        "status": request.status,
+        "accountId": request.accountId,
+        "messageType": "reply",
+        "queueMode": "review"
+    })
+    return {"success": True, "data": item}
+
+
 @router.get("/queue/stats")
-async def get_queue_stats():
-    stats = await queue.get_queue_stats()
+async def get_queue_stats(messageType: Optional[str] = None):
+    stats = await queue.get_queue_stats(message_type=messageType)
     return {"success": True, "data": stats}
 
 
 @router.get("/queue/next")
-async def get_next_to_send(accountId: Optional[str] = None):
-    item = await queue.get_next_to_send(accountId)
+async def get_next_to_send(accountId: Optional[str] = None, messageType: Optional[str] = None):
+    item = await queue.get_next_to_send(account_id=accountId, message_type=messageType)
+    return {"success": True, "data": item}
+
+
+@router.get("/queue/next-reply")
+async def get_next_reply_to_send(accountId: Optional[str] = None):
+    """Get the next approved reply to send"""
+    item = await queue.get_next_reply_to_send(account_id=accountId)
+    return {"success": True, "data": item}
+
+
+@router.get("/queue/pending-reply/{conversation_id}")
+async def get_pending_reply_for_conversation_route(conversation_id: str):
+    """Check if a conversation has a pending/approved reply in queue"""
+    item = await queue.get_pending_reply_for_conversation(conversation_id)
     return {"success": True, "data": item}
 
 
