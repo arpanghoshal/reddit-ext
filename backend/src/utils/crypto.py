@@ -4,11 +4,14 @@ Uses AES-256-GCM for authenticated encryption
 """
 
 import os
+import logging
 import secrets
 import hashlib
 import hmac
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+logger = logging.getLogger(__name__)
 
 # Encryption key from environment (32 bytes for AES-256)
 # Generate with: secrets.token_hex(32)
@@ -37,7 +40,7 @@ def encrypt(plaintext: str) -> str:
         The auth tag is appended to ciphertext by AESGCM
     """
     if not ENCRYPTION_KEY:
-        print("Warning: Encryption key not configured - storing data unencrypted")
+        logger.warning("Encryption key not configured - storing data unencrypted (NOT SAFE FOR PRODUCTION)")
         encoded = base64.b64encode(plaintext.encode()).decode()
         return f"unencrypted:{encoded}"
 
@@ -52,7 +55,7 @@ def encrypt(plaintext: str) -> str:
         # Return in format: iv:ciphertext (auth tag is part of ciphertext)
         return f"{iv.hex()}:{ciphertext.hex()}"
     except Exception as e:
-        print(f"Encryption error: {e}")
+        logger.error(f"Encryption error: {type(e).__name__}")
         raise ValueError("Failed to encrypt data")
 
 
@@ -103,7 +106,7 @@ def decrypt(encrypted_data: str) -> str:
         plaintext = aesgcm.decrypt(iv, ciphertext_with_tag, None)
         return plaintext.decode()
     except Exception as e:
-        print(f"Decryption error: {e}")
+        logger.error(f"Decryption error: {type(e).__name__}")
         raise ValueError("Failed to decrypt data - invalid key or corrupted data")
 
 

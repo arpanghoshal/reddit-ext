@@ -261,62 +261,71 @@ async def get_models():
 # --- DM History Routes ---
 
 @router.post("/dm")
-async def log_dm(request: DMLogRequest):
-    result = await supabase.log_dm(request.model_dump())
+async def log_dm(request: Request, body: DMLogRequest):
+    team_id = get_current_team_id(request)
+    result = await supabase.log_dm(body.model_dump(), team_id=team_id)
     return {"success": True, "data": result}
 
 
 @router.get("/dm/history")
-async def get_dm_history(limit: int = Query(50, le=200)):
-    history = await supabase.get_dm_history(limit)
+async def get_dm_history(request: Request, limit: int = Query(50, le=200)):
+    team_id = get_current_team_id(request)
+    history = await supabase.get_dm_history(limit, team_id=team_id)
     return {"success": True, "data": history}
 
 
 @router.get("/dm/subreddits")
-async def get_dm_subreddits(limit: int = Query(10)):
-    data = await supabase.get_dms_by_subreddit(limit)
+async def get_dm_subreddits(request: Request, limit: int = Query(10)):
+    team_id = get_current_team_id(request)
+    data = await supabase.get_dms_by_subreddit(limit, team_id=team_id)
     return {"success": True, "data": data}
 
 
 # --- Automation Session Routes ---
 
 @router.post("/session/start")
-async def start_session(request: SessionStartRequest):
-    result = await supabase.start_automation_session(request.model_dump())
+async def start_session(request: Request, body: SessionStartRequest):
+    team_id = get_current_team_id(request)
+    result = await supabase.start_automation_session(body.model_dump(), team_id=team_id)
     return {"success": True, **result}
 
 
 @router.patch("/session/{session_id}")
-async def update_session(session_id: str, request: SessionUpdateRequest):
-    result = await supabase.update_automation_session(session_id, request.model_dump(exclude_none=True))
+async def update_session(request: Request, session_id: str, body: SessionUpdateRequest):
+    team_id = get_current_team_id(request)
+    result = await supabase.update_automation_session(session_id, body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": result}
 
 
 @router.get("/session/logs")
-async def get_session_logs(limit: int = Query(20, le=200)):
-    logs = await supabase.get_automation_logs(limit)
+async def get_session_logs(request: Request, limit: int = Query(20, le=200)):
+    team_id = get_current_team_id(request)
+    logs = await supabase.get_automation_logs(limit, team_id=team_id)
     return {"success": True, "data": logs}
 
 
 # --- Analytics Routes ---
 
 @router.get("/analytics")
-async def get_analytics():
-    analytics = await supabase.get_analytics()
-    return {"success": True, "data": analytics}
+async def get_analytics(request: Request):
+    team_id = get_current_team_id(request)
+    analytics_data = await supabase.get_analytics(team_id=team_id)
+    return {"success": True, "data": analytics_data}
 
 
 # --- Settings Routes ---
 
 @router.get("/settings")
-async def get_settings():
-    settings = await supabase.get_settings()
+async def get_settings(request: Request):
+    team_id = get_current_team_id(request)
+    settings = await supabase.get_settings(team_id=team_id)
     return {"success": True, "data": settings}
 
 
 @router.post("/settings")
-async def save_settings(request: SettingsSaveRequest):
-    result = await supabase.save_settings(request.model_dump())
+async def save_settings(request: Request, body: SettingsSaveRequest):
+    team_id = get_current_team_id(request)
+    result = await supabase.save_settings(body.model_dump(), team_id=team_id)
     return {"success": True, "data": result}
 
 
@@ -609,18 +618,20 @@ async def mark_as_failed_route(request: Request, item_id: str, reason: str = "")
 
 
 @router.post("/queue/bulk-approve")
-async def bulk_approve_route(request: BulkApproveRequest):
-    if not request.ids:
+async def bulk_approve_route(request: Request, body: BulkApproveRequest):
+    if not body.ids:
         raise HTTPException(status_code=400, detail="IDs array is required")
-    result = await queue.bulk_approve(request.ids, request.approvedBy)
+    team_id = get_current_team_id(request)
+    result = await queue.bulk_approve(body.ids, body.approvedBy, team_id=team_id)
     return {"success": True, "data": result}
 
 
 @router.post("/queue/bulk-reject")
-async def bulk_reject_route(request: BulkRejectRequest):
-    if not request.ids:
+async def bulk_reject_route(request: Request, body: BulkRejectRequest):
+    if not body.ids:
         raise HTTPException(status_code=400, detail="IDs array is required")
-    result = await queue.bulk_reject(request.ids, request.reason)
+    team_id = get_current_team_id(request)
+    result = await queue.bulk_reject(body.ids, body.reason, team_id=team_id)
     return {"success": True, "data": result}
 
 
@@ -678,20 +689,23 @@ async def get_account_cookies_route(request: Request, account_id: str):
 
 
 @router.get("/accounts/{account_id}/can-send")
-async def can_account_send_route(account_id: str):
-    result = await accounts.can_account_send_dm(account_id)
+async def can_account_send_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
+    result = await accounts.can_account_send_dm(account_id, team_id=team_id)
     return {"success": True, "data": result}
 
 
 @router.post("/accounts/{account_id}/increment-dm")
-async def increment_dm_route(account_id: str):
-    account = await accounts.increment_dm_count(account_id)
+async def increment_dm_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
+    account = await accounts.increment_dm_count(account_id, team_id=team_id)
     return {"success": True, "data": account}
 
 
 @router.post("/accounts/{account_id}/check-shadowban")
-async def check_shadowban_route(account_id: str):
-    account = await accounts.get_account(account_id)
+async def check_shadowban_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
+    account = await accounts.get_account(account_id, team_id=team_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -710,19 +724,18 @@ async def check_shadowban_route(account_id: str):
 
 @router.get("/accounts/{account_id}/subreddits")
 async def get_account_subreddits_route(request: Request, account_id: str):
-    team_id = get_current_team_id(request)
     subreddits = await accounts.get_account_subreddits(account_id)
     return {"success": True, "data": subreddits}
 
 
 @router.post("/accounts/{account_id}/subreddits")
-async def assign_to_subreddit_route(account_id: str, request: SubredditAssignRequest):
-    success = await accounts.assign_to_subreddit(account_id, request.subreddit, request.priority)
+async def assign_to_subreddit_route(request: Request, account_id: str, body: SubredditAssignRequest):
+    success = await accounts.assign_to_subreddit(account_id, body.subreddit, body.priority)
     return {"success": success}
 
 
 @router.delete("/accounts/{account_id}/subreddits/{subreddit_name}")
-async def remove_from_subreddit_route(account_id: str, subreddit_name: str):
+async def remove_from_subreddit_route(request: Request, account_id: str, subreddit_name: str):
     success = await accounts.remove_from_subreddit(account_id, subreddit_name)
     return {"success": success}
 
@@ -806,20 +819,23 @@ async def get_rule_templates():
 
 
 @router.patch("/rules/{rule_id}")
-async def update_rule_route(rule_id: str, request: RuleUpdateRequest):
-    rule = await rules.update_rule(rule_id, request.model_dump(exclude_none=True))
+async def update_rule_route(request: Request, rule_id: str, body: RuleUpdateRequest):
+    team_id = get_current_team_id(request)
+    rule = await rules.update_rule(rule_id, body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": rule}
 
 
 @router.delete("/rules/{rule_id}")
-async def delete_rule_route(rule_id: str):
-    success = await rules.delete_rule(rule_id)
+async def delete_rule_route(request: Request, rule_id: str):
+    team_id = get_current_team_id(request)
+    success = await rules.delete_rule(rule_id, team_id=team_id)
     return {"success": success}
 
 
 @router.post("/rules/evaluate")
-async def evaluate_rules_route(request: RuleEvaluateRequest):
-    result = await rules.evaluate_rules(request.post, request.userProfile)
+async def evaluate_rules_route(request: Request, body: RuleEvaluateRequest):
+    team_id = get_current_team_id(request)
+    result = await rules.evaluate_rules(body.post, body.userProfile, team_id=team_id)
     return {"success": True, "data": result}
 
 
@@ -913,19 +929,21 @@ async def get_messages_route(request: Request, conversation_id: str, limit: int 
 
 
 @router.post("/conversations/sync")
-async def sync_conversation_route(request: ConversationSyncRequest):
-    conv = await conversations.sync_conversation(request.model_dump())
+async def sync_conversation_route(request: Request, body: ConversationSyncRequest):
+    team_id = get_current_team_id(request)
+    conv = await conversations.sync_conversation(body.model_dump(), team_id=team_id)
     return {"success": True, "data": conv}
 
 
 @router.post("/conversations/{conversation_id}/reply-suggestion")
-async def get_reply_suggestion_route(conversation_id: str):
-    conv = await conversations.get_conversation(conversation_id)
+async def get_reply_suggestion_route(request: Request, conversation_id: str):
+    team_id = get_current_team_id(request)
+    conv = await conversations.get_conversation(conversation_id, team_id=team_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     # Get settings
-    settings = await supabase.get_settings()
+    settings = await supabase.get_settings(team_id=team_id)
 
     # Generate reply suggestion using LLM
     suggestion = await llm.generate_reply_suggestion(conv, settings or {})
@@ -1516,16 +1534,18 @@ class AutomationSettingsSaveRequest(BaseModel):
 
 
 @router.get("/automation-settings")
-async def get_automation_settings_route():
+async def get_automation_settings_route(request: Request):
     """Get automation settings"""
-    settings = await automation_settings.get_automation_settings()
+    team_id = get_current_team_id(request)
+    settings = await automation_settings.get_automation_settings(team_id=team_id)
     return {"success": True, "data": settings}
 
 
 @router.post("/automation-settings")
-async def save_automation_settings_route(request: AutomationSettingsSaveRequest):
+async def save_automation_settings_route(request: Request, body: AutomationSettingsSaveRequest):
     """Save automation settings"""
-    result = await automation_settings.save_automation_settings(request.model_dump(exclude_none=True))
+    team_id = get_current_team_id(request)
+    result = await automation_settings.save_automation_settings(body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": result}
 
 
@@ -1601,9 +1621,10 @@ async def delete_campaign_route(request: Request, campaign_id: str):
 
 
 @router.get("/campaigns/{campaign_id}/stats")
-async def get_campaign_stats_route(campaign_id: str):
+async def get_campaign_stats_route(request: Request, campaign_id: str):
     """Get campaign statistics"""
-    stats = await campaigns.get_campaign_stats(campaign_id)
+    team_id = get_current_team_id(request)
+    stats = await campaigns.get_campaign_stats(campaign_id, team_id=team_id)
     return {"success": True, "data": stats}
 
 
@@ -1613,6 +1634,7 @@ async def get_campaign_stats_route(campaign_id: str):
 
 @router.get("/skipped-posts")
 async def get_skipped_posts_route(
+    request: Request,
     subreddit: Optional[str] = None,
     skipReason: Optional[str] = None,
     sessionId: Optional[str] = None,
@@ -1621,6 +1643,7 @@ async def get_skipped_posts_route(
     offset: int = Query(0)
 ):
     """Get skipped posts with optional filtering"""
+    team_id = get_current_team_id(request)
     filters = {
         "subreddit": subreddit,
         "skipReason": skipReason,
@@ -1629,12 +1652,13 @@ async def get_skipped_posts_route(
         "limit": limit,
         "offset": offset
     }
-    posts = await skipped_posts.get_skipped_posts(filters)
+    posts = await skipped_posts.get_skipped_posts(filters, team_id=team_id)
     return {"success": True, "data": posts}
 
 
 @router.get("/skipped-posts/stats")
-async def get_skip_stats_route():
+async def get_skip_stats_route(request: Request):
     """Get statistics about skipped posts"""
-    stats = await skipped_posts.get_skip_stats()
+    team_id = get_current_team_id(request)
+    stats = await skipped_posts.get_skip_stats(team_id=team_id)
     return {"success": True, "data": stats}

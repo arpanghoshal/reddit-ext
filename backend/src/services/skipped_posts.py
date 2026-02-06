@@ -3,7 +3,7 @@ Skipped Posts Service
 Read operations for skipped_posts table
 """
 
-from typing import Dict, List, Any
+from typing import Optional, Dict, List, Any
 from .supabase_service import get_client
 
 
@@ -25,7 +25,7 @@ def _transform_from_db(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def get_skipped_posts(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+async def get_skipped_posts(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get skipped posts with optional filtering"""
     client = get_client()
     if not client:
@@ -35,6 +35,9 @@ async def get_skipped_posts(filters: Dict[str, Any] = None) -> List[Dict[str, An
 
     try:
         query = client.table("skipped_posts").select("*")
+
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if filters.get("subreddit"):
             query = query.eq("subreddit", filters["subreddit"])
@@ -62,7 +65,7 @@ async def get_skipped_posts(filters: Dict[str, Any] = None) -> List[Dict[str, An
         return []
 
 
-async def get_skip_stats() -> Dict[str, Any]:
+async def get_skip_stats(team_id: Optional[str] = None) -> Dict[str, Any]:
     """Get statistics about skipped posts by reason"""
     client = get_client()
     if not client:
@@ -70,9 +73,12 @@ async def get_skip_stats() -> Dict[str, Any]:
 
     try:
         # Get all skipped posts (limited to recent for performance)
-        result = client.table("skipped_posts").select(
+        query = client.table("skipped_posts").select(
             "skip_reason, subreddit"
-        ).order("created_at", desc=True).limit(5000).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.order("created_at", desc=True).limit(5000).execute()
 
         if not result.data:
             return {"total": 0, "byReason": {}, "bySubreddit": {}}

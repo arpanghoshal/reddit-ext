@@ -263,19 +263,22 @@ async def reject_queue_item(item_id: str, reason: Optional[str] = None, team_id:
         return None
 
 
-async def bulk_approve(ids: List[str], approved_by: Optional[str] = None) -> Dict[str, int]:
+async def bulk_approve(ids: List[str], approved_by: Optional[str] = None, team_id: Optional[str] = None) -> Dict[str, int]:
     """Bulk approve queue items"""
     client = get_client()
     if not client:
         return {"success": 0, "failed": len(ids)}
 
     try:
-        result = client.table("dm_queue").update({
+        query = client.table("dm_queue").update({
             "status": "approved",
             "approved_at": datetime.utcnow().isoformat(),
             "approved_by": approved_by,
             "updated_at": datetime.utcnow().isoformat()
-        }).in_("id", ids).eq("status", "pending").execute()
+        }).in_("id", ids).eq("status", "pending")
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         success_count = len(result.data) if result.data else 0
         return {"success": success_count, "failed": len(ids) - success_count}
@@ -284,18 +287,21 @@ async def bulk_approve(ids: List[str], approved_by: Optional[str] = None) -> Dic
         return {"success": 0, "failed": len(ids)}
 
 
-async def bulk_reject(ids: List[str], reason: Optional[str] = None) -> Dict[str, int]:
+async def bulk_reject(ids: List[str], reason: Optional[str] = None, team_id: Optional[str] = None) -> Dict[str, int]:
     """Bulk reject queue items"""
     client = get_client()
     if not client:
         return {"success": 0, "failed": len(ids)}
 
     try:
-        result = client.table("dm_queue").update({
+        query = client.table("dm_queue").update({
             "status": "rejected",
             "failed_reason": reason,
             "updated_at": datetime.utcnow().isoformat()
-        }).in_("id", ids).eq("status", "pending").execute()
+        }).in_("id", ids).eq("status", "pending")
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         success_count = len(result.data) if result.data else 0
         return {"success": success_count, "failed": len(ids) - success_count}

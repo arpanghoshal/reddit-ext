@@ -196,16 +196,19 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
         return None
 
 
-async def get_conversation_by_participant(username: str) -> Optional[Dict[str, Any]]:
+async def get_conversation_by_participant(username: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get conversation by participant username"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("conversations").select("*").eq(
+        query = client.table("conversations").select("*").eq(
             "participant_username", username.lower()
-        ).order("created_at", desc=True).limit(1).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.order("created_at", desc=True).limit(1).execute()
 
         return transform_conversation(result.data[0]) if result.data else None
     except Exception as e:
@@ -238,9 +241,12 @@ async def update_conversation(conversation_id: str, updates: Dict[str, Any], tea
         if "totalMessages" in updates:
             update_data["total_messages"] = updates["totalMessages"]
 
-        result = client.table("conversations").update(update_data).eq(
+        query = client.table("conversations").update(update_data).eq(
             "id", conversation_id
-        ).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         return transform_conversation(result.data[0]) if result.data else None
     except Exception as e:
@@ -312,7 +318,7 @@ async def get_messages(conversation_id: str, options: Dict[str, Any] = None, tea
         return []
 
 
-async def sync_conversation(sync_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Sync a conversation from Reddit chat data.
     Uses content-based deduplication to handle:
@@ -330,20 +336,20 @@ async def sync_conversation(sync_data: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
 
     # Get or create conversation
-    conversation = await get_conversation_by_participant(participant_username)
+    conversation = await get_conversation_by_participant(participant_username, team_id=team_id)
 
     if not conversation:
         conversation = await create_conversation({
             "participantUsername": participant_username,
             "redditConversationId": reddit_conversation_id,
             "accountId": account_id
-        })
+        }, team_id=team_id)
         if not conversation:
             return None
 
     # Early exit if no messages to sync
     if not messages:
-        return await get_conversation(conversation["id"])
+        return await get_conversation(conversation["id"], team_id=team_id)
 
     # Build fingerprint set of existing messages
     existing_messages = await get_messages(conversation["id"])
@@ -385,7 +391,7 @@ async def sync_conversation(sync_data: Dict[str, Any]) -> Optional[Dict[str, Any
             "content": content,
             "sentAt": sent_at,
             "isAiGenerated": msg.get("isAiGenerated", False)
-        })
+        }, team_id=team_id)
 
         if result:
             added_count += 1
@@ -394,7 +400,7 @@ async def sync_conversation(sync_data: Dict[str, Any]) -> Optional[Dict[str, Any
           f"(received {len(messages)}, existing {len(existing_messages)})")
 
     # Return updated conversation
-    return await get_conversation(conversation["id"])
+    return await get_conversation(conversation["id"], team_id=team_id)
 
 
 async def get_conversation_stats(team_id: Optional[str] = None) -> Dict[str, Any]:

@@ -41,7 +41,7 @@ def generate_session_id() -> str:
 
 # --- DM History ---
 
-async def log_dm(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def log_dm(data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Log a DM to the database and create a conversation"""
     client = get_client()
     if not client:
@@ -49,8 +49,7 @@ async def log_dm(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        # Insert DM record
-        result = client.table("dm_history").insert({
+        insert_data = {
             "recipient_username": data.get("recipientUsername"),
             "post_url": data.get("postUrl"),
             "post_title": data.get("postTitle"),
@@ -60,7 +59,12 @@ async def log_dm(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "automation_type": data.get("automationType", "single"),
             "session_id": data.get("sessionId"),
             "account_id": data.get("accountId")
-        }).execute()
+        }
+        if team_id:
+            insert_data["team_id"] = team_id
+
+        # Insert DM record
+        result = client.table("dm_history").insert(insert_data).execute()
 
         if result.data:
             dm_record = result.data[0]
@@ -69,7 +73,7 @@ async def log_dm(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # Auto-create conversation for this DM
             recipient = data.get("recipientUsername", "").lower()
             if recipient:
-                await _create_or_update_conversation(client, recipient, dm_record, data)
+                await _create_or_update_conversation(client, recipient, dm_record, data, team_id)
 
             return dm_record
         return None
@@ -82,14 +86,18 @@ async def _create_or_update_conversation(
     client: Client,
     recipient: str,
     dm_record: Dict[str, Any],
-    data: Dict[str, Any]
+    data: Dict[str, Any],
+    team_id: Optional[str] = None
 ) -> None:
     """Create or update conversation when DM is sent"""
     try:
         # Check if conversation already exists for this recipient
-        existing = client.table("conversations").select("id, total_messages").eq(
+        query = client.table("conversations").select("id, total_messages").eq(
             "participant_username", recipient
-        ).limit(1).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        existing = query.limit(1).execute()
 
         conversation_id = None
         now = datetime.utcnow().isoformat()
@@ -106,7 +114,7 @@ async def _create_or_update_conversation(
             }).eq("id", conversation_id).execute()
         else:
             # Create new conversation
-            conv_result = client.table("conversations").insert({
+            conv_insert = {
                 "participant_username": recipient,
                 "account_id": data.get("accountId"),
                 "initial_dm_id": dm_record.get("id"),
@@ -115,36 +123,45 @@ async def _create_or_update_conversation(
                 "last_message_direction": "outbound",
                 "total_messages": 1,
                 "has_reply": False
-            }).execute()
+            }
+            if team_id:
+                conv_insert["team_id"] = team_id
+            conv_result = client.table("conversations").insert(conv_insert).execute()
             if conv_result.data:
                 conversation_id = conv_result.data[0]["id"]
                 print(f"Conversation created for {recipient}")
 
         # Add the message to the messages table
         if conversation_id and data.get("messageContent"):
-            client.table("messages").insert({
+            msg_insert = {
                 "conversation_id": conversation_id,
                 "direction": "outbound",
                 "content": data.get("messageContent"),
                 "sent_at": now,
                 "is_ai_generated": True
-            }).execute()
+            }
+            if team_id:
+                msg_insert["team_id"] = team_id
+            client.table("messages").insert(msg_insert).execute()
             print(f"Message added to conversation {conversation_id}")
 
     except Exception as e:
         print(f"Failed to create/update conversation: {e}")
 
 
-async def get_dm_history(limit: int = 50) -> List[Dict[str, Any]]:
+async def get_dm_history(limit: int = 50, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get DM history"""
     client = get_client()
     if not client:
         return []
 
     try:
-        result = client.table("dm_history").select("*").order(
+        query = client.table("dm_history").select("*").order(
             "created_at", desc=True
-        ).limit(limit).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.limit(limit).execute()
 
         return result.data if result.data else []
     except Exception as e:
@@ -154,7 +171,7 @@ async def get_dm_history(limit: int = 50) -> List[Dict[str, Any]]:
 
 # --- Automation Logs ---
 
-async def start_automation_session(data: Dict[str, Any]) -> Dict[str, Any]:
+async def start_automation_session(data: Dict[str, Any], team_id: Optional[str] = None) -> Dict[str, Any]:
     """Start a new automation session"""
     client = get_client()
     session_id = generate_session_id()
@@ -164,7 +181,7 @@ async def start_automation_session(data: Dict[str, Any]) -> Dict[str, Any]:
         return {"sessionId": session_id, "record": None}
 
     try:
-        result = client.table("automation_logs").insert({
+        insert_data = {
             "session_id": session_id,
             "subreddit": data.get("subreddit"),
             "total_posts": data.get("totalPosts", 0),
@@ -172,7 +189,10 @@ async def start_automation_session(data: Dict[str, Any]) -> Dict[str, Any]:
             "success_count": 0,
             "failed_count": 0,
             "status": "running"
-        }).execute()
+        }
+        if team_id:
+            insert_data["team_id"] = team_id
+        result = client.table("automation_logs").insert(insert_data).execute()
 
         if result.data:
             print(f"Automation session started: {result.data[0]}")
@@ -183,7 +203,7 @@ async def start_automation_session(data: Dict[str, Any]) -> Dict[str, Any]:
         return {"sessionId": session_id, "record": None}
 
 
-async def update_automation_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_automation_session(session_id: str, data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update an automation session"""
     client = get_client()
     if not client:
@@ -203,9 +223,12 @@ async def update_automation_session(session_id: str, data: Dict[str, Any]) -> Op
             if data["status"] in ["completed", "stopped"]:
                 update_data["completed_at"] = datetime.utcnow().isoformat()
 
-        result = client.table("automation_logs").update(
+        query = client.table("automation_logs").update(
             update_data
-        ).eq("session_id", session_id).execute()
+        ).eq("session_id", session_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         if result.data:
             print(f"Automation session updated: {result.data[0]}")
@@ -216,16 +239,19 @@ async def update_automation_session(session_id: str, data: Dict[str, Any]) -> Op
         return None
 
 
-async def get_automation_logs(limit: int = 20) -> List[Dict[str, Any]]:
+async def get_automation_logs(limit: int = 20, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get automation logs"""
     client = get_client()
     if not client:
         return []
 
     try:
-        result = client.table("automation_logs").select("*").order(
+        query = client.table("automation_logs").select("*").order(
             "created_at", desc=True
-        ).limit(limit).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.limit(limit).execute()
 
         return result.data if result.data else []
     except Exception as e:
@@ -235,7 +261,7 @@ async def get_automation_logs(limit: int = 20) -> List[Dict[str, Any]]:
 
 # --- User Settings ---
 
-async def save_settings(settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def save_settings(settings: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Save user settings"""
     client = get_client()
     if not client:
@@ -243,7 +269,7 @@ async def save_settings(settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        existing = await get_settings()
+        existing = await get_settings(team_id=team_id)
 
         settings_data = {
             "business_desc": settings.get("businessDesc"),
@@ -258,6 +284,8 @@ async def save_settings(settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 settings_data
             ).eq("id", existing["id"]).execute()
         else:
+            if team_id:
+                settings_data["team_id"] = team_id
             result = client.table("user_settings").insert(settings_data).execute()
 
         if result.data:
@@ -269,14 +297,17 @@ async def save_settings(settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_settings() -> Optional[Dict[str, Any]]:
+async def get_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get user settings"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("user_settings").select("*").order(
+        query = client.table("user_settings").select("*")
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.order(
             "created_at", desc=True
         ).limit(1).execute()
 
@@ -290,16 +321,19 @@ async def get_settings() -> Optional[Dict[str, Any]]:
 
 # --- Analytics Functions ---
 
-async def get_analytics() -> Dict[str, Any]:
+async def get_analytics(team_id: Optional[str] = None) -> Dict[str, Any]:
     """Get analytics data"""
     client = get_client()
     if not client:
         return {"totalDMs": 0, "successRate": 0, "todayCount": 0, "weekCount": 0}
 
     try:
-        result = client.table("dm_history").select("*").order(
+        query = client.table("dm_history").select("*").order(
             "created_at", desc=True
-        ).limit(1000).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.limit(1000).execute()
 
         if not result.data:
             return {"totalDMs": 0, "successRate": 0, "todayCount": 0, "weekCount": 0}
@@ -346,16 +380,19 @@ async def get_analytics() -> Dict[str, Any]:
         return {"totalDMs": 0, "successRate": 0, "todayCount": 0, "weekCount": 0}
 
 
-async def get_dms_by_subreddit(limit: int = 10) -> List[Dict[str, Any]]:
+async def get_dms_by_subreddit(limit: int = 10, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get top subreddits by DM count"""
     client = get_client()
     if not client:
         return []
 
     try:
-        result = client.table("dm_history").select("subreddit").order(
+        query = client.table("dm_history").select("subreddit").order(
             "created_at", desc=True
-        ).limit(500).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.limit(500).execute()
 
         if not result.data:
             return []

@@ -128,12 +128,14 @@ export default function Queue() {
   const [items, setItems] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [messageType, setMessageType] = useState('outreach');
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const loadData = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [queueItems, queueStats] = await Promise.all([
         api.getQueue({
@@ -147,6 +149,7 @@ export default function Queue() {
       setStats(queueStats);
     } catch (err) {
       console.error('Failed to load queue:', err);
+      setError('Failed to load queue data');
     } finally {
       setLoading(false);
     }
@@ -163,6 +166,7 @@ export default function Queue() {
       loadData();
     } catch (err) {
       console.error('Failed to approve:', err);
+      setError('Failed to approve item');
     }
   };
 
@@ -172,6 +176,7 @@ export default function Queue() {
       loadData();
     } catch (err) {
       console.error('Failed to reject:', err);
+      setError('Failed to reject item');
     }
   };
 
@@ -183,6 +188,7 @@ export default function Queue() {
       loadData();
     } catch (err) {
       console.error('Failed to bulk approve:', err);
+      setError('Failed to bulk approve');
     }
   };
 
@@ -194,6 +200,7 @@ export default function Queue() {
       loadData();
     } catch (err) {
       console.error('Failed to bulk reject:', err);
+      setError('Failed to bulk reject');
     }
   };
 
@@ -237,6 +244,15 @@ export default function Queue() {
           Refresh
         </button>
       </div>
+
+      {error && (
+        <div className="mb-4 bg-red-50 text-red-700 px-4 py-3 rounded-lg flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Message Type Toggle */}
       <div className="flex items-center gap-2 mb-4 p-1 bg-gray-100 rounded-lg w-fit">

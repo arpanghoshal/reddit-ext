@@ -325,6 +325,7 @@ function CreateCampaignModal({ isOpen, onClose, onSave, editingCampaign }) {
 export default function Campaigns() {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState(null);
@@ -335,12 +336,14 @@ export default function Campaigns() {
 
   const loadCampaigns = async () => {
     setLoading(true);
+    setError(null);
     try {
       const filters = statusFilter ? { status: statusFilter } : {};
       const data = await api.getCampaigns(filters);
       setCampaigns(data || []);
     } catch (err) {
       console.error('Failed to load campaigns:', err);
+      setError('Failed to load campaigns');
     } finally {
       setLoading(false);
     }
@@ -356,6 +359,7 @@ export default function Campaigns() {
       loadCampaigns();
     } catch (err) {
       console.error('Failed to save campaign:', err);
+      setError('Failed to save campaign');
     }
   };
 
@@ -367,6 +371,7 @@ export default function Campaigns() {
       loadCampaigns();
     } catch (err) {
       console.error('Failed to delete campaign:', err);
+      setError('Failed to delete campaign');
     }
   };
 
@@ -376,6 +381,7 @@ export default function Campaigns() {
       loadCampaigns();
     } catch (err) {
       console.error('Failed to update campaign status:', err);
+      setError('Failed to update campaign status');
     }
   };
 
@@ -424,6 +430,15 @@ export default function Campaigns() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div className="mb-4 bg-red-500/20 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

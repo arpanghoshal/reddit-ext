@@ -65,14 +65,17 @@ def _transform_to_db(data: Dict[str, Any]) -> Dict[str, Any]:
     return db_data
 
 
-async def get_automation_settings() -> Optional[Dict[str, Any]]:
+async def get_automation_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get automation settings (returns first/only row or defaults)"""
     client = get_client()
     if not client:
         return _get_defaults()
 
     try:
-        result = client.table("automation_settings").select("*").limit(1).execute()
+        query = client.table("automation_settings").select("*")
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.limit(1).execute()
 
         if result.data and len(result.data) > 0:
             return _transform_from_db(result.data[0])
@@ -84,7 +87,7 @@ async def get_automation_settings() -> Optional[Dict[str, Any]]:
         return _get_defaults()
 
 
-async def save_automation_settings(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def save_automation_settings(data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Save automation settings (upsert)"""
     client = get_client()
     if not client:
@@ -92,7 +95,7 @@ async def save_automation_settings(data: Dict[str, Any]) -> Optional[Dict[str, A
         return None
 
     try:
-        existing = await get_automation_settings()
+        existing = await get_automation_settings(team_id=team_id)
         db_data = _transform_to_db(data)
         db_data["updated_at"] = datetime.utcnow().isoformat()
 
@@ -103,6 +106,8 @@ async def save_automation_settings(data: Dict[str, Any]) -> Optional[Dict[str, A
             ).eq("id", existing["id"]).execute()
         else:
             # Insert new
+            if team_id:
+                db_data["team_id"] = team_id
             result = client.table("automation_settings").insert(db_data).execute()
 
         if result.data and len(result.data) > 0:

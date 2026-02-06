@@ -173,14 +173,14 @@ async def delete_campaign(campaign_id: str, team_id: Optional[str] = None) -> bo
         return False
 
 
-async def get_campaign_stats(campaign_id: str) -> Dict[str, Any]:
+async def get_campaign_stats(campaign_id: str, team_id: Optional[str] = None) -> Dict[str, Any]:
     """Get detailed stats for a campaign"""
     client = get_client()
     if not client:
         return {}
 
     try:
-        campaign = await get_campaign(campaign_id)
+        campaign = await get_campaign(campaign_id, team_id=team_id)
         if not campaign:
             return {}
 

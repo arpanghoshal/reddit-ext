@@ -265,9 +265,9 @@ async def get_account_cookies(account_id: str, team_id: Optional[str] = None) ->
         return None
 
 
-async def can_account_send_dm(account_id: str) -> Dict[str, Any]:
+async def can_account_send_dm(account_id: str, team_id: Optional[str] = None) -> Dict[str, Any]:
     """Check if account can send a DM"""
-    account = await get_account(account_id)
+    account = await get_account(account_id, team_id=team_id)
 
     if not account:
         return {"allowed": False, "reason": "Account not found"}
@@ -299,7 +299,7 @@ async def can_account_send_dm(account_id: str) -> Dict[str, Any]:
     return {"allowed": True}
 
 
-async def increment_dm_count(account_id: str) -> Optional[Dict[str, Any]]:
+async def increment_dm_count(account_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Increment DM count for an account"""
     client = get_client()
     if not client:
@@ -307,9 +307,12 @@ async def increment_dm_count(account_id: str) -> Optional[Dict[str, Any]]:
 
     try:
         # First check if we need to reset daily count
-        current = client.table("reddit_accounts").select(
+        query = client.table("reddit_accounts").select(
             "current_daily_count, last_daily_reset"
-        ).eq("id", account_id).execute()
+        ).eq("id", account_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        current = query.execute()
 
         if not current.data:
             return None
@@ -336,7 +339,10 @@ async def increment_dm_count(account_id: str) -> Optional[Dict[str, Any]]:
             update_data["current_daily_count"] = 1
             update_data["last_daily_reset"] = datetime.utcnow().isoformat()
 
-        result = client.table("reddit_accounts").update(update_data).eq("id", account_id).execute()
+        query = client.table("reddit_accounts").update(update_data).eq("id", account_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
         print(f"Error incrementing DM count: {e}")

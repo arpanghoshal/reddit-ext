@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 
 const AuthContext = createContext({});
@@ -86,13 +86,13 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const switchTeam = (teamId) => {
+  const switchTeam = useCallback((teamId) => {
     const team = teams.find((t) => t.id === teamId);
     if (team) {
       setCurrentTeam(team);
       localStorage.setItem('currentTeamId', teamId);
     }
-  };
+  }, [teams]);
 
   const signUp = async (email, password, fullName) => {
     const { data, error } = await supabase.auth.signUp({
@@ -130,11 +130,15 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('currentTeamId');
   };
 
-  const getAccessToken = () => {
+  const getAccessToken = useCallback(() => {
     return session?.access_token;
-  };
+  }, [session]);
 
-  const value = {
+  const refreshTeams = useCallback(() => {
+    if (user) fetchUserTeams(user.id);
+  }, [user]);
+
+  const value = useMemo(() => ({
     user,
     session,
     teams,
@@ -145,8 +149,8 @@ export function AuthProvider({ children }) {
     signOut,
     switchTeam,
     getAccessToken,
-    refreshTeams: () => user && fetchUserTeams(user.id),
-  };
+    refreshTeams,
+  }), [user, session, teams, currentTeam, loading, switchTeam, getAccessToken, refreshTeams]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -115,7 +115,7 @@ async def get_active_rules(team_id: Optional[str] = None) -> List[Dict[str, Any]
     return await get_rules({"activeOnly": True}, team_id=team_id)
 
 
-async def update_rule(rule_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_rule(rule_id: str, updates: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update a rule"""
     client = get_client()
     if not client:
@@ -135,21 +135,27 @@ async def update_rule(rule_id: str, updates: Dict[str, Any]) -> Optional[Dict[st
         if "priority" in updates:
             update_data["priority"] = updates["priority"]
 
-        result = client.table("filter_rules").update(update_data).eq("id", rule_id).execute()
+        query = client.table("filter_rules").update(update_data).eq("id", rule_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
         return transform_rule(result.data[0]) if result.data else None
     except Exception as e:
         print(f"Error updating rule: {e}")
         return None
 
 
-async def delete_rule(rule_id: str) -> bool:
+async def delete_rule(rule_id: str, team_id: Optional[str] = None) -> bool:
     """Delete a rule"""
     client = get_client()
     if not client:
         return False
 
     try:
-        client.table("filter_rules").delete().eq("id", rule_id).execute()
+        query = client.table("filter_rules").delete().eq("id", rule_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        query.execute()
         return True
     except Exception as e:
         print(f"Error deleting rule: {e}")
