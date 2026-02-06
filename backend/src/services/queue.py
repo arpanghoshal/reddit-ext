@@ -56,7 +56,7 @@ def transform_queue_item(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
     }
 
 
-async def add_to_queue(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def add_to_queue(item: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Add item to queue"""
     client = get_client()
     if not client:
@@ -82,6 +82,10 @@ async def add_to_queue(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "scheduled_at": item.get("scheduledAt")
         }
 
+        # Add team_id if provided
+        if team_id:
+            insert_data["team_id"] = team_id
+
         # Add conversation_id if provided (for reply messages)
         if item.get("conversationId"):
             insert_data["conversation_id"] = item.get("conversationId")
@@ -94,7 +98,7 @@ async def add_to_queue(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_queue(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+async def get_queue(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get queue items with filters"""
     client = get_client()
     if not client:
@@ -104,6 +108,10 @@ async def get_queue(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
 
     try:
         query = client.table("dm_queue").select("*").order("created_at", desc=True)
+
+        # Filter by team_id (required for multi-tenancy)
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         # Apply filters
         if filters.get("status"):
@@ -148,21 +156,24 @@ async def get_queue(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         return []
 
 
-async def get_queue_item(item_id: str) -> Optional[Dict[str, Any]]:
+async def get_queue_item(item_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get a single queue item by ID"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("dm_queue").select("*").eq("id", item_id).execute()
+        query = client.table("dm_queue").select("*").eq("id", item_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
         print(f"Error fetching queue item: {e}")
         return None
 
 
-async def update_queue_item(item_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_queue_item(item_id: str, updates: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update a queue item"""
     client = get_client()
     if not client:
@@ -180,40 +191,49 @@ async def update_queue_item(item_id: str, updates: Dict[str, Any]) -> Optional[D
         if "scheduledAt" in updates:
             update_data["scheduled_at"] = updates["scheduledAt"]
 
-        result = client.table("dm_queue").update(update_data).eq("id", item_id).execute()
+        query = client.table("dm_queue").update(update_data).eq("id", item_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
         print(f"Error updating queue item: {e}")
         return None
 
 
-async def delete_queue_item(item_id: str) -> bool:
+async def delete_queue_item(item_id: str, team_id: Optional[str] = None) -> bool:
     """Delete a queue item"""
     client = get_client()
     if not client:
         return False
 
     try:
-        client.table("dm_queue").delete().eq("id", item_id).execute()
+        query = client.table("dm_queue").delete().eq("id", item_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        query.execute()
         return True
     except Exception as e:
         print(f"Error deleting queue item: {e}")
         return False
 
 
-async def approve_queue_item(item_id: str, approved_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def approve_queue_item(item_id: str, approved_by: Optional[str] = None, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Approve a queue item"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("dm_queue").update({
+        query = client.table("dm_queue").update({
             "status": "approved",
             "approved_at": datetime.utcnow().isoformat(),
             "approved_by": approved_by,
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", item_id).eq("status", "pending").execute()
+        }).eq("id", item_id).eq("status", "pending")
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -221,18 +241,21 @@ async def approve_queue_item(item_id: str, approved_by: Optional[str] = None) ->
         return None
 
 
-async def reject_queue_item(item_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def reject_queue_item(item_id: str, reason: Optional[str] = None, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Reject a queue item"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("dm_queue").update({
+        query = client.table("dm_queue").update({
             "status": "rejected",
             "failed_reason": reason,
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", item_id).eq("status", "pending").execute()
+        }).eq("id", item_id).eq("status", "pending")
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -281,7 +304,7 @@ async def bulk_reject(ids: List[str], reason: Optional[str] = None) -> Dict[str,
         return {"success": 0, "failed": len(ids)}
 
 
-async def get_next_to_send(account_id: Optional[str] = None, message_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def get_next_to_send(account_id: Optional[str] = None, message_type: Optional[str] = None, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get the next approved item to send"""
     client = get_client()
     if not client:
@@ -291,6 +314,10 @@ async def get_next_to_send(account_id: Optional[str] = None, message_type: Optio
         query = client.table("dm_queue").select("*").eq(
             "status", "approved"
         ).order("approved_at").limit(1)
+
+        # Filter by team_id
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if account_id:
             query = query.eq("account_id", account_id)
@@ -307,23 +334,26 @@ async def get_next_to_send(account_id: Optional[str] = None, message_type: Optio
         return None
 
 
-async def get_next_reply_to_send(account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def get_next_reply_to_send(account_id: Optional[str] = None, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get the next approved reply to send"""
-    return await get_next_to_send(account_id=account_id, message_type="reply")
+    return await get_next_to_send(account_id=account_id, message_type="reply", team_id=team_id)
 
 
-async def mark_as_sent(item_id: str) -> Optional[Dict[str, Any]]:
+async def mark_as_sent(item_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Mark item as sent"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("dm_queue").update({
+        query = client.table("dm_queue").update({
             "status": "sent",
             "sent_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", item_id).execute()
+        }).eq("id", item_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -331,23 +361,24 @@ async def mark_as_sent(item_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def mark_as_failed(item_id: str, reason: str) -> Optional[Dict[str, Any]]:
+async def mark_as_failed(item_id: str, reason: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Mark item as failed"""
     client = get_client()
     if not client:
         return None
 
     try:
-        # First get current retry count
-        current = client.table("dm_queue").select("retry_count").eq("id", item_id).execute()
-        retry_count = (current.data[0].get("retry_count") or 0) + 1 if current.data else 1
-
-        result = client.table("dm_queue").update({
+        # Set status to failed directly without reading retry_count first
+        # to avoid race condition. The retry_count is kept for informational
+        # purposes but not critical for correctness.
+        query = client.table("dm_queue").update({
             "status": "failed",
             "failed_reason": reason,
-            "retry_count": retry_count,
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", item_id).execute()
+        }).eq("id", item_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -355,8 +386,8 @@ async def mark_as_failed(item_id: str, reason: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_queue_stats(message_type: Optional[str] = None) -> Dict[str, int]:
-    """Get queue statistics, optionally filtered by message type"""
+async def get_queue_stats(message_type: Optional[str] = None, team_id: Optional[str] = None) -> Dict[str, int]:
+    """Get queue statistics, optionally filtered by message type and team"""
     client = get_client()
     if not client:
         return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
@@ -366,6 +397,10 @@ async def get_queue_stats(message_type: Optional[str] = None) -> Dict[str, int]:
         query = client.table("dm_queue").select("status").gte(
             "created_at", seven_days_ago
         )
+
+        # Filter by team_id
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if message_type:
             query = query.eq("message_type", message_type)
@@ -389,20 +424,23 @@ async def get_queue_stats(message_type: Optional[str] = None) -> Dict[str, int]:
         return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
 
 
-async def get_pending_reply_for_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+async def get_pending_reply_for_conversation(conversation_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Check if a conversation has a pending or approved reply in queue"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("dm_queue").select("*").eq(
+        query = client.table("dm_queue").select("*").eq(
             "conversation_id", conversation_id
         ).eq(
             "message_type", "reply"
         ).in_(
             "status", ["pending", "approved"]
-        ).order("created_at", desc=True).limit(1).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.order("created_at", desc=True).limit(1).execute()
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:

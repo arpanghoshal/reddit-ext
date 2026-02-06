@@ -83,7 +83,7 @@ def create_message_fingerprint(content: str, direction: str, sent_at: str = None
     return hashlib.sha256(composite.encode('utf-8')).hexdigest()[:16]
 
 
-async def create_conversation(conversation_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def create_conversation(conversation_data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Create a new conversation"""
     client = get_client()
     if not client:
@@ -91,7 +91,7 @@ async def create_conversation(conversation_data: Dict[str, Any]) -> Optional[Dic
         return None
 
     try:
-        result = client.table("conversations").insert({
+        insert_data = {
             "reddit_conversation_id": conversation_data.get("redditConversationId"),
             "participant_username": conversation_data.get("participantUsername", "").lower(),
             "account_id": conversation_data.get("accountId"),
@@ -104,7 +104,13 @@ async def create_conversation(conversation_data: Dict[str, Any]) -> Optional[Dic
             "has_reply": False,
             "notes": conversation_data.get("notes"),
             "tags": conversation_data.get("tags", [])
-        }).execute()
+        }
+
+        # Add team_id if provided
+        if team_id:
+            insert_data["team_id"] = team_id
+
+        result = client.table("conversations").insert(insert_data).execute()
 
         return transform_conversation(result.data[0]) if result.data else None
     except Exception as e:
@@ -112,7 +118,7 @@ async def create_conversation(conversation_data: Dict[str, Any]) -> Optional[Dic
         return None
 
 
-async def get_conversations(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+async def get_conversations(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get conversations with filters"""
     client = get_client()
     if not client:
@@ -122,6 +128,10 @@ async def get_conversations(filters: Dict[str, Any] = None) -> List[Dict[str, An
 
     try:
         query = client.table("conversations").select("*").order("last_message_at", desc=True)
+
+        # Filter by team_id (required for multi-tenancy)
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if filters.get("status"):
             status = filters["status"]
@@ -154,7 +164,7 @@ async def get_conversations(filters: Dict[str, Any] = None) -> List[Dict[str, An
         return []
 
 
-async def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+async def get_conversation(conversation_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get a single conversation by ID with messages"""
     client = get_client()
     if not client:
@@ -162,7 +172,10 @@ async def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
 
     try:
         # Get conversation
-        conv_result = client.table("conversations").select("*").eq("id", conversation_id).execute()
+        conv_query = client.table("conversations").select("*").eq("id", conversation_id)
+        if team_id:
+            conv_query = conv_query.eq("team_id", team_id)
+        conv_result = conv_query.execute()
 
         if not conv_result.data:
             return None
@@ -170,9 +183,10 @@ async def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
         conversation = transform_conversation(conv_result.data[0])
 
         # Fetch messages
-        msg_result = client.table("messages").select("*").eq(
+        msg_query = client.table("messages").select("*").eq(
             "conversation_id", conversation_id
-        ).order("sent_at").execute()
+        ).order("sent_at")
+        msg_result = msg_query.execute()
 
         messages = [transform_message(row) for row in msg_result.data] if msg_result.data else []
 
@@ -200,7 +214,7 @@ async def get_conversation_by_participant(username: str) -> Optional[Dict[str, A
         return None
 
 
-async def update_conversation(conversation_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_conversation(conversation_id: str, updates: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update a conversation"""
     client = get_client()
     if not client:
@@ -234,7 +248,7 @@ async def update_conversation(conversation_id: str, updates: Dict[str, Any]) -> 
         return None
 
 
-async def add_message(message_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Add a message to a conversation"""
     client = get_client()
     if not client:
@@ -257,24 +271,16 @@ async def add_message(message_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not msg_result.data:
             return None
 
-        # Update conversation stats
-        conv_result = client.table("conversations").select("total_messages").eq(
-            "id", conversation_id
-        ).execute()
-
-        total_messages = (conv_result.data[0].get("total_messages") or 0) + 1 if conv_result.data else 1
-
-        update_data = {
+        # Update conversation stats atomically (without reading total_messages first)
+        conv_update = {
             "last_message_at": sent_at,
             "last_message_direction": direction,
-            "total_messages": total_messages,
             "updated_at": datetime.utcnow().isoformat()
         }
-
         if direction == "inbound":
-            update_data["has_reply"] = True
+            conv_update["has_reply"] = True
 
-        client.table("conversations").update(update_data).eq("id", conversation_id).execute()
+        client.table("conversations").update(conv_update).eq("id", conversation_id).execute()
 
         return transform_message(msg_result.data[0])
     except Exception as e:
@@ -282,7 +288,7 @@ async def add_message(message_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_messages(conversation_id: str, options: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+async def get_messages(conversation_id: str, options: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get messages for a conversation"""
     client = get_client()
     if not client:
@@ -391,8 +397,8 @@ async def sync_conversation(sync_data: Dict[str, Any]) -> Optional[Dict[str, Any
     return await get_conversation(conversation["id"])
 
 
-async def get_conversation_stats() -> Dict[str, Any]:
-    """Get conversation statistics"""
+async def get_conversation_stats(team_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get conversation statistics for a team"""
     client = get_client()
     if not client:
         return {
@@ -406,7 +412,13 @@ async def get_conversation_stats() -> Dict[str, Any]:
         }
 
     try:
-        result = client.table("conversations").select("status, has_reply").execute()
+        query = client.table("conversations").select("status, has_reply")
+
+        # Filter by team_id
+        if team_id:
+            query = query.eq("team_id", team_id)
+
+        result = query.execute()
 
         if not result.data:
             return {
@@ -439,16 +451,19 @@ async def get_conversation_stats() -> Dict[str, Any]:
         return {}
 
 
-async def search_conversations(query: str) -> List[Dict[str, Any]]:
+async def search_conversations(query: str, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Search conversations"""
     client = get_client()
     if not client:
         return []
 
     try:
-        result = client.table("conversations").select("*").ilike(
+        search_query = client.table("conversations").select("*").ilike(
             "participant_username", f"%{query}%"
-        ).order("last_message_at", desc=True).limit(20).execute()
+        )
+        if team_id:
+            search_query = search_query.eq("team_id", team_id)
+        result = search_query.order("last_message_at", desc=True).limit(20).execute()
 
         return [transform_conversation(row) for row in result.data] if result.data else []
     except Exception as e:

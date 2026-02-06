@@ -14,7 +14,12 @@ from dotenv import load_dotenv
 from datetime import datetime
 
 from .routes import api
-from .middleware.auth import APIKeyMiddleware
+from .routes import auth as auth_routes
+from .routes import teams as teams_routes
+from .routes import quotas as quotas_routes
+from .routes import audit as audit_routes
+from .routes import team_analytics as team_analytics_routes
+from .middleware.supabase_auth import SupabaseAuthMiddleware
 
 # Load environment variables
 load_dotenv()
@@ -98,11 +103,11 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Team-ID"],
 )
 
-# API Key Authentication Middleware
-app.add_middleware(APIKeyMiddleware)
+# Supabase JWT Authentication Middleware
+app.add_middleware(SupabaseAuthMiddleware)
 
 # Health check endpoint (public, no auth required)
 @app.get("/health")
@@ -115,6 +120,11 @@ async def health_check():
 
 # Include API routes
 app.include_router(api.router, prefix="/api")
+app.include_router(auth_routes.router, prefix="/api")
+app.include_router(teams_routes.router, prefix="/api")
+app.include_router(quotas_routes.router, prefix="/api")
+app.include_router(audit_routes.router, prefix="/api")
+app.include_router(team_analytics_routes.router, prefix="/api")
 
 # Global error handler - sanitized for security
 @app.exception_handler(Exception)

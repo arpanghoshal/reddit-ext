@@ -51,7 +51,7 @@ def transform_rule(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     }
 
 
-async def create_rule(rule_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def create_rule(rule_data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Create a new rule"""
     client = get_client()
     if not client:
@@ -59,14 +59,20 @@ async def create_rule(rule_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        result = client.table("filter_rules").insert({
+        insert_data = {
             "name": rule_data.get("name"),
             "description": rule_data.get("description"),
             "rule_type": rule_data.get("ruleType"),
             "value": rule_data.get("value"),
             "is_active": rule_data.get("isActive", True),
             "priority": rule_data.get("priority", 0)
-        }).execute()
+        }
+
+        # Add team_id if provided
+        if team_id:
+            insert_data["team_id"] = team_id
+
+        result = client.table("filter_rules").insert(insert_data).execute()
 
         return transform_rule(result.data[0]) if result.data else None
     except Exception as e:
@@ -74,8 +80,8 @@ async def create_rule(rule_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_rules(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-    """Get all rules"""
+async def get_rules(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all rules for a team"""
     client = get_client()
     if not client:
         return []
@@ -86,6 +92,10 @@ async def get_rules(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         query = client.table("filter_rules").select("*").order(
             "priority", desc=True
         ).order("created_at")
+
+        # Filter by team_id (required for multi-tenancy)
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if filters.get("activeOnly"):
             query = query.eq("is_active", True)
@@ -100,9 +110,9 @@ async def get_rules(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         return []
 
 
-async def get_active_rules() -> List[Dict[str, Any]]:
+async def get_active_rules(team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get active rules (for evaluation)"""
-    return await get_rules({"activeOnly": True})
+    return await get_rules({"activeOnly": True}, team_id=team_id)
 
 
 async def update_rule(rule_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -246,10 +256,11 @@ def evaluate_single_rule(
 
 async def evaluate_rules(
     post: Dict[str, Any],
-    user_profile: Optional[Dict[str, Any]] = None
+    user_profile: Optional[Dict[str, Any]] = None,
+    team_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Evaluate all active rules against a post/user"""
-    rules = await get_active_rules()
+    rules = await get_active_rules(team_id=team_id)
 
     result = {
         "passed": True,

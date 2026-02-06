@@ -114,7 +114,7 @@ export default function Dashboard() {
 
   const funnelData = {
     scanned: classificationStats?.total || 0,
-    qualified: classificationStats?.strongMatch + classificationStats?.weakMatch || 0,
+    qualified: (classificationStats?.strongMatch || 0) + (classificationStats?.weakMatch || 0),
     messaged: analytics?.totalDMs || 0,
     replied: conversationStats?.withReplies || 0,
     converted: conversationStats?.converted || 0

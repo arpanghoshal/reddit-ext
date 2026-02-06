@@ -1,10 +1,13 @@
 /**
  * API Client for Reddit Automation Dashboard
+ * Uses Supabase JWT authentication and team context
  */
+
+import { supabase } from '../lib/supabase';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
-// Get API key from localStorage or environment
+// Get API key from localStorage or environment (legacy, kept for backwards compatibility)
 function getApiKey() {
     return localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY || '';
 }
@@ -19,17 +22,40 @@ export function clearApiKey() {
     localStorage.removeItem('apiKey');
 }
 
+// Get current team ID from localStorage
+function getCurrentTeamId() {
+    return localStorage.getItem('currentTeamId') || '';
+}
+
+// Get Supabase access token
+async function getAccessToken() {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || null;
+}
+
 async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
     const apiKey = getApiKey();
+    const teamId = getCurrentTeamId();
+    const accessToken = await getAccessToken();
 
     const headers = {
         'Content-Type': 'application/json',
         ...options.headers
     };
 
-    // Add API key if available
-    if (apiKey) {
+    // Add Supabase JWT token (primary auth method)
+    if (accessToken) {
+        headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+
+    // Add team context header
+    if (teamId) {
+        headers['X-Team-ID'] = teamId;
+    }
+
+    // Add API key if available (legacy fallback)
+    if (apiKey && !accessToken) {
         headers['X-API-Key'] = apiKey;
     }
 
@@ -41,10 +67,14 @@ async function apiRequest(endpoint, options = {}) {
 
         if (!response.ok) {
             if (response.status === 401) {
-                throw new Error('Authentication required. Please enter your API key.');
+                throw new Error('Authentication required. Please log in.');
             }
             if (response.status === 403) {
-                throw new Error('Invalid API key. Please check your settings.');
+                throw new Error('Access denied. You may not have permission for this team.');
+            }
+            if (response.status === 429) {
+                const error = await response.json().catch(() => ({ error: 'Rate limit exceeded' }));
+                throw new Error(error.detail || 'Team quota exceeded. Please try again later.');
             }
             const error = await response.json().catch(() => ({ error: 'Request failed' }));
             throw new Error(error.error || error.detail || 'Request failed');
@@ -388,5 +418,29 @@ export async function getSkippedPosts(filters = {}) {
 
 export async function getSkipStats() {
     const result = await apiRequest('/skipped-posts/stats');
+    return result.data;
+}
+
+// Audit Log
+export async function getAuditLog(filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const result = await apiRequest(`/audit?${params}`);
+    return result;
+}
+
+// Team Analytics
+export async function getTeamAnalytics(period = '30d') {
+    const result = await apiRequest(`/team-analytics?period=${period}`);
+    return result.data;
+}
+
+// Quota Status
+export async function getQuotaStatus() {
+    const result = await apiRequest('/quotas/status');
     return result.data;
 }

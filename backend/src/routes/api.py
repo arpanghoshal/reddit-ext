@@ -4,10 +4,11 @@ All REST API endpoints for the Reddit Insight Backend
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 
+from ..middleware.supabase_auth import get_current_team_id
 from ..services import supabase_service as supabase
 from ..services import llm
 from ..services import classification
@@ -266,7 +267,7 @@ async def log_dm(request: DMLogRequest):
 
 
 @router.get("/dm/history")
-async def get_dm_history(limit: int = Query(50)):
+async def get_dm_history(limit: int = Query(50, le=200)):
     history = await supabase.get_dm_history(limit)
     return {"success": True, "data": history}
 
@@ -292,7 +293,7 @@ async def update_session(session_id: str, request: SessionUpdateRequest):
 
 
 @router.get("/session/logs")
-async def get_session_logs(limit: int = Query(20)):
+async def get_session_logs(limit: int = Query(20, le=200)):
     logs = await supabase.get_automation_logs(limit)
     return {"success": True, "data": logs}
 
@@ -477,15 +478,17 @@ async def filter_route(request: FilterRequest):
 
 @router.get("/queue")
 async def get_queue_route(
+    request: Request,
     status: Optional[str] = None,
     accountId: Optional[str] = None,
     subreddit: Optional[str] = None,
     mode: Optional[str] = None,
     messageType: Optional[str] = None,
     conversationId: Optional[str] = None,
-    limit: int = Query(50),
+    limit: int = Query(50, le=200),
     offset: int = Query(0)
 ):
+    team_id = get_current_team_id(request)
     filters = {
         "status": status,
         "accountId": accountId,
@@ -496,99 +499,112 @@ async def get_queue_route(
         "limit": limit,
         "offset": offset
     }
-    items = await queue.get_queue(filters)
+    items = await queue.get_queue(filters, team_id=team_id)
     return {"success": True, "data": items}
 
 
 @router.post("/queue")
-async def add_to_queue_route(request: QueueAddRequest):
-    item = await queue.add_to_queue(request.model_dump())
+async def add_to_queue_route(request: Request, body: QueueAddRequest):
+    team_id = get_current_team_id(request)
+    item = await queue.add_to_queue(body.model_dump(), team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.post("/queue/reply")
-async def add_reply_to_queue_route(request: ReplyQueueAddRequest):
+async def add_reply_to_queue_route(request: Request, body: ReplyQueueAddRequest):
     """Add a reply message to the queue"""
+    team_id = get_current_team_id(request)
     item = await queue.add_to_queue({
-        "conversationId": request.conversationId,
-        "recipientUsername": request.recipientUsername,
-        "generatedMessage": request.generatedMessage,
-        "editedMessage": request.editedMessage,
-        "status": request.status,
-        "accountId": request.accountId,
+        "conversationId": body.conversationId,
+        "recipientUsername": body.recipientUsername,
+        "generatedMessage": body.generatedMessage,
+        "editedMessage": body.editedMessage,
+        "status": body.status,
+        "accountId": body.accountId,
         "messageType": "reply",
         "queueMode": "review"
-    })
+    }, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.get("/queue/stats")
-async def get_queue_stats(messageType: Optional[str] = None):
-    stats = await queue.get_queue_stats(message_type=messageType)
+async def get_queue_stats(request: Request, messageType: Optional[str] = None):
+    team_id = get_current_team_id(request)
+    stats = await queue.get_queue_stats(message_type=messageType, team_id=team_id)
     return {"success": True, "data": stats}
 
 
 @router.get("/queue/next")
-async def get_next_to_send(accountId: Optional[str] = None, messageType: Optional[str] = None):
-    item = await queue.get_next_to_send(account_id=accountId, message_type=messageType)
+async def get_next_to_send(request: Request, accountId: Optional[str] = None, messageType: Optional[str] = None):
+    team_id = get_current_team_id(request)
+    item = await queue.get_next_to_send(account_id=accountId, message_type=messageType, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.get("/queue/next-reply")
-async def get_next_reply_to_send(accountId: Optional[str] = None):
+async def get_next_reply_to_send(request: Request, accountId: Optional[str] = None):
     """Get the next approved reply to send"""
-    item = await queue.get_next_reply_to_send(account_id=accountId)
+    team_id = get_current_team_id(request)
+    item = await queue.get_next_reply_to_send(account_id=accountId, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.get("/queue/pending-reply/{conversation_id}")
-async def get_pending_reply_for_conversation_route(conversation_id: str):
+async def get_pending_reply_for_conversation_route(request: Request, conversation_id: str):
     """Check if a conversation has a pending/approved reply in queue"""
-    item = await queue.get_pending_reply_for_conversation(conversation_id)
+    team_id = get_current_team_id(request)
+    item = await queue.get_pending_reply_for_conversation(conversation_id, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.get("/queue/{item_id}")
-async def get_queue_item_route(item_id: str):
-    item = await queue.get_queue_item(item_id)
+async def get_queue_item_route(request: Request, item_id: str):
+    team_id = get_current_team_id(request)
+    item = await queue.get_queue_item(item_id, team_id=team_id)
     if not item:
         raise HTTPException(status_code=404, detail="Queue item not found")
     return {"success": True, "data": item}
 
 
 @router.patch("/queue/{item_id}")
-async def update_queue_item_route(item_id: str, request: QueueUpdateRequest):
-    item = await queue.update_queue_item(item_id, request.model_dump(exclude_none=True))
+async def update_queue_item_route(request: Request, item_id: str, body: QueueUpdateRequest):
+    team_id = get_current_team_id(request)
+    item = await queue.update_queue_item(item_id, body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.delete("/queue/{item_id}")
-async def delete_queue_item_route(item_id: str):
-    success = await queue.delete_queue_item(item_id)
+async def delete_queue_item_route(request: Request, item_id: str):
+    team_id = get_current_team_id(request)
+    success = await queue.delete_queue_item(item_id, team_id=team_id)
     return {"success": success}
 
 
 @router.post("/queue/{item_id}/approve")
-async def approve_queue_item_route(item_id: str, approvedBy: Optional[str] = None):
-    item = await queue.approve_queue_item(item_id, approvedBy)
+async def approve_queue_item_route(request: Request, item_id: str, approvedBy: Optional[str] = None):
+    team_id = get_current_team_id(request)
+    item = await queue.approve_queue_item(item_id, approvedBy, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.post("/queue/{item_id}/reject")
-async def reject_queue_item_route(item_id: str, reason: Optional[str] = None):
-    item = await queue.reject_queue_item(item_id, reason)
+async def reject_queue_item_route(request: Request, item_id: str, reason: Optional[str] = None):
+    team_id = get_current_team_id(request)
+    item = await queue.reject_queue_item(item_id, reason, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.post("/queue/{item_id}/sent")
-async def mark_as_sent_route(item_id: str):
-    item = await queue.mark_as_sent(item_id)
+async def mark_as_sent_route(request: Request, item_id: str):
+    team_id = get_current_team_id(request)
+    item = await queue.mark_as_sent(item_id, team_id=team_id)
     return {"success": True, "data": item}
 
 
 @router.post("/queue/{item_id}/failed")
-async def mark_as_failed_route(item_id: str, reason: str = ""):
-    item = await queue.mark_as_failed(item_id, reason)
+async def mark_as_failed_route(request: Request, item_id: str, reason: str = ""):
+    team_id = get_current_team_id(request)
+    item = await queue.mark_as_failed(item_id, reason, team_id=team_id)
     return {"success": True, "data": item}
 
 
@@ -612,43 +628,50 @@ async def bulk_reject_route(request: BulkRejectRequest):
 
 @router.get("/accounts")
 async def get_accounts_route(
+    request: Request,
     status: Optional[str] = None,
     activeOnly: bool = False
 ):
+    team_id = get_current_team_id(request)
     filters = {"status": status, "activeOnly": activeOnly}
-    accounts_list = await accounts.get_accounts(filters)
+    accounts_list = await accounts.get_accounts(filters, team_id=team_id)
     return {"success": True, "data": accounts_list}
 
 
 @router.post("/accounts")
-async def add_account_route(request: AccountAddRequest):
-    account = await accounts.add_account(request.model_dump())
+async def add_account_route(request: Request, body: AccountAddRequest):
+    team_id = get_current_team_id(request)
+    account = await accounts.add_account(body.model_dump(), team_id=team_id)
     return {"success": True, "data": account}
 
 
 @router.get("/accounts/{account_id}")
-async def get_account_route(account_id: str):
-    account = await accounts.get_account(account_id)
+async def get_account_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
+    account = await accounts.get_account(account_id, team_id=team_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"success": True, "data": account}
 
 
 @router.patch("/accounts/{account_id}")
-async def update_account_route(account_id: str, request: AccountUpdateRequest):
-    account = await accounts.update_account(account_id, request.model_dump(exclude_none=True))
+async def update_account_route(request: Request, account_id: str, body: AccountUpdateRequest):
+    team_id = get_current_team_id(request)
+    account = await accounts.update_account(account_id, body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": account}
 
 
 @router.delete("/accounts/{account_id}")
-async def delete_account_route(account_id: str):
-    success = await accounts.delete_account(account_id)
+async def delete_account_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
+    success = await accounts.delete_account(account_id, team_id=team_id)
     return {"success": success}
 
 
 @router.get("/accounts/{account_id}/cookies")
-async def get_account_cookies_route(account_id: str):
-    cookies = await accounts.get_account_cookies(account_id)
+async def get_account_cookies_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
+    cookies = await accounts.get_account_cookies(account_id, team_id=team_id)
     if not cookies:
         raise HTTPException(status_code=404, detail="Cookies not found")
     return {"success": True, "data": cookies}
@@ -686,7 +709,8 @@ async def check_shadowban_route(account_id: str):
 
 
 @router.get("/accounts/{account_id}/subreddits")
-async def get_account_subreddits_route(account_id: str):
+async def get_account_subreddits_route(request: Request, account_id: str):
+    team_id = get_current_team_id(request)
     subreddits = await accounts.get_account_subreddits(account_id)
     return {"success": True, "data": subreddits}
 
@@ -758,17 +782,20 @@ async def get_account_health_route(account_id: str):
 
 @router.get("/rules")
 async def get_rules_route(
+    request: Request,
     activeOnly: bool = False,
     type: Optional[str] = None
 ):
+    team_id = get_current_team_id(request)
     filters = {"activeOnly": activeOnly, "ruleType": type}
-    rules_list = await rules.get_rules(filters)
+    rules_list = await rules.get_rules(filters, team_id=team_id)
     return {"success": True, "data": rules_list}
 
 
 @router.post("/rules")
-async def create_rule_route(request: RuleCreateRequest):
-    rule = await rules.create_rule(request.model_dump())
+async def create_rule_route(request: Request, body: RuleCreateRequest):
+    team_id = get_current_team_id(request)
+    rule = await rules.create_rule(body.model_dump(), team_id=team_id)
     return {"success": True, "data": rule}
 
 
@@ -806,12 +833,14 @@ async def test_rule_route(request: RuleTestRequest):
 
 @router.get("/conversations")
 async def get_conversations_route(
+    request: Request,
     status: Optional[str] = None,
     hasReply: Optional[str] = None,
     accountId: Optional[str] = None,
-    limit: int = Query(50),
+    limit: int = Query(50, le=200),
     offset: int = Query(0)
 ):
+    team_id = get_current_team_id(request)
     has_reply_bool = None
     if hasReply == "true":
         has_reply_bool = True
@@ -825,54 +854,61 @@ async def get_conversations_route(
         "limit": limit,
         "offset": offset
     }
-    conv_list = await conversations.get_conversations(filters)
+    conv_list = await conversations.get_conversations(filters, team_id=team_id)
     return {"success": True, "data": conv_list}
 
 
 @router.post("/conversations")
-async def create_conversation_route(request: ConversationCreateRequest):
-    conv = await conversations.create_conversation(request.model_dump())
+async def create_conversation_route(request: Request, body: ConversationCreateRequest):
+    team_id = get_current_team_id(request)
+    conv = await conversations.create_conversation(body.model_dump(), team_id=team_id)
     return {"success": True, "data": conv}
 
 
 @router.get("/conversations/stats")
-async def get_conversation_stats():
-    stats = await conversations.get_conversation_stats()
+async def get_conversation_stats(request: Request):
+    team_id = get_current_team_id(request)
+    stats = await conversations.get_conversation_stats(team_id=team_id)
     return {"success": True, "data": stats}
 
 
 @router.get("/conversations/search")
-async def search_conversations_route(q: str = ""):
-    results = await conversations.search_conversations(q)
+async def search_conversations_route(request: Request, q: str = ""):
+    team_id = get_current_team_id(request)
+    results = await conversations.search_conversations(q, team_id=team_id)
     return {"success": True, "data": results}
 
 
 @router.get("/conversations/{conversation_id}")
-async def get_conversation_route(conversation_id: str):
-    conv = await conversations.get_conversation(conversation_id)
+async def get_conversation_route(request: Request, conversation_id: str):
+    team_id = get_current_team_id(request)
+    conv = await conversations.get_conversation(conversation_id, team_id=team_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"success": True, "data": conv}
 
 
 @router.patch("/conversations/{conversation_id}")
-async def update_conversation_route(conversation_id: str, request: ConversationUpdateRequest):
-    conv = await conversations.update_conversation(conversation_id, request.model_dump(exclude_none=True))
+async def update_conversation_route(request: Request, conversation_id: str, body: ConversationUpdateRequest):
+    team_id = get_current_team_id(request)
+    conv = await conversations.update_conversation(conversation_id, body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": conv}
 
 
 @router.post("/conversations/{conversation_id}/messages")
-async def add_message_route(conversation_id: str, request: MessageAddRequest):
+async def add_message_route(request: Request, conversation_id: str, body: MessageAddRequest):
+    team_id = get_current_team_id(request)
     message = await conversations.add_message({
         "conversationId": conversation_id,
-        **request.model_dump()
-    })
+        **body.model_dump()
+    }, team_id=team_id)
     return {"success": True, "data": message}
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def get_messages_route(conversation_id: str, limit: int = Query(100)):
-    messages = await conversations.get_messages(conversation_id, {"limit": limit})
+async def get_messages_route(request: Request, conversation_id: str, limit: int = Query(100, le=200)):
+    team_id = get_current_team_id(request)
+    messages = await conversations.get_messages(conversation_id, {"limit": limit}, team_id=team_id)
     return {"success": True, "data": messages}
 
 
@@ -1418,14 +1454,18 @@ async def get_conversation_summary_route(accountId: Optional[str] = None):
 
 
 @router.get("/conversations/{conversation_id}/health")
-async def get_conversation_health_route(conversation_id: str):
+async def get_conversation_health_route(request: Request, conversation_id: str):
     """Get health score for a specific conversation"""
+    team_id = get_current_team_id(request)
     # Fetch conversation
     client = supabase.get_client()
     if not client:
         raise HTTPException(status_code=500, detail="Database not configured")
 
-    result = client.table("conversations").select("*").eq("id", conversation_id).single().execute()
+    query = client.table("conversations").select("*").eq("id", conversation_id)
+    if team_id:
+        query = query.eq("team_id", team_id)
+    result = query.single().execute()
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -1515,42 +1555,48 @@ class CampaignUpdateRequest(BaseModel):
 
 @router.get("/campaigns")
 async def get_campaigns_route(
+    request: Request,
     status: Optional[str] = None,
-    limit: int = Query(50)
+    limit: int = Query(50, le=200)
 ):
     """Get all campaigns"""
+    team_id = get_current_team_id(request)
     filters = {"status": status, "limit": limit}
-    campaign_list = await campaigns.get_campaigns(filters)
+    campaign_list = await campaigns.get_campaigns(filters, team_id=team_id)
     return {"success": True, "data": campaign_list}
 
 
 @router.post("/campaigns")
-async def create_campaign_route(request: CampaignCreateRequest):
+async def create_campaign_route(request: Request, body: CampaignCreateRequest):
     """Create a new campaign"""
-    campaign = await campaigns.create_campaign(request.model_dump())
+    team_id = get_current_team_id(request)
+    campaign = await campaigns.create_campaign(body.model_dump(), team_id=team_id)
     return {"success": True, "data": campaign}
 
 
 @router.get("/campaigns/{campaign_id}")
-async def get_campaign_route(campaign_id: str):
+async def get_campaign_route(request: Request, campaign_id: str):
     """Get a single campaign"""
-    campaign = await campaigns.get_campaign(campaign_id)
+    team_id = get_current_team_id(request)
+    campaign = await campaigns.get_campaign(campaign_id, team_id=team_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return {"success": True, "data": campaign}
 
 
 @router.patch("/campaigns/{campaign_id}")
-async def update_campaign_route(campaign_id: str, request: CampaignUpdateRequest):
+async def update_campaign_route(request: Request, campaign_id: str, body: CampaignUpdateRequest):
     """Update a campaign"""
-    campaign = await campaigns.update_campaign(campaign_id, request.model_dump(exclude_none=True))
+    team_id = get_current_team_id(request)
+    campaign = await campaigns.update_campaign(campaign_id, body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": campaign}
 
 
 @router.delete("/campaigns/{campaign_id}")
-async def delete_campaign_route(campaign_id: str):
+async def delete_campaign_route(request: Request, campaign_id: str):
     """Delete a campaign"""
-    success = await campaigns.delete_campaign(campaign_id)
+    team_id = get_current_team_id(request)
+    success = await campaigns.delete_campaign(campaign_id, team_id=team_id)
     return {"success": success}
 
 
@@ -1571,7 +1617,7 @@ async def get_skipped_posts_route(
     skipReason: Optional[str] = None,
     sessionId: Optional[str] = None,
     campaignId: Optional[str] = None,
-    limit: int = Query(100),
+    limit: int = Query(100, le=200),
     offset: int = Query(0)
 ):
     """Get skipped posts with optional filtering"""

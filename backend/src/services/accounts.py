@@ -82,7 +82,7 @@ def transform_account(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]
     return account
 
 
-async def add_account(account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Add a new Reddit account"""
     client = get_client()
     if not client:
@@ -96,7 +96,7 @@ async def add_account(account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             encrypted_cookie = encrypt(json.dumps(account_data["cookies"]))
 
         warmup_mode = account_data.get("warmupMode", True)
-        result = client.table("reddit_accounts").insert({
+        insert_data = {
             "username": account_data.get("username", "").lower(),
             "display_name": account_data.get("displayName") or account_data.get("username"),
             "encrypted_cookie": encrypted_cookie,
@@ -105,7 +105,13 @@ async def add_account(account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "daily_limit": account_data.get("dailyLimit", 20),
             "current_daily_count": 0,
             "status": "warming_up" if warmup_mode else "active"
-        }).execute()
+        }
+
+        # Add team_id if provided
+        if team_id:
+            insert_data["team_id"] = team_id
+
+        result = client.table("reddit_accounts").insert(insert_data).execute()
 
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
@@ -113,8 +119,8 @@ async def add_account(account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_accounts(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-    """Get all accounts"""
+async def get_accounts(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all accounts for a team"""
     client = get_client()
     if not client:
         return []
@@ -123,6 +129,10 @@ async def get_accounts(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
 
     try:
         query = client.table("reddit_accounts").select("*").order("created_at", desc=True)
+
+        # Filter by team_id (required for multi-tenancy)
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if filters.get("status"):
             query = query.eq("status", filters["status"])
@@ -137,30 +147,42 @@ async def get_accounts(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         return []
 
 
-async def get_account(account_id: str) -> Optional[Dict[str, Any]]:
-    """Get a single account by ID"""
+async def get_account(account_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get a single account by ID, optionally verifying team ownership"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("reddit_accounts").select("*").eq("id", account_id).execute()
+        query = client.table("reddit_accounts").select("*").eq("id", account_id)
+
+        # Filter by team_id if provided (for access control)
+        if team_id:
+            query = query.eq("team_id", team_id)
+
+        result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
         print(f"Error fetching account: {e}")
         return None
 
 
-async def get_account_by_username(username: str) -> Optional[Dict[str, Any]]:
-    """Get account by username"""
+async def get_account_by_username(username: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get account by username, optionally filtering by team"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("reddit_accounts").select("*").eq(
+        query = client.table("reddit_accounts").select("*").eq(
             "username", username.lower()
-        ).execute()
+        )
+
+        # Filter by team_id if provided
+        if team_id:
+            query = query.eq("team_id", team_id)
+
+        result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
         if "PGRST116" not in str(e):
@@ -168,7 +190,7 @@ async def get_account_by_username(username: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def update_account(account_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_account(account_id: str, updates: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update an account"""
     client = get_client()
     if not client:
@@ -191,37 +213,46 @@ async def update_account(account_id: str, updates: Dict[str, Any]) -> Optional[D
         if "cookies" in updates:
             update_data["encrypted_cookie"] = encrypt(json.dumps(updates["cookies"]))
 
-        result = client.table("reddit_accounts").update(update_data).eq("id", account_id).execute()
+        query = client.table("reddit_accounts").update(update_data).eq("id", account_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
         print(f"Error updating account: {e}")
         return None
 
 
-async def delete_account(account_id: str) -> bool:
+async def delete_account(account_id: str, team_id: Optional[str] = None) -> bool:
     """Delete an account"""
     client = get_client()
     if not client:
         return False
 
     try:
-        client.table("reddit_accounts").delete().eq("id", account_id).execute()
+        query = client.table("reddit_accounts").delete().eq("id", account_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        query.execute()
         return True
     except Exception as e:
         print(f"Error deleting account: {e}")
         return False
 
 
-async def get_account_cookies(account_id: str) -> Optional[List[Dict[str, Any]]]:
+async def get_account_cookies(account_id: str, team_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Get decrypted cookies for an account"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("reddit_accounts").select("encrypted_cookie").eq(
+        query = client.table("reddit_accounts").select("encrypted_cookie").eq(
             "id", account_id
-        ).execute()
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         if not result.data or not result.data[0].get("encrypted_cookie"):
             print("Error fetching account cookies: no data")

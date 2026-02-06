@@ -59,7 +59,7 @@ def _transform_to_db(data: Dict[str, Any]) -> Dict[str, Any]:
     return db_data
 
 
-async def get_campaigns(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+async def get_campaigns(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get all campaigns with optional filtering"""
     client = get_client()
     if not client:
@@ -69,6 +69,10 @@ async def get_campaigns(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
 
     try:
         query = client.table("campaigns").select("*")
+
+        # Filter by team_id (required for multi-tenancy)
+        if team_id:
+            query = query.eq("team_id", team_id)
 
         if filters.get("status"):
             query = query.eq("status", filters["status"])
@@ -86,14 +90,17 @@ async def get_campaigns(filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         return []
 
 
-async def get_campaign(campaign_id: str) -> Optional[Dict[str, Any]]:
+async def get_campaign(campaign_id: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get a single campaign by ID"""
     client = get_client()
     if not client:
         return None
 
     try:
-        result = client.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+        query = client.table("campaigns").select("*").eq("id", campaign_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.single().execute()
 
         if result.data:
             return _transform_from_db(result.data)
@@ -103,7 +110,7 @@ async def get_campaign(campaign_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def create_campaign(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def create_campaign(data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Create a new campaign"""
     client = get_client()
     if not client:
@@ -111,6 +118,10 @@ async def create_campaign(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     try:
         db_data = _transform_to_db(data)
+
+        # Add team_id if provided
+        if team_id:
+            db_data["team_id"] = team_id
 
         result = client.table("campaigns").insert(db_data).execute()
 
@@ -122,7 +133,7 @@ async def create_campaign(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def update_campaign(campaign_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_campaign(campaign_id: str, data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Update an existing campaign"""
     client = get_client()
     if not client:
@@ -132,7 +143,10 @@ async def update_campaign(campaign_id: str, data: Dict[str, Any]) -> Optional[Di
         db_data = _transform_to_db(data)
         db_data["updated_at"] = datetime.utcnow().isoformat()
 
-        result = client.table("campaigns").update(db_data).eq("id", campaign_id).execute()
+        query = client.table("campaigns").update(db_data).eq("id", campaign_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        result = query.execute()
 
         if result.data and len(result.data) > 0:
             return _transform_from_db(result.data[0])
@@ -142,14 +156,17 @@ async def update_campaign(campaign_id: str, data: Dict[str, Any]) -> Optional[Di
         return None
 
 
-async def delete_campaign(campaign_id: str) -> bool:
+async def delete_campaign(campaign_id: str, team_id: Optional[str] = None) -> bool:
     """Delete a campaign"""
     client = get_client()
     if not client:
         return False
 
     try:
-        client.table("campaigns").delete().eq("id", campaign_id).execute()
+        query = client.table("campaigns").delete().eq("id", campaign_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        query.execute()
         return True
     except Exception as e:
         print(f"Failed to delete campaign {campaign_id}: {e}")
@@ -195,7 +212,7 @@ async def get_campaign_stats(campaign_id: str) -> Dict[str, Any]:
         return {}
 
 
-async def increment_campaign_stats(campaign_id: str, field: str, amount: int = 1) -> bool:
+async def increment_campaign_stats(campaign_id: str, field: str, amount: int = 1, team_id: Optional[str] = None) -> bool:
     """Increment a campaign stat field"""
     client = get_client()
     if not client:
@@ -214,12 +231,22 @@ async def increment_campaign_stats(campaign_id: str, field: str, amount: int = 1
         return False
 
     try:
-        # Get current value
-        campaign = await get_campaign(campaign_id)
+        # Try to use RPC for atomic increment if available
+        try:
+            result = client.rpc("increment_campaign_stat", {
+                "p_campaign_id": campaign_id,
+                "p_field": db_field,
+                "p_amount": amount
+            }).execute()
+            return True
+        except Exception:
+            pass
+
+        # Fallback: read then write (acceptable for low-frequency stat updates)
+        campaign = await get_campaign(campaign_id, team_id=team_id)
         if not campaign:
             return False
 
-        # Map back to get current value
         api_field_mapping = {
             "total_scanned": "totalScanned",
             "total_qualified": "totalQualified",
@@ -231,11 +258,13 @@ async def increment_campaign_stats(campaign_id: str, field: str, amount: int = 1
         api_field = api_field_mapping.get(db_field)
         current_value = campaign.get(api_field, 0)
 
-        # Update with new value
-        client.table("campaigns").update({
+        query = client.table("campaigns").update({
             db_field: current_value + amount,
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", campaign_id).execute()
+        }).eq("id", campaign_id)
+        if team_id:
+            query = query.eq("team_id", team_id)
+        query.execute()
 
         return True
     except Exception as e:
