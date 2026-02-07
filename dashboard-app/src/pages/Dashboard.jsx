@@ -72,6 +72,7 @@ export default function Dashboard() {
   const [queueStats, setQueueStats] = useState(null);
   const [classificationStats, setClassificationStats] = useState(null);
   const [conversationStats, setConversationStats] = useState(null);
+  const [rotationStatus, setRotationStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -79,17 +80,19 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [analyticsData, queueData, classData, convData] = await Promise.all([
+      const [analyticsData, queueData, classData, convData, rotData] = await Promise.all([
         api.getAnalytics().catch(() => null),
         api.getQueueStats().catch(() => null),
         api.getClassificationStats().catch(() => null),
-        api.getConversationStats().catch(() => null)
+        api.getConversationStats().catch(() => null),
+        api.getRotationStatus().catch(() => null)
       ]);
 
       setAnalytics(analyticsData);
       setQueueStats(queueData);
       setClassificationStats(classData);
       setConversationStats(convData);
+      setRotationStatus(rotData);
     } catch (err) {
       setError('Failed to load dashboard data');
       console.error(err);
@@ -293,6 +296,50 @@ export default function Dashboard() {
               <p className="text-2xl font-bold text-purple-500">{conversationStats.converted}</p>
               <p className="text-sm text-gray-500">Converted</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account Health */}
+      {rotationStatus?.accounts && rotationStatus.accounts.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <h2 className="text-lg font-semibold mb-4">Account Health</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {rotationStatus.accounts.map(account => {
+              const used = account.currentDailyCount || 0;
+              const limit = account.effectiveDailyLimit || account.dailyLimit || 20;
+              const pct = Math.min((used / limit) * 100, 100);
+              const barColor = account.status === 'shadowbanned' || account.status === 'suspended'
+                ? 'bg-red-500'
+                : pct >= 90 ? 'bg-orange-500'
+                : pct >= 60 ? 'bg-yellow-500'
+                : 'bg-green-500';
+
+              const statusBadge = {
+                active: 'bg-green-100 text-green-700',
+                warming_up: 'bg-yellow-100 text-yellow-700',
+                paused: 'bg-gray-100 text-gray-600',
+                shadowbanned: 'bg-red-100 text-red-700',
+                suspended: 'bg-red-200 text-red-800'
+              }[account.status] || 'bg-gray-100 text-gray-600';
+
+              return (
+                <div key={account.id} className="border border-gray-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium text-sm text-gray-900">u/{account.username}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge}`}>
+                      {account.status}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-500 whitespace-nowrap">{used}/{limit}</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

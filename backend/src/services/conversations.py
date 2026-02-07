@@ -37,11 +37,14 @@ def transform_conversation(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
     if not row:
         return None
 
+    account = row.get("reddit_accounts")
     return {
         "id": row.get("id"),
         "redditConversationId": row.get("reddit_conversation_id"),
         "participantUsername": row.get("participant_username"),
         "accountId": row.get("account_id"),
+        "accountUsername": account.get("username") if account else None,
+        "accountStatus": account.get("status") if account else None,
         "initialDmId": row.get("initial_dm_id"),
         "initialQueueId": row.get("initial_queue_id"),
         "status": row.get("status"),
@@ -127,7 +130,7 @@ async def get_conversations(filters: Dict[str, Any] = None, team_id: Optional[st
     filters = filters or {}
 
     try:
-        query = client.table("conversations").select("*").order("last_message_at", desc=True)
+        query = client.table("conversations").select("*, reddit_accounts(id, username, status)").order("last_message_at", desc=True)
 
         # Filter by team_id (required for multi-tenancy)
         if team_id:
@@ -172,7 +175,7 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
 
     try:
         # Get conversation
-        conv_query = client.table("conversations").select("*").eq("id", conversation_id)
+        conv_query = client.table("conversations").select("*, reddit_accounts(id, username, status)").eq("id", conversation_id)
         if team_id:
             conv_query = conv_query.eq("team_id", team_id)
         conv_result = conv_query.execute()
@@ -196,8 +199,8 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
         return None
 
 
-async def get_conversation_by_participant(username: str, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Get conversation by participant username"""
+async def get_conversation_by_participant(username: str, team_id: Optional[str] = None, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get conversation by participant username, optionally scoped to a specific account"""
     client = get_client()
     if not client:
         return None
@@ -208,6 +211,8 @@ async def get_conversation_by_participant(username: str, team_id: Optional[str] 
         )
         if team_id:
             query = query.eq("team_id", team_id)
+        if account_id:
+            query = query.eq("account_id", account_id)
         result = query.order("created_at", desc=True).limit(1).execute()
 
         return transform_conversation(result.data[0]) if result.data else None
@@ -240,6 +245,8 @@ async def update_conversation(conversation_id: str, updates: Dict[str, Any], tea
             update_data["last_message_direction"] = updates["lastMessageDirection"]
         if "totalMessages" in updates:
             update_data["total_messages"] = updates["totalMessages"]
+        if "accountId" in updates:
+            update_data["account_id"] = updates["accountId"]
 
         query = client.table("conversations").update(update_data).eq(
             "id", conversation_id
@@ -349,7 +356,17 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
         return None
 
     # Get or create conversation
-    conversation = await get_conversation_by_participant(participant_username, team_id=team_id)
+    # First try scoped to the specific account
+    conversation = await get_conversation_by_participant(participant_username, team_id=team_id, account_id=account_id) if account_id else None
+
+    if not conversation:
+        # Fall back to finding any conversation with this participant (handles pre-existing NULL account_id)
+        conversation = await get_conversation_by_participant(participant_username, team_id=team_id)
+
+    if conversation and account_id and not conversation.get("accountId"):
+        # Backfill account_id on existing conversation that had none
+        await update_conversation(conversation["id"], {"accountId": account_id}, team_id=team_id)
+        conversation["accountId"] = account_id
 
     if not conversation:
         conversation = await create_conversation({

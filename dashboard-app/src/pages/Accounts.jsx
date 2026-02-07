@@ -121,6 +121,8 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
 function AddAccountModal({ isOpen, onClose, onAdd }) {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [captureStatus, setCaptureStatus] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -138,12 +140,100 @@ function AddAccountModal({ isOpen, onClose, onAdd }) {
     }
   };
 
+  const handleCapture = () => {
+    setCapturing(true);
+    setCaptureStatus('Log into the Reddit account you want to add, then the cookies will be captured automatically...');
+
+    // Open Reddit with capture hash — the extension will capture cookies
+    window.open('https://www.reddit.com/#__rdm_capture_cookies', '_blank');
+
+    // Poll chrome.storage for captured cookies (via extension messaging)
+    // Since dashboard can't access chrome.storage directly, we use a workaround:
+    // Poll a known API-less approach — check via window message or just instruct the user
+    let pollCount = 0;
+    const pollInterval = setInterval(async () => {
+      pollCount++;
+      if (pollCount > 30) { // 30 seconds timeout
+        clearInterval(pollInterval);
+        setCapturing(false);
+        setCaptureStatus('Capture timed out. Make sure the extension is installed and you are on Reddit.');
+        return;
+      }
+
+      try {
+        // Try to get the captured cookies via the extension's storage
+        // We use a message to the extension's background script via a temporary tab
+        // Since the dashboard isn't on reddit.com, we need to check via our API or local storage
+        // For simplicity, poll local storage that the popup/content script may have written
+        const stored = localStorage.getItem('rdm_captured_cookies');
+        if (stored) {
+          const data = JSON.parse(stored);
+          if (data.capturedAt && Date.now() - data.capturedAt < 60000) {
+            clearInterval(pollInterval);
+            localStorage.removeItem('rdm_captured_cookies');
+
+            if (data.username && data.cookies) {
+              setUsername(data.username);
+              setCaptureStatus(`Captured cookies for u/${data.username}! Click "Add Account" to save.`);
+              setCapturing(false);
+              // Auto-add with cookies
+              setLoading(true);
+              try {
+                await onAdd({ username: data.username, cookies: data.cookies });
+                setUsername('');
+                setCaptureStatus(null);
+                onClose();
+              } catch (err) {
+                setCaptureStatus(`Failed to save: ${err.message}`);
+              } finally {
+                setLoading(false);
+              }
+            } else {
+              setCaptureStatus('Could not detect Reddit username. Please make sure you are logged in.');
+              setCapturing(false);
+            }
+          }
+        }
+      } catch (err) {
+        // Continue polling
+      }
+    }, 1000);
+  };
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
         <h2 className="text-xl font-bold mb-4">Add Reddit Account</h2>
+
+        {/* Capture from Browser */}
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-sm font-medium text-blue-800 mb-2">Quick Add (Recommended)</p>
+          <p className="text-xs text-blue-600 mb-3">
+            Log into the Reddit account you want to add, then click below. The extension will automatically capture the session cookies.
+          </p>
+          <button
+            onClick={handleCapture}
+            disabled={capturing}
+            className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 text-sm font-medium"
+          >
+            {capturing ? 'Capturing...' : 'Capture from Browser'}
+          </button>
+          {captureStatus && (
+            <p className="text-xs text-blue-700 mt-2">{captureStatus}</p>
+          )}
+        </div>
+
+        <div className="relative mb-4">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-gray-200" />
+          </div>
+          <div className="relative flex justify-center text-xs">
+            <span className="px-2 bg-white text-gray-400">or add manually</span>
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -157,13 +247,13 @@ function AddAccountModal({ isOpen, onClose, onAdd }) {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
-          <p className="text-sm text-gray-500 mb-4">
-            Note: For full automation, you'll need to capture cookies from the extension while logged into this Reddit account.
+          <p className="text-xs text-gray-400 mb-4">
+            Manual accounts won't have cookies — you'll need to capture them later for automation to work.
           </p>
           <div className="flex justify-end gap-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => { onClose(); setCaptureStatus(null); }}
               className="px-4 py-2 text-gray-600 hover:text-gray-800"
             >
               Cancel
@@ -171,9 +261,9 @@ function AddAccountModal({ isOpen, onClose, onAdd }) {
             <button
               type="submit"
               disabled={loading || !username.trim()}
-              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 disabled:opacity-50"
             >
-              {loading ? 'Adding...' : 'Add Account'}
+              {loading ? 'Adding...' : 'Add Manually'}
             </button>
           </div>
         </form>
@@ -235,6 +325,11 @@ export default function Accounts() {
 
   return (
     <div className="p-6">
+      {/* Multi-account notice */}
+      <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+        The extension detects which Reddit account is logged in and tags DMs accordingly. To send from a different account, log into it on Reddit first. Reply queue items assigned to another account will be skipped until you switch.
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>

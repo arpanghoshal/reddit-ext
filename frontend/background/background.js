@@ -1,5 +1,6 @@
 // --- Import API Client (ES Module) ---
 import * as api from '../lib/api.js';
+import * as cookies from '../lib/cookies.js';
 
 console.log('Reddit Automated DM: Background service worker loaded');
 console.log('API module loaded:', Object.keys(api));
@@ -102,37 +103,58 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.error('No tab ID for DIRECT_SEND_REPLY');
             return;
         }
-        const { targetUser, message, queueItemId, conversationId } = request.data;
-        console.log(`Direct send reply for u/${targetUser} on tab ${tabId}`);
+        const { targetUser, message, queueItemId, conversationId, accountId } = request.data;
+        console.log(`Direct send reply for u/${targetUser} on tab ${tabId}${accountId ? ` via account ${accountId}` : ''}`);
 
-        activeTasks[tabId] = {
-            status: AutomationState.TYPING_MESSAGE,
-            data: {
-                targetUser,
-                message,
-                queueItemId: queueItemId || null,
-                conversationId: conversationId || null,
-                isReply: true
-            },
-            retries: 0
+        // Detect current account and warn if mismatched
+        const doSend = async () => {
+            // Detect who is currently logged in and tag the DM with that account
+            const detected = await cookies.detectCurrentAccount(true);
+            const effectiveAccountId = accountId || detected.accountId;
+
+            if (accountId && detected.accountId && accountId !== detected.accountId) {
+                // Wrong account logged in — warn but still send (user might know what they're doing)
+                const check = await cookies.checkAccountMatch(accountId);
+                console.warn('Account mismatch:', check.reason);
+                chrome.tabs.sendMessage(tabId, {
+                    action: 'SHOW_TOAST',
+                    message: check.reason || 'Wrong Reddit account logged in for this DM.',
+                    type: 'warning'
+                }).catch(() => {});
+            }
+
+            activeTasks[tabId] = {
+                status: AutomationState.TYPING_MESSAGE,
+                data: {
+                    targetUser,
+                    message,
+                    queueItemId: queueItemId || null,
+                    conversationId: conversationId || null,
+                    accountId: effectiveAccountId || null,
+                    isReply: true
+                },
+                retries: 0
+            };
+
+            // Send combined find-and-send command. The content script handles
+            // the entire flow: find user → open conversation → type → send.
+            // We set status to TYPING_MESSAGE so handleStepCompletion's
+            // TYPE_MESSAGE success handler fires on completion.
+            setTimeout(() => {
+                if (activeTasks[tabId]?.status === AutomationState.TYPING_MESSAGE) {
+                    chrome.tabs.sendMessage(tabId, {
+                        action: 'EXECUTE_ACTION',
+                        command: 'DIRECT_CHAT_SEND',
+                        targetUser: targetUser,
+                        text: message
+                    }).catch(err => {
+                        console.error('Failed to send DIRECT_CHAT_SEND:', err);
+                    });
+                }
+            }, 3000);
         };
 
-        // Send combined find-and-send command. The content script handles
-        // the entire flow: find user → open conversation → type → send.
-        // We set status to TYPING_MESSAGE so handleStepCompletion's
-        // TYPE_MESSAGE success handler fires on completion.
-        setTimeout(() => {
-            if (activeTasks[tabId]?.status === AutomationState.TYPING_MESSAGE) {
-                chrome.tabs.sendMessage(tabId, {
-                    action: 'EXECUTE_ACTION',
-                    command: 'DIRECT_CHAT_SEND',
-                    targetUser: targetUser,
-                    text: message
-                }).catch(err => {
-                    console.error('Failed to send DIRECT_CHAT_SEND:', err);
-                });
-            }
-        }, 3000);
+        doSend();
     }
 
     if (request.action === 'START_SUBREDDIT_AUTOMATION') {
@@ -682,7 +704,7 @@ function handleStepCompletion(tabId, result) {
                 }
             }
 
-            // Log DM to Supabase
+            // Log DM to Supabase (tagged with the current logged-in account)
             const queue = subredditQueues[tabId];
             api.logDM({
                 recipientUsername: task.data.targetUser,
@@ -692,7 +714,8 @@ function handleStepCompletion(tabId, result) {
                 messageContent: task.data.message,
                 status: 'sent',
                 automationType: task.data.isReply ? 'reply' : (queue ? 'batch' : 'single'),
-                sessionId: queue ? queue.sessionId : null
+                sessionId: queue ? queue.sessionId : null,
+                accountId: task.data.accountId || cookies.getCurrentAccountId() || null
             });
 
             // Show success toast
@@ -1103,9 +1126,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'SYNC_CHAT_MESSAGES') {
         const syncData = request.data;
         if (syncData && syncData.participantUsername && syncData.messages) {
-            api.syncConversation({
-                participantUsername: syncData.participantUsername,
-                messages: syncData.messages
+            // Auto-detect current logged-in account and tag the sync
+            cookies.detectCurrentAccount().then(detected => {
+                return api.syncConversation({
+                    participantUsername: syncData.participantUsername,
+                    messages: syncData.messages,
+                    accountId: detected.accountId || null
+                });
             }).then(result => {
                 console.log('Chat sync completed:', result);
                 sendResponse({ success: true, data: result });
@@ -1144,6 +1171,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 isPolling: !!alarm,
                 isProcessing: replyQueueProcessing
             });
+        });
+        return true;
+    }
+
+    if (request.action === 'CAPTURE_REDDIT_COOKIES') {
+        // Capture current browser Reddit cookies + detect logged-in username
+        cookies.captureCurrentCookies().then(result => {
+            sendResponse(result);
+        }).catch(err => {
+            sendResponse({ cookies: [], username: null, error: err.message });
         });
         return true;
     }
@@ -1223,6 +1260,33 @@ async function stopReplyQueuePolling() {
 
 async function processReplyQueueItem(item) {
     console.log(`Processing reply queue item: ${item.id} to u/${item.recipientUsername}`);
+
+    // Detect current account and warn if mismatched with the assigned account
+    const detected = await cookies.detectCurrentAccount(true);
+    if (item.accountId && detected.accountId && item.accountId !== detected.accountId) {
+        const check = await cookies.checkAccountMatch(item.accountId);
+        console.warn('Reply queue account mismatch:', check.reason);
+
+        // Notify user via browser notification
+        chrome.notifications.create(`account-mismatch-${item.id}`, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icons/icon.svg'),
+            title: 'Reply skipped — wrong account',
+            message: `Reply to u/${item.recipientUsername} needs u/${check.expectedUsername || '???'} but you're logged in as u/${detected.username}. Switch accounts on Reddit to send it.`
+        });
+
+        // Also show toast on any open Reddit tab
+        const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+        if (tabs[0]?.id) {
+            chrome.tabs.sendMessage(tabs[0].id, {
+                action: 'SHOW_TOAST',
+                message: `Reply to u/${item.recipientUsername} skipped — log in as u/${check.expectedUsername || '???'} to send it.`,
+                type: 'warning'
+            }).catch(() => {});
+        }
+
+        return;
+    }
 
     // Find an active Reddit tab or create one
     const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });

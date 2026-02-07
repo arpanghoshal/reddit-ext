@@ -37,6 +37,17 @@ function ConversationList({ conversations, selected, onSelect }) {
               <span className="text-green-600">Has reply</span>
             )}
           </div>
+          <div className="mt-1">
+            {conv.accountUsername ? (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600 border border-indigo-100">
+                u/{conv.accountUsername}
+              </span>
+            ) : (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-500 border border-red-100">
+                No account
+              </span>
+            )}
+          </div>
           {conv.lastMessageAt && (
             <p className="text-xs text-gray-400 mt-1">
               Last: {new Date(conv.lastMessageAt).toLocaleDateString()}
@@ -48,7 +59,7 @@ function ConversationList({ conversations, selected, onSelect }) {
   );
 }
 
-function ConversationDetail({ conversation, onUpdate }) {
+function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
   const [messages, setMessages] = useState([]);
   const [suggestion, setSuggestion] = useState('');
   const [loading, setLoading] = useState(false);
@@ -108,6 +119,15 @@ function ConversationDetail({ conversation, onUpdate }) {
     }
   };
 
+  const assignAccount = async (accountId) => {
+    try {
+      await api.updateConversation(conversation.id, { accountId: accountId || null });
+      onUpdate();
+    } catch (err) {
+      console.error('Failed to assign account:', err);
+    }
+  };
+
   const updateStatus = async (newStatus) => {
     try {
       await api.updateConversation(conversation.id, { status: newStatus });
@@ -134,7 +154,8 @@ function ConversationDetail({ conversation, onUpdate }) {
         recipientUsername: conversation.participantUsername,
         generatedMessage: suggestion || replyText,
         editedMessage: replyText !== suggestion ? replyText : null,
-        status: autoApprove ? 'approved' : 'pending'
+        status: autoApprove ? 'approved' : 'pending',
+        accountId: conversation.accountId || null
       });
 
       if (autoApprove) {
@@ -143,7 +164,8 @@ function ConversationDetail({ conversation, onUpdate }) {
           conversation.participantUsername,
           replyText,
           queueItem?.id || null,
-          conversation.id
+          conversation.id,
+          conversation.accountId || null
         );
         showToast('Opening Reddit to send reply... Make sure the extension is installed.');
       } else {
@@ -191,7 +213,23 @@ function ConversationDetail({ conversation, onUpdate }) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">u/{conversation.participantUsername}</h2>
-            <p className="text-sm text-gray-500">{conversation.totalMessages} messages</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-sm text-gray-500">{conversation.totalMessages} messages</span>
+              <select
+                value={conversation.accountId || ''}
+                onChange={(e) => assignAccount(e.target.value)}
+                className={`px-2 py-0.5 rounded text-xs font-medium border ${
+                  conversation.accountId
+                    ? 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                    : 'bg-red-50 text-red-500 border-red-200'
+                }`}
+              >
+                <option value="">No account</option>
+                {accounts.map(a => (
+                  <option key={a.id} value={a.id}>u/{a.username}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <select
             value={conversation.status}
@@ -248,6 +286,13 @@ function ConversationDetail({ conversation, onUpdate }) {
           <p className="text-xs text-yellow-700 mt-1 truncate">
             {queuedReply.finalMessage}
           </p>
+        </div>
+      )}
+
+      {/* Account notice for reply */}
+      {conversation.accountUsername && (
+        <div className="mx-4 mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+          This reply will be sent from <span className="font-semibold">u/{conversation.accountUsername}</span>. Make sure that account is logged in on Reddit before sending.
         </div>
       )}
 
@@ -353,7 +398,14 @@ export default function Inbox() {
   const [stats, setStats] = useState(null);
   const [selected, setSelected] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [accountFilter, setAccountFilter] = useState('all');
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Load accounts list for filter dropdown
+  useEffect(() => {
+    api.getAccountsSummary().then(setAccounts).catch(() => {});
+  }, []);
 
   const loadData = async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
@@ -361,6 +413,7 @@ export default function Inbox() {
       const [convList, convStats] = await Promise.all([
         api.getConversations({
           status: filter !== 'all' ? filter : undefined,
+          accountId: accountFilter !== 'all' ? accountFilter : undefined,
           limit: 100
         }),
         api.getConversationStats()
@@ -385,7 +438,7 @@ export default function Inbox() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [filter]);
+  }, [filter, accountFilter]);
 
   const filters = [
     { value: 'all', label: 'All' },
@@ -427,6 +480,22 @@ export default function Inbox() {
           ))}
         </div>
 
+        {/* Account Filter */}
+        {accounts.length > 1 && (
+          <div className="px-3 py-2 border-b border-gray-100">
+            <select
+              value={accountFilter}
+              onChange={(e) => setAccountFilter(e.target.value)}
+              className="w-full px-2 py-1 border border-gray-200 rounded text-xs text-gray-600"
+            >
+              <option value="all">All accounts</option>
+              {accounts.map(a => (
+                <option key={a.id} value={a.id}>u/{a.username}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Conversation List */}
         <div className="flex-1 overflow-auto">
           {loading ? (
@@ -450,6 +519,7 @@ export default function Inbox() {
         <ConversationDetail
           conversation={selected}
           onUpdate={loadData}
+          accounts={accounts}
         />
       </div>
     </div>

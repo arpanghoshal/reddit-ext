@@ -92,12 +92,15 @@ async def _create_or_update_conversation(
 ) -> None:
     """Create or update conversation when DM is sent"""
     try:
-        # Check if conversation already exists for this recipient
+        # Check if conversation already exists for this recipient (scoped to account)
         query = client.table("conversations").select("id, total_messages").eq(
             "participant_username", recipient
         )
         if team_id:
             query = query.eq("team_id", team_id)
+        account_id = data.get("accountId")
+        if account_id:
+            query = query.eq("account_id", account_id)
         existing = query.limit(1).execute()
 
         conversation_id = None
@@ -165,14 +168,20 @@ async def get_dm_history(limit: int = 50, team_id: Optional[str] = None) -> List
         return []
 
     try:
-        query = client.table("dm_history").select("*").order(
+        query = client.table("dm_history").select("*, reddit_accounts(id, username)").order(
             "created_at", desc=True
         )
         if team_id:
             query = query.eq("team_id", team_id)
         result = query.limit(limit).execute()
 
-        return result.data if result.data else []
+        if not result.data:
+            return []
+        # Extract account username into flat structure
+        for row in result.data:
+            account = row.pop("reddit_accounts", None)
+            row["account_username"] = account.get("username") if account else None
+        return result.data
     except Exception as e:
         print(f"Failed to get DM history: {e}")
         return []

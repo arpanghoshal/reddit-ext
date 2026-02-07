@@ -27,9 +27,11 @@ def transform_queue_item(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
     if not row:
         return None
 
+    account = row.get("reddit_accounts")
     return {
         "id": row.get("id"),
         "accountId": row.get("account_id"),
+        "accountUsername": account.get("username") if account else None,
         "recipientUsername": row.get("recipient_username"),
         "subreddit": row.get("subreddit"),
         "postUrl": row.get("post_url"),
@@ -107,7 +109,7 @@ async def get_queue(filters: Dict[str, Any] = None, team_id: Optional[str] = Non
     filters = filters or {}
 
     try:
-        query = client.table("dm_queue").select("*").order("created_at", desc=True)
+        query = client.table("dm_queue").select("*, reddit_accounts(id, username)").order("created_at", desc=True)
 
         # Filter by team_id (required for multi-tenancy)
         if team_id:

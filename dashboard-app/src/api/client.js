@@ -215,6 +215,11 @@ export async function getPendingReplyForConversation(conversationId) {
 }
 
 // Accounts
+export async function getAccountsSummary() {
+    const result = await apiRequest('/accounts/summary');
+    return result.data;
+}
+
 export async function getAccounts() {
     const result = await apiRequest('/accounts');
     return result.data;
@@ -396,8 +401,8 @@ export async function getQuotaStatus() {
 // Extension Direct Send
 // Opens Reddit chat page with reply data encoded in the URL hash.
 // The Chrome extension's content script detects #__rdm_send= and triggers automation.
-export function triggerExtensionSend(username, message, queueItemId, conversationId) {
-    const payload = { username, message, queueItemId, conversationId };
+export function triggerExtensionSend(username, message, queueItemId, conversationId, accountId = null) {
+    const payload = { username, message, queueItemId, conversationId, accountId };
     const encoded = btoa(JSON.stringify(payload));
     const url = `https://www.reddit.com/chat/#__rdm_send=${encoded}`;
     window.open(url, '_blank');

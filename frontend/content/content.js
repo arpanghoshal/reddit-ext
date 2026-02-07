@@ -1424,12 +1424,53 @@ function checkDirectSendInstructions() {
                 targetUser,
                 message: payload.message,
                 queueItemId: payload.queueItemId,
-                conversationId: payload.conversationId
+                conversationId: payload.conversationId,
+                accountId: payload.accountId || null
             }
         });
     } catch (err) {
         console.error('Failed to parse direct send instructions:', err);
     }
+}
+
+// --- Cookie Capture from Dashboard ---
+// Detects #__rdm_capture_cookies in the URL hash (set by dashboard "Capture from Browser").
+// Asks background to capture cookies + detect username, then sends result back.
+function checkCookieCaptureInstructions() {
+    const hash = window.location.hash;
+    if (!hash || !hash.startsWith('#__rdm_capture_cookies')) return;
+
+    // Clean the hash from URL
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+
+    console.log('Cookie capture detected');
+
+    chrome.runtime.sendMessage({ action: 'CAPTURE_REDDIT_COOKIES' }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.error('Cookie capture failed:', chrome.runtime.lastError.message);
+            return;
+        }
+
+        if (response && response.cookies && response.cookies.length > 0) {
+            // Store temporarily so the dashboard can pick it up
+            chrome.storage.local.set({
+                capturedCookies: response.cookies,
+                capturedUsername: response.username,
+                capturedAt: Date.now()
+            }, () => {
+                console.log(`Cookies captured for u/${response.username || 'unknown'} (${response.cookies.length} cookies)`);
+                // Notify via storage event — the dashboard polls for this
+            });
+        } else {
+            console.warn('No cookies captured. Make sure you are logged into Reddit.');
+            chrome.storage.local.set({
+                capturedCookies: null,
+                capturedUsername: null,
+                capturedAt: Date.now(),
+                capturedError: 'No Reddit cookies found. Please log into Reddit first.'
+            });
+        }
+    });
 }
 
 // --- Initialization ---
@@ -1496,6 +1537,9 @@ async function init() {
 
     // Check for direct-send instructions from dashboard (via URL hash)
     checkDirectSendInstructions();
+
+    // Check for cookie capture instructions from dashboard (via URL hash)
+    checkCookieCaptureInstructions();
 
     // Check automation status on load
     chrome.runtime.sendMessage({ action: 'GET_AUTOMATION_STATUS' }, (status) => {
@@ -2148,7 +2192,9 @@ function makeDraggable(element, sidebar) {
                 console.log('🔒 Sidebar toggle prevented - automation is running');
                 return;
             }
-            sidebar.classList.toggle('hidden');
+            const newState = sidebar.classList.contains('hidden');
+            chrome.storage.local.set({ isSidebarOpen: newState });
+            toggleSidebar(newState);
         }
     }
 }

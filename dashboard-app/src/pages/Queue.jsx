@@ -59,6 +59,15 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[item.status]}`}>
                 {item.status}
               </span>
+              {item.accountUsername ? (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600 border border-indigo-100">
+                  u/{item.accountUsername}
+                </span>
+              ) : (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-600 border border-amber-100">
+                  No account
+                </span>
+              )}
               {item.classificationScore && !isReplyQueue && (
                 <span className={`text-sm font-medium ${scoreColor}`}>
                   {Math.round(item.classificationScore)}% match
@@ -141,7 +150,14 @@ export default function Queue() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [messageType, setMessageType] = useState('outreach');
+  const [accountFilter, setAccountFilter] = useState('all');
+  const [accounts, setAccounts] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
+
+  // Load accounts list for filter dropdown
+  useEffect(() => {
+    api.getAccountsSummary().then(setAccounts).catch(() => {});
+  }, []);
 
   const loadData = async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
@@ -151,6 +167,7 @@ export default function Queue() {
         api.getQueue({
           status: filter !== 'all' ? filter : undefined,
           messageType: messageType,
+          accountId: accountFilter !== 'all' ? accountFilter : undefined,
           limit: 100
         }),
         api.getQueueStats({ messageType })
@@ -177,7 +194,7 @@ export default function Queue() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [filter, messageType]);
+  }, [filter, messageType, accountFilter]);
 
   const handleApprove = async (id) => {
     try {
@@ -239,7 +256,8 @@ export default function Queue() {
       item.recipientUsername,
       message,
       item.id,
-      item.conversationId || null
+      item.conversationId || null,
+      item.accountId || null
     );
   };
 
@@ -329,6 +347,18 @@ export default function Queue() {
             )}
           </button>
         ))}
+        {accounts.length > 1 && (
+          <select
+            value={accountFilter}
+            onChange={(e) => setAccountFilter(e.target.value)}
+            className="ml-2 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 bg-white"
+          >
+            <option value="all">All accounts</option>
+            {accounts.map(a => (
+              <option key={a.id} value={a.id}>u/{a.username}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Bulk Actions */}

@@ -194,6 +194,7 @@ class ConversationUpdateRequest(BaseModel):
     lastMessageAt: Optional[str] = None
     lastMessageDirection: Optional[str] = None
     totalMessages: Optional[int] = None
+    accountId: Optional[str] = None
 
 
 class MessageAddRequest(BaseModel):
@@ -607,6 +608,15 @@ async def bulk_reject_route(request: Request, body: BulkRejectRequest):
 
 
 # --- Account Routes ---
+
+@router.get("/accounts/summary")
+async def get_accounts_summary_route(request: Request):
+    """Lightweight endpoint returning only id/username/status for dropdowns"""
+    team_id = get_current_team_id(request)
+    accounts_list = await accounts.get_accounts({}, team_id=team_id)
+    summary = [{"id": a["id"], "username": a["username"], "status": a["status"]} for a in accounts_list]
+    return {"success": True, "data": summary}
+
 
 @router.get("/accounts")
 async def get_accounts_route(
