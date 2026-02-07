@@ -58,13 +58,15 @@ async def signup(request: SignupRequest):
         client = get_supabase_client()
 
         # Sign up user with Supabase Auth
+        redirect_url = os.getenv("SITE_URL", "http://localhost:5173")
         response = client.auth.sign_up({
             "email": request.email,
             "password": request.password,
             "options": {
                 "data": {
                     "full_name": request.full_name or request.email.split("@")[0]
-                }
+                },
+                "email_redirect_to": redirect_url
             }
         })
 

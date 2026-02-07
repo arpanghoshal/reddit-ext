@@ -1041,6 +1041,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    if (request.action === 'SIGNUP') {
+        api.signup(request.email, request.password, request.fullName)
+            .then(result => sendResponse({ success: true, ...result }))
+            .catch(err => sendResponse({ error: err.message }));
+        return true;
+    }
+
     if (request.action === 'LOGOUT') {
         // Stop reply queue polling on logout
         stopReplyQueuePolling();

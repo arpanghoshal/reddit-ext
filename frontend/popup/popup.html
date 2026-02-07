@@ -19,7 +19,10 @@
 
         <!-- Login Section (shown when not authenticated) -->
         <div id="login-section" style="display:none;">
-            <div id="login-error" class="login-error" style="display:none;"></div>
+            <div id="auth-error" class="login-error" style="display:none;"></div>
+            <div id="auth-success" class="auth-success" style="display:none;"></div>
+
+            <!-- Sign In Form -->
             <form id="login-form">
                 <div class="config-field">
                     <label for="login-email">Email</label>
@@ -32,10 +35,27 @@
                 <button type="submit" id="login-btn" class="btn-primary btn-full">Sign In</button>
             </form>
 
-            <div class="config-field" style="margin-top:12px;">
-                <label for="login-backend-url">Backend URL</label>
-                <input type="text" id="login-backend-url" placeholder="http://localhost:3000">
-            </div>
+            <!-- Sign Up Form -->
+            <form id="signup-form" style="display:none;">
+                <div class="config-field">
+                    <label for="signup-name">Full Name</label>
+                    <input type="text" id="signup-name" placeholder="John Doe">
+                </div>
+                <div class="config-field">
+                    <label for="signup-email">Email</label>
+                    <input type="email" id="signup-email" placeholder="you@example.com" required>
+                </div>
+                <div class="config-field">
+                    <label for="signup-password">Password</label>
+                    <input type="password" id="signup-password" placeholder="Min 6 characters" minlength="6" required>
+                </div>
+                <button type="submit" id="signup-btn" class="btn-primary btn-full">Create Account</button>
+            </form>
+
+            <p class="auth-toggle">
+                <span id="toggle-text">Don't have an account?</span>
+                <a href="#" id="auth-toggle-link">Sign Up</a>
+            </p>
         </div>
 
         <!-- Main Content (shown when authenticated) -->

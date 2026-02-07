@@ -40,10 +40,10 @@ async function getApiConfig() {
     }
 
     const data = await chrome.storage.local.get([
-        'backendUrl', 'apiKey', 'accessToken', 'refreshToken', 'expiresAt', 'teamId'
+        'apiKey', 'accessToken', 'refreshToken', 'expiresAt', 'teamId'
     ]);
 
-    const baseUrl = (data.backendUrl || 'http://localhost:3000').replace(/\/$/, '');
+    const baseUrl = 'http://localhost:3000';
 
     apiConfig = {
         baseUrl,
@@ -93,6 +93,44 @@ async function login(email, password) {
     apiConfig.teamId = authData.teamId;
 
     return { user: data.user, teams: data.teams, currentTeam: data.current_team };
+}
+
+async function signup(email, password, fullName) {
+    // Call Supabase Auth directly so the email verification link
+    // redirects to the dashboard frontend (not the backend API)
+    const SUPABASE_URL = 'https://bxtgmfkwcjpdjqoaujdi.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4dGdtZmt3Y2pwZGpxb2F1amRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk4ODAxMzIsImV4cCI6MjA4NTQ1NjEzMn0.70l_c6UXpqXlz8dh_nnLnxNihuIjbyI2sKIucSBv4qA';
+    const REDIRECT_URL = 'http://localhost:5173';
+
+    const url = `${SUPABASE_URL}/auth/v1/signup?redirect_to=${encodeURIComponent(REDIRECT_URL)}`;
+    const response = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_ANON_KEY
+        },
+        body: JSON.stringify({
+            email,
+            password,
+            data: { full_name: fullName || email.split('@')[0] }
+        })
+    }, 10000);
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ msg: 'Signup failed' }));
+        throw new Error(error.msg || error.error_description || 'Signup failed');
+    }
+
+    const data = await response.json();
+
+    if (!data.id) {
+        throw new Error('Failed to create account');
+    }
+
+    return {
+        message: 'Account created! Check your email to verify, then sign in.',
+        user: { id: data.id, email: data.email }
+    };
 }
 
 async function logout() {
@@ -1064,6 +1102,7 @@ async function queueFollowUp(conversationId, message, accountId) {
 export {
     // Authentication
     login,
+    signup,
     logout,
     isAuthenticated,
     getAuthInfo,

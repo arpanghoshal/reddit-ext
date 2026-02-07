@@ -11,11 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadConfig() {
-    const data = await chrome.storage.local.get(['backendUrl']);
-    const backendUrl = data.backendUrl || DEFAULT_BACKEND_URL;
-
-    const loginBackendInput = document.getElementById('login-backend-url');
-    if (loginBackendInput) loginBackendInput.value = backendUrl;
+    // Backend URL is hardcoded via DEFAULT_BACKEND_URL
 }
 
 async function checkAuthState() {
@@ -98,8 +94,7 @@ async function loadStats() {
 
 async function checkConnection() {
     const statusDot = document.getElementById('connection-status');
-    const data = await chrome.storage.local.get(['backendUrl', 'accessToken']);
-    const backendUrl = data.backendUrl || DEFAULT_BACKEND_URL;
+    const backendUrl = DEFAULT_BACKEND_URL;
 
     try {
         const response = await fetch(`${backendUrl}/api/status`);
@@ -132,25 +127,63 @@ function showToast(message, type = 'info') {
     setTimeout(() => toast.remove(), 3000);
 }
 
+function clearAuthMessages() {
+    const errorEl = document.getElementById('auth-error');
+    const successEl = document.getElementById('auth-success');
+    errorEl.style.display = 'none';
+    successEl.style.display = 'none';
+}
+
+function showAuthError(message) {
+    const errorEl = document.getElementById('auth-error');
+    errorEl.textContent = message;
+    errorEl.style.display = 'block';
+    document.getElementById('auth-success').style.display = 'none';
+}
+
+function showAuthSuccess(message) {
+    const successEl = document.getElementById('auth-success');
+    successEl.textContent = message;
+    successEl.style.display = 'block';
+    document.getElementById('auth-error').style.display = 'none';
+}
+
 function initEventListeners() {
+    // Auth toggle (switch between Sign In / Sign Up)
+    document.getElementById('auth-toggle-link').addEventListener('click', (e) => {
+        e.preventDefault();
+        const loginForm = document.getElementById('login-form');
+        const signupForm = document.getElementById('signup-form');
+        const toggleText = document.getElementById('toggle-text');
+        const toggleLink = document.getElementById('auth-toggle-link');
+
+        clearAuthMessages();
+
+        if (loginForm.style.display !== 'none') {
+            loginForm.style.display = 'none';
+            signupForm.style.display = 'block';
+            toggleText.textContent = 'Already have an account?';
+            toggleLink.textContent = 'Sign In';
+        } else {
+            loginForm.style.display = 'block';
+            signupForm.style.display = 'none';
+            toggleText.textContent = "Don't have an account?";
+            toggleLink.textContent = 'Sign Up';
+        }
+    });
+
     // Login form
     document.getElementById('login-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const email = document.getElementById('login-email').value;
         const password = document.getElementById('login-password').value;
         const loginBtn = document.getElementById('login-btn');
-        const errorEl = document.getElementById('login-error');
 
-        // Save backend URL from login form before attempting login
-        const loginBackendUrl = document.getElementById('login-backend-url').value || DEFAULT_BACKEND_URL;
-        await chrome.storage.local.set({ backendUrl: loginBackendUrl });
-
-        errorEl.style.display = 'none';
+        clearAuthMessages();
         loginBtn.disabled = true;
         loginBtn.textContent = 'Signing in...';
 
         try {
-            // Call backend login via background script
             const response = await chrome.runtime.sendMessage({
                 action: 'LOGIN',
                 email,
@@ -169,11 +202,52 @@ function initEventListeners() {
             await loadStats();
             await checkConnection();
         } catch (err) {
-            errorEl.textContent = err.message || 'Login failed';
-            errorEl.style.display = 'block';
+            showAuthError(err.message || 'Login failed');
         } finally {
             loginBtn.disabled = false;
             loginBtn.textContent = 'Sign In';
+        }
+    });
+
+    // Signup form
+    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fullName = document.getElementById('signup-name').value;
+        const email = document.getElementById('signup-email').value;
+        const password = document.getElementById('signup-password').value;
+        const signupBtn = document.getElementById('signup-btn');
+
+        clearAuthMessages();
+        signupBtn.disabled = true;
+        signupBtn.textContent = 'Creating account...';
+
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'SIGNUP',
+                email,
+                password,
+                fullName
+            });
+
+            if (response && response.error) {
+                throw new Error(response.error);
+            }
+
+            showAuthSuccess(response.message || 'Account created! Check your email to verify, then sign in.');
+
+            // Switch to login form so user can sign in
+            document.getElementById('signup-form').style.display = 'none';
+            document.getElementById('login-form').style.display = 'block';
+            document.getElementById('toggle-text').textContent = "Don't have an account?";
+            document.getElementById('auth-toggle-link').textContent = 'Sign Up';
+
+            // Pre-fill the login email
+            document.getElementById('login-email').value = email;
+        } catch (err) {
+            showAuthError(err.message || 'Signup failed');
+        } finally {
+            signupBtn.disabled = false;
+            signupBtn.textContent = 'Create Account';
         }
     });
 

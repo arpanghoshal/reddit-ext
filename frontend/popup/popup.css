@@ -223,6 +223,35 @@ button {
     margin-bottom: 12px;
 }
 
+/* Auth Toggle */
+.auth-toggle {
+    text-align: center;
+    font-size: 12px;
+    color: #818384;
+    margin-top: 12px;
+}
+
+.auth-toggle a {
+    color: #ff4500;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.auth-toggle a:hover {
+    text-decoration: underline;
+}
+
+/* Auth Success */
+.auth-success {
+    padding: 8px 12px;
+    background: rgba(70, 209, 96, 0.1);
+    border: 1px solid rgba(70, 209, 96, 0.4);
+    border-radius: 6px;
+    color: #46d160;
+    font-size: 12px;
+    margin-bottom: 12px;
+}
+
 /* Team Selector */
 .team-selector {
     display: flex;
