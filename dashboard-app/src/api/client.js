@@ -27,10 +27,24 @@ function getCurrentTeamId() {
     return localStorage.getItem('currentTeamId') || '';
 }
 
-// Get Supabase access token
+// Cached access token - updated on auth state changes
+let _cachedAccessToken = null;
+
+// Listen for session changes and cache the token
+supabase.auth.onAuthStateChange((_event, session) => {
+    _cachedAccessToken = session?.access_token || null;
+});
+
+// Get Supabase access token (uses cache, falls back to getSession)
 async function getAccessToken() {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token || null;
+    if (_cachedAccessToken) return _cachedAccessToken;
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        _cachedAccessToken = session?.access_token || null;
+        return _cachedAccessToken;
+    } catch {
+        return null;
+    }
 }
 
 async function apiRequest(endpoint, options = {}) {
@@ -130,8 +144,15 @@ export async function getQueue(filters = {}) {
     return result.data;
 }
 
-export async function getQueueStats() {
-    const result = await apiRequest('/queue/stats');
+export async function getQueueStats(filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const qs = params.toString();
+    const result = await apiRequest(`/queue/stats${qs ? `?${qs}` : ''}`);
     return result.data;
 }
 
@@ -269,37 +290,6 @@ export async function getReplySuggestion(id) {
     return result.data.suggestion;
 }
 
-// Rules
-export async function getRules() {
-    const result = await apiRequest('/rules');
-    return result.data;
-}
-
-export async function createRule(data) {
-    const result = await apiRequest('/rules', {
-        method: 'POST',
-        body: JSON.stringify(data)
-    });
-    return result.data;
-}
-
-export async function updateRule(id, data) {
-    const result = await apiRequest(`/rules/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(data)
-    });
-    return result.data;
-}
-
-export async function deleteRule(id) {
-    await apiRequest(`/rules/${id}`, { method: 'DELETE' });
-}
-
-export async function getRuleTemplates() {
-    const result = await apiRequest('/rules/templates');
-    return result.data;
-}
-
 // Safety
 export async function getSafetyEvents(filters = {}) {
     const params = new URLSearchParams();
@@ -362,48 +352,6 @@ export async function saveAutomationSettings(data) {
     return result.data;
 }
 
-// Campaigns
-export async function getCampaigns(filters = {}) {
-    const params = new URLSearchParams();
-    Object.entries(filters).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
-            params.append(key, value);
-        }
-    });
-    const result = await apiRequest(`/campaigns?${params}`);
-    return result.data;
-}
-
-export async function getCampaign(id) {
-    const result = await apiRequest(`/campaigns/${id}`);
-    return result.data;
-}
-
-export async function createCampaign(data) {
-    const result = await apiRequest('/campaigns', {
-        method: 'POST',
-        body: JSON.stringify(data)
-    });
-    return result.data;
-}
-
-export async function updateCampaign(id, data) {
-    const result = await apiRequest(`/campaigns/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(data)
-    });
-    return result.data;
-}
-
-export async function deleteCampaign(id) {
-    await apiRequest(`/campaigns/${id}`, { method: 'DELETE' });
-}
-
-export async function getCampaignStats(id) {
-    const result = await apiRequest(`/campaigns/${id}/stats`);
-    return result.data;
-}
-
 // Skipped Posts
 export async function getSkippedPosts(filters = {}) {
     const params = new URLSearchParams();
@@ -443,4 +391,14 @@ export async function getTeamAnalytics(period = '30d') {
 export async function getQuotaStatus() {
     const result = await apiRequest('/quotas/status');
     return result.data;
+}
+
+// Extension Direct Send
+// Opens Reddit chat page with reply data encoded in the URL hash.
+// The Chrome extension's content script detects #__rdm_send= and triggers automation.
+export function triggerExtensionSend(username, message, queueItemId, conversationId) {
+    const payload = { username, message, queueItemId, conversationId };
+    const encoded = btoa(JSON.stringify(payload));
+    const url = `https://www.reddit.com/chat/#__rdm_send=${encoded}`;
+    window.open(url, '_blank');
 }

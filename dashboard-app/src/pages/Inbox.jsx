@@ -60,21 +60,29 @@ function ConversationDetail({ conversation, onUpdate }) {
 
   useEffect(() => {
     if (conversation) {
-      loadConversation();
+      loadConversation(true);
       checkQueuedReply();
+
+      // Auto-refresh messages and queue status every 10s
+      const interval = setInterval(() => {
+        loadConversation();
+        checkQueuedReply();
+      }, 10000);
+
+      return () => clearInterval(interval);
     }
   }, [conversation?.id]);
 
-  const loadConversation = async () => {
+  const loadConversation = async (showSpinner = false) => {
     if (!conversation) return;
-    setLoading(true);
+    if (showSpinner) setLoading(true);
     try {
       const data = await api.getConversation(conversation.id);
       setMessages(data.messages || []);
     } catch (err) {
       console.error('Failed to load conversation:', err);
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   };
 
@@ -121,17 +129,30 @@ function ConversationDetail({ conversation, onUpdate }) {
     }
     setIsQueueing(true);
     try {
-      await api.addReplyToQueue({
+      const queueItem = await api.addReplyToQueue({
         conversationId: conversation.id,
         recipientUsername: conversation.participantUsername,
         generatedMessage: suggestion || replyText,
         editedMessage: replyText !== suggestion ? replyText : null,
         status: autoApprove ? 'approved' : 'pending'
       });
+
+      if (autoApprove) {
+        // "Send Now": open Reddit profile tab so the extension sends the message
+        api.triggerExtensionSend(
+          conversation.participantUsername,
+          replyText,
+          queueItem?.id || null,
+          conversation.id
+        );
+        showToast('Opening Reddit to send reply... Make sure the extension is installed.');
+      } else {
+        showToast('Reply added to queue. Approve it in the Queue page, then click Send.');
+      }
+
       setReplyText('');
       setSuggestion('');
       await checkQueuedReply();
-      showToast(autoApprove ? 'Reply approved and queued for sending!' : 'Reply added to queue!');
     } catch (err) {
       console.error('Failed to add to queue:', err);
       showToast('Failed to add to queue', 'error');
@@ -334,8 +355,8 @@ export default function Inbox() {
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
     try {
       const [convList, convStats] = await Promise.all([
         api.getConversations({
@@ -349,12 +370,21 @@ export default function Inbox() {
     } catch (err) {
       console.error('Failed to load conversations:', err);
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(true);
+    const interval = setInterval(() => loadData(), 15000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [filter]);
 
   const filters = [

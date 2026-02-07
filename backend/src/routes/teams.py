@@ -274,14 +274,24 @@ async def list_members(request: Request, team_id: str):
         if not membership.data:
             raise HTTPException(status_code=403, detail="Not a member of this team")
 
-        # Get all members with profile info
+        # Get all members
         members = client.table("team_members").select(
-            "*, profiles(id, email, full_name, avatar_url)"
+            "id, user_id, role, joined_at"
         ).eq("team_id", team_id).execute()
+
+        # Fetch profiles separately (no FK between team_members and profiles)
+        user_ids = [m["user_id"] for m in (members.data or [])]
+        profiles_map = {}
+        if user_ids:
+            profiles_result = client.table("profiles").select(
+                "id, email, full_name, avatar_url"
+            ).in_("id", user_ids).execute()
+            for p in (profiles_result.data or []):
+                profiles_map[p["id"]] = p
 
         member_list = []
         for member in members.data or []:
-            profile = member.get("profiles", {})
+            profile = profiles_map.get(member["user_id"], {})
             member_list.append({
                 "id": member["id"],
                 "user_id": member["user_id"],
@@ -466,13 +476,18 @@ async def invite_member(request: Request, team_id: str, data: InviteMemberReques
         if existing.data:
             raise HTTPException(status_code=400, detail="Email already invited")
 
-        # Check if user is already a member
-        existing_member = client.table("team_members").select(
-            "id, profiles(email)"
-        ).eq("team_id", team_id).execute()
+        # Check if user is already a member by looking up their profile first
+        profile_check = client.table("profiles").select("id").eq(
+            "email", data.email
+        ).execute()
 
-        for member in existing_member.data or []:
-            if member.get("profiles", {}).get("email") == data.email:
+        if profile_check.data:
+            target_user_id = profile_check.data[0]["id"]
+            existing_member = client.table("team_members").select("id").eq(
+                "team_id", team_id
+            ).eq("user_id", target_user_id).execute()
+
+            if existing_member.data:
                 raise HTTPException(status_code=400, detail="User is already a team member")
 
         # Create invitation

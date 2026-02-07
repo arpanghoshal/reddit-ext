@@ -20,7 +20,7 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Reddit Insight",
+    "default_title": "Reddit Automated DM",
     "default_icon": {
       "16": "icons/icon.svg",
       "32": "icons/icon.svg",

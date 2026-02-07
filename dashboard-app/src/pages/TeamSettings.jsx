@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
 import {
   Users,
   Plus,
@@ -18,7 +17,7 @@ import {
 } from 'lucide-react';
 
 export default function TeamSettings() {
-  const { user, teams, currentTeam, refreshTeams, getAccessToken } = useAuth();
+  const { user, teams, currentTeam, switchTeam, refreshTeams, getAccessToken } = useAuth();
   const [activeTab, setActiveTab] = useState('members');
   const [members, setMembers] = useState([]);
   const [invitations, setInvitations] = useState([]);
@@ -57,33 +56,26 @@ export default function TeamSettings() {
     if (!currentTeam) return;
 
     try {
-      const { data, error } = await supabase
-        .from('team_members')
-        .select(`
-          id,
-          user_id,
-          role,
-          joined_at,
-          profiles (
-            id,
-            email,
-            full_name,
-            avatar_url
-          )
-        `)
-        .eq('team_id', currentTeam.id);
+      const token = getAccessToken();
+      const response = await fetch(`/api/teams/${currentTeam.id}/members`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      if (error) throw error;
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || 'Failed to fetch members');
+      }
 
+      const { members: memberList } = await response.json();
       setMembers(
-        data.map((m) => ({
+        (memberList || []).map((m) => ({
           id: m.id,
           userId: m.user_id,
           role: m.role,
           joinedAt: m.joined_at,
-          email: m.profiles?.email,
-          fullName: m.profiles?.full_name,
-          avatarUrl: m.profiles?.avatar_url,
+          email: m.email,
+          fullName: m.full_name,
+          avatarUrl: m.avatar_url,
         }))
       );
     } catch (err) {
@@ -97,13 +89,15 @@ export default function TeamSettings() {
     if (!currentTeam) return;
 
     try {
-      const { data, error } = await supabase
-        .from('team_invitations')
-        .select('id, email, role, expires_at, created_at')
-        .eq('team_id', currentTeam.id);
+      const token = getAccessToken();
+      const response = await fetch(`/api/teams/${currentTeam.id}/invitations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      if (error) throw error;
-      setInvitations(data || []);
+      if (!response.ok) return;
+
+      const { invitations: inviteList } = await response.json();
+      setInvitations(inviteList || []);
     } catch (err) {
       console.error('Error fetching invitations:', err);
     }
@@ -129,10 +123,15 @@ export default function TeamSettings() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Failed to create team');
 
-      setSuccess('Team created successfully!');
       setShowCreateTeam(false);
       setNewTeamName('');
       await refreshTeams();
+
+      // Auto-switch to the newly created team
+      if (data.team?.id) {
+        switchTeam(data.team.id);
+      }
+      setSuccess('Team created successfully!');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -345,7 +344,7 @@ export default function TeamSettings() {
           {teams.map((team) => (
             <button
               key={team.id}
-              onClick={() => {}}
+              onClick={() => switchTeam(team.id)}
               className={`px-4 py-2 rounded-lg border transition-colors ${
                 currentTeam?.id === team.id
                   ? 'bg-[#ff4500]/20 border-[#ff4500] text-[#ff4500]'

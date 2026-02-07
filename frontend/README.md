@@ -1,6 +1,6 @@
-# Reddit Insight Gatherer - Chrome Extension
+# Reddit Automated DM - Chrome Extension
 
-Chrome extension frontend for the Reddit Insight Gatherer.
+Chrome extension frontend for the Reddit Automated DM.
 
 ## Setup
 

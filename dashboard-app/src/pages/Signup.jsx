@@ -72,7 +72,7 @@ export default function Signup() {
     <div className="min-h-screen flex items-center justify-center bg-[#030303] px-4 py-8">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-[#ff4500]">Reddit Insight</h1>
+          <h1 className="text-3xl font-bold text-[#ff4500]">Reddit Automated DM</h1>
           <p className="text-[#818384] mt-2">Create your account</p>
         </div>
 

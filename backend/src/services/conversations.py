@@ -255,7 +255,7 @@ async def update_conversation(conversation_id: str, updates: Dict[str, Any], tea
 
 
 async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Add a message to a conversation"""
+    """Add a message to a conversation (with fingerprint-based deduplication)"""
     client = get_client()
     if not client:
         return None
@@ -263,21 +263,34 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
     try:
         conversation_id = message_data.get("conversationId")
         direction = message_data.get("direction")
+        content = message_data.get("content", "")
         sent_at = message_data.get("sentAt") or datetime.utcnow().isoformat()
 
-        # Insert message
-        msg_result = client.table("messages").insert({
+        # Compute fingerprint for deduplication
+        fingerprint = create_message_fingerprint(content, direction)
+
+        insert_data = {
             "conversation_id": conversation_id,
             "direction": direction,
-            "content": message_data.get("content"),
+            "content": content,
             "sent_at": sent_at,
-            "is_ai_generated": message_data.get("isAiGenerated", False)
-        }).execute()
+            "is_ai_generated": message_data.get("isAiGenerated", False),
+            "fingerprint": fingerprint
+        }
+        if team_id:
+            insert_data["team_id"] = team_id
+
+        # Use upsert with the unique (conversation_id, fingerprint) constraint
+        # to silently skip duplicates from concurrent syncs
+        msg_result = client.table("messages").upsert(
+            insert_data,
+            on_conflict="conversation_id,fingerprint"
+        ).execute()
 
         if not msg_result.data:
             return None
 
-        # Update conversation stats atomically (without reading total_messages first)
+        # Update conversation stats
         conv_update = {
             "last_message_at": sent_at,
             "last_message_direction": direction,

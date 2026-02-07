@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reddit Insight</title>
+    <title>Reddit Automated DM</title>
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -12,78 +12,86 @@
         <div class="header">
             <div class="logo">
                 <img src="../icons/icon.svg" alt="Logo" width="24" height="24">
-                <span>Reddit Insight</span>
+                <span>Reddit Automated DM</span>
             </div>
             <div id="connection-status" class="status-dot disconnected" title="Disconnected"></div>
         </div>
 
-        <!-- Quick Stats -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value" id="stat-today">-</div>
-                <div class="stat-label">Today</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-week">-</div>
-                <div class="stat-label">This Week</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-pending">-</div>
-                <div class="stat-label">Pending</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-replies">-</div>
-                <div class="stat-label">Replies</div>
+        <!-- Login Section (shown when not authenticated) -->
+        <div id="login-section" style="display:none;">
+            <div id="login-error" class="login-error" style="display:none;"></div>
+            <form id="login-form">
+                <div class="config-field">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" placeholder="you@example.com" required>
+                </div>
+                <div class="config-field">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" placeholder="Password" required>
+                </div>
+                <button type="submit" id="login-btn" class="btn-primary btn-full">Sign In</button>
+            </form>
+
+            <div class="config-field" style="margin-top:12px;">
+                <label for="login-backend-url">Backend URL</label>
+                <input type="text" id="login-backend-url" placeholder="http://localhost:3000">
             </div>
         </div>
 
-        <!-- Quick Actions -->
-        <div class="actions">
-            <button id="open-dashboard" class="btn-primary">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="14" width="7" height="7"></rect>
-                    <rect x="3" y="14" width="7" height="7"></rect>
-                </svg>
-                Open Dashboard
-            </button>
-        </div>
-
-        <!-- Settings Section -->
-        <div class="settings-section">
-            <div class="settings-header" id="toggle-settings">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="3"></circle>
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-                </svg>
-                <span>Settings</span>
-                <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
+        <!-- Main Content (shown when authenticated) -->
+        <div id="main-section" style="display:none;">
+            <!-- User Info Bar -->
+            <div id="user-bar" class="user-bar">
+                <span id="user-email" class="user-email"></span>
+                <button id="logout-btn" class="btn-small">Logout</button>
             </div>
 
-            <div class="settings-content" id="settings-content">
-                <div class="config-field">
-                    <label for="dashboard-url">Dashboard URL</label>
-                    <input type="text" id="dashboard-url" placeholder="http://localhost:5173">
-                </div>
-
-                <div class="config-field">
-                    <label for="backend-url">Backend URL</label>
-                    <div class="input-with-btn">
-                        <input type="text" id="backend-url" placeholder="http://localhost:3000">
-                        <button id="test-connection" class="btn-small">Test</button>
-                    </div>
-                </div>
-
-                <div class="config-field">
-                    <label for="api-key">API Key</label>
-                    <input type="password" id="api-key" placeholder="Optional">
-                </div>
-
-                <button id="save-settings" class="btn-secondary btn-full">Save Settings</button>
+            <!-- Team Selector -->
+            <div id="team-selector" class="team-selector" style="display:none;">
+                <label class="team-selector-label">Team</label>
+                <select id="team-dropdown" class="team-dropdown"></select>
             </div>
+
+            <!-- Quick Stats -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-today">-</div>
+                    <div class="stat-label">Today</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-week">-</div>
+                    <div class="stat-label">This Week</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-pending">-</div>
+                    <div class="stat-label">Pending</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-replies">-</div>
+                    <div class="stat-label">Replies</div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="actions">
+                <button id="toggle-sidebar" class="btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"></path>
+                        <line x1="15" y1="3" x2="15" y2="21"></line>
+                    </svg>
+                    Toggle Sidebar
+                </button>
+                <button id="open-dashboard" class="btn-secondary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    Open Dashboard
+                </button>
+            </div>
+
         </div>
 
         <!-- Footer -->

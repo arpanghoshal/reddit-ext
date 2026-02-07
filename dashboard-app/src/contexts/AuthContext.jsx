@@ -13,21 +13,22 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        fetchUserTeams(session.user.id);
-      } else {
+    let mounted = true;
+
+    // Safety timeout - never stay loading forever
+    const timeout = setTimeout(() => {
+      if (mounted && loading) {
+        console.warn('[AuthContext] Init timeout - forcing loading=false');
         setLoading(false);
       }
-    });
+    }, 5000);
 
-    // Listen for auth changes
+    // Listen for auth changes (including INITIAL_SESSION)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+
       setSession(session);
       setUser(session?.user ?? null);
 
@@ -40,7 +41,25 @@ export function AuthProvider({ children }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Also try getSession as fallback
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return;
+      setSession(session);
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchUserTeams(session.user.id);
+      } else {
+        setLoading(false);
+      }
+    }).catch(() => {
+      if (mounted) setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const fetchUserTeams = async (userId) => {
@@ -78,7 +97,14 @@ export function AuthProvider({ children }) {
       const savedTeam = teamList.find((t) => t.id === savedTeamId);
       const personalTeam = teamList.find((t) => t.isPersonal);
 
-      setCurrentTeam(savedTeam || personalTeam || teamList[0] || null);
+      const selectedTeam = savedTeam || personalTeam || teamList[0] || null;
+      setCurrentTeam(selectedTeam);
+
+      // Always persist the selected team to localStorage so the API client
+      // sends the correct X-Team-ID header on subsequent requests and after restarts
+      if (selectedTeam) {
+        localStorage.setItem('currentTeamId', selectedTeam.id);
+      }
     } catch (error) {
       console.error('Error fetching teams:', error);
     } finally {
@@ -94,7 +120,7 @@ export function AuthProvider({ children }) {
     }
   }, [teams]);
 
-  const signUp = async (email, password, fullName) => {
+  const signUp = useCallback(async (email, password, fullName) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -107,19 +133,27 @@ export function AuthProvider({ children }) {
 
     if (error) throw error;
     return data;
-  };
+  }, []);
 
-  const signIn = async (email, password) => {
+  const signIn = useCallback(async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (error) throw error;
-    return data;
-  };
 
-  const signOut = async () => {
+    // Set state directly to avoid race condition with onAuthStateChange
+    setSession(data.session);
+    setUser(data.user);
+    if (data.user) {
+      await fetchUserTeams(data.user.id);
+    }
+
+    return data;
+  }, []);
+
+  const signOut = useCallback(async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
 
@@ -128,14 +162,14 @@ export function AuthProvider({ children }) {
     setTeams([]);
     setCurrentTeam(null);
     localStorage.removeItem('currentTeamId');
-  };
+  }, []);
 
   const getAccessToken = useCallback(() => {
     return session?.access_token;
   }, [session]);
 
-  const refreshTeams = useCallback(() => {
-    if (user) fetchUserTeams(user.id);
+  const refreshTeams = useCallback(async () => {
+    if (user) return fetchUserTeams(user.id);
   }, [user]);
 
   const value = useMemo(() => ({
@@ -150,7 +184,7 @@ export function AuthProvider({ children }) {
     switchTeam,
     getAccessToken,
     refreshTeams,
-  }), [user, session, teams, currentTeam, loading, switchTeam, getAccessToken, refreshTeams]);
+  }), [user, session, teams, currentTeam, loading, signUp, signIn, signOut, switchTeam, getAccessToken, refreshTeams]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

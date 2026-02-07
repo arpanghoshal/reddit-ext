@@ -206,6 +206,15 @@ export default function Accounts() {
 
   useEffect(() => {
     loadData();
+    const interval = setInterval(loadData, 15000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   const handleAddAccount = async (data) => {

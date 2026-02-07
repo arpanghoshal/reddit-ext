@@ -1,5 +1,5 @@
 """
-Reddit Insight Backend - Python FastAPI Application
+Reddit Automated DM Backend - Python FastAPI Application
 Main entry point
 """
 
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
     port = os.getenv("PORT", "3000")
     env = os.getenv("ENVIRONMENT", "development")
 
-    logger.info(f"Reddit Insight Backend starting...")
+    logger.info(f"Reddit Automated DM Backend starting...")
     logger.info(f"Environment: {env}")
     logger.info(f"Port: {port}")
     logger.info(f"Health check: http://localhost:{port}/health")
@@ -72,12 +72,12 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Reddit Insight Backend shutting down...")
+    logger.info("Reddit Automated DM Backend shutting down...")
 
 
 app = FastAPI(
-    title="Reddit Insight Backend",
-    description="Backend API for Reddit Insight Gatherer Chrome Extension",
+    title="Reddit Automated DM Backend",
+    description="Backend API for Reddit Automated DM Chrome Extension",
     version="1.0.0",
     lifespan=lifespan,
     # Disable docs in production if needed

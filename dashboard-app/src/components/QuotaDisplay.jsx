@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { AlertTriangle, CheckCircle, XCircle, BarChart2, Users, MessageSquare, Target, Filter } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, BarChart2, Users, MessageSquare } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 /**
@@ -74,18 +74,6 @@ export default function QuotaDisplay({ compact = false }) {
       label: 'Accounts',
       icon: Users,
       ...quotaStatus.accounts
-    },
-    {
-      key: 'campaigns',
-      label: 'Campaigns',
-      icon: Target,
-      ...quotaStatus.campaigns
-    },
-    {
-      key: 'rules',
-      label: 'Rules',
-      icon: Filter,
-      ...quotaStatus.rules
     },
     {
       key: 'members',

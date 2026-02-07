@@ -97,18 +97,6 @@ async def check_quota(team_id: str, resource: str) -> Dict[str, Any]:
             ).execute()
             current = result.count or 0
             limit = quota.get("max_members", 10)
-        elif resource == "campaigns":
-            result = client.table("campaigns").select("id", count="exact").eq(
-                "team_id", team_id
-            ).eq("status", "active").execute()
-            current = result.count or 0
-            limit = quota.get("max_campaigns", 10)
-        elif resource == "rules":
-            result = client.table("filter_rules").select("id", count="exact").eq(
-                "team_id", team_id
-            ).execute()
-            current = result.count or 0
-            limit = quota.get("max_rules", 50)
         else:
             return {"allowed": True, "message": f"Unknown resource: {resource}"}
 
@@ -200,9 +188,7 @@ async def get_usage_summary(team_id: str, days: int = 7) -> Dict[str, Any]:
             "quotas": {
                 "max_dms_per_day": quota.get("max_dms_per_day", 100) if quota else 100,
                 "max_accounts": quota.get("max_accounts", 5) if quota else 5,
-                "max_members": quota.get("max_members", 10) if quota else 10,
-                "max_campaigns": quota.get("max_campaigns", 10) if quota else 10,
-                "max_rules": quota.get("max_rules", 50) if quota else 50
+                "max_members": quota.get("max_members", 10) if quota else 10
             }
         }
     except Exception as e:
@@ -217,7 +203,7 @@ async def update_quota(team_id: str, updates: Dict[str, int]) -> Optional[Dict[s
         return None
 
     try:
-        valid_fields = ["max_accounts", "max_dms_per_day", "max_members", "max_campaigns", "max_rules"]
+        valid_fields = ["max_accounts", "max_dms_per_day", "max_members"]
         update_data = {k: v for k, v in updates.items() if k in valid_fields}
 
         if not update_data:
@@ -256,16 +242,6 @@ async def get_quota_status(team_id: str) -> Dict[str, Any]:
         ).execute()
         members_count = members_result.count or 0
 
-        campaigns_result = client.table("campaigns").select("id", count="exact").eq(
-            "team_id", team_id
-        ).eq("status", "active").execute()
-        campaigns_count = campaigns_result.count or 0
-
-        rules_result = client.table("filter_rules").select("id", count="exact").eq(
-            "team_id", team_id
-        ).execute()
-        rules_count = rules_result.count or 0
-
         dms_sent = usage.get("dms_sent", 0) if usage else 0
 
         quota = quota or {}
@@ -285,16 +261,6 @@ async def get_quota_status(team_id: str) -> Dict[str, Any]:
                 "current": members_count,
                 "limit": quota.get("max_members", 10),
                 "percentage": round((members_count / max(quota.get("max_members", 10), 1)) * 100)
-            },
-            "campaigns": {
-                "current": campaigns_count,
-                "limit": quota.get("max_campaigns", 10),
-                "percentage": round((campaigns_count / max(quota.get("max_campaigns", 10), 1)) * 100)
-            },
-            "rules": {
-                "current": rules_count,
-                "limit": quota.get("max_rules", 50),
-                "percentage": round((rules_count / max(quota.get("max_rules", 50), 1)) * 100)
             }
         }
     except Exception as e:

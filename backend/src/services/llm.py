@@ -140,8 +140,8 @@ Write a quick DM to them:"""
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/reddit-insight-gatherer",
-                "X-Title": "Reddit Insight Gatherer"
+                "HTTP-Referer": "https://github.com/reddit-automated-dm",
+                "X-Title": "Reddit Automated DM"
             },
             json={
                 "model": model,
@@ -281,8 +281,8 @@ Your reply:"""
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/reddit-insight-gatherer",
-                "X-Title": "Reddit Insight Gatherer"
+                "HTTP-Referer": "https://github.com/reddit-automated-dm",
+                "X-Title": "Reddit Automated DM"
             },
             json={
                 "model": model,
@@ -391,8 +391,8 @@ Output ONLY the message, nothing else"""
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/reddit-insight-gatherer",
-                "X-Title": "Reddit Insight Gatherer"
+                "HTTP-Referer": "https://github.com/reddit-automated-dm",
+                "X-Title": "Reddit Automated DM"
             },
             json={
                 "model": model,

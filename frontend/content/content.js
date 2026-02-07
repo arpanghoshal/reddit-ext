@@ -1395,6 +1395,43 @@ function updatePersistentToggle(isOpen) {
     }
 }
 
+// --- Direct Send from Dashboard ---
+// Detects #__rdm_send= in the URL hash (set by dashboard "Send Now" / Queue "Send").
+// Parses the base64 JSON payload and forwards to background for automation.
+function checkDirectSendInstructions() {
+    const hash = window.location.hash;
+    if (!hash || !hash.startsWith('#__rdm_send=')) return;
+
+    try {
+        const encoded = hash.substring('#__rdm_send='.length);
+        const payload = JSON.parse(atob(encoded));
+
+        const targetUser = payload.username;
+        if (!targetUser) {
+            console.warn('Direct send: no username in payload');
+            return;
+        }
+
+        // Clean the hash from URL for privacy
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+
+        console.log('📨 Direct send detected for user:', targetUser);
+
+        // Send to background script for automation
+        chrome.runtime.sendMessage({
+            action: 'DIRECT_SEND_REPLY',
+            data: {
+                targetUser,
+                message: payload.message,
+                queueItemId: payload.queueItemId,
+                conversationId: payload.conversationId
+            }
+        });
+    } catch (err) {
+        console.error('Failed to parse direct send instructions:', err);
+    }
+}
+
 // --- Initialization ---
 async function init() {
     console.log('📍 Content script init() called on:', window.location.href);
@@ -1429,11 +1466,20 @@ async function init() {
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true; // Keep channel open for async response
         } else if (request.action === 'AUTOMATION_STOPPED') {
+            isAutomationRunning = false;
             showToast('Automation stopped', 'info');
             checkPageStatus();
         } else if (request.action === 'AUTOMATION_ERROR') {
             ensureSidebarVisible();
             setTimeout(() => renderErrorState(request.error, request.context), 300);
+            // Safety: reset toggle lock after 30s if automation doesn't resume
+            setTimeout(() => {
+                chrome.runtime.sendMessage({ action: 'GET_AUTOMATION_STATUS' }, (status) => {
+                    if (!status || !status.isActive) {
+                        isAutomationRunning = false;
+                    }
+                });
+            }, 30000);
         } else if (request.action === 'SHOW_TOAST') {
             showToast(request.message, request.type);
         } else if (request.action === 'SHOW_DM_CONFIRMATION') {
@@ -1447,6 +1493,9 @@ async function init() {
         }
         return true;
     });
+
+    // Check for direct-send instructions from dashboard (via URL hash)
+    checkDirectSendInstructions();
 
     // Check automation status on load
     chrome.runtime.sendMessage({ action: 'GET_AUTOMATION_STATUS' }, (status) => {
@@ -1498,6 +1547,12 @@ async function handleAutomationCommand(request) {
     switch (request.command) {
         case 'CLICK_CHAT_BUTTON':
             return await executeClickChat();
+
+        case 'FIND_CHAT_USER':
+            return await executeFindChatUser(request.targetUser);
+
+        case 'DIRECT_CHAT_SEND':
+            return await executeDirectChatSend(request.targetUser, request.text);
 
         case 'TYPE_MESSAGE':
             return await executeTypeMessage(request.text);
@@ -1584,6 +1639,131 @@ async function executeClickChat() {
         });
         return { success: false, error: 'Chat button not found' };
     }
+}
+
+// Search for a chat conversation with the given username in the chat sidebar.
+// Returns a clickable element or null. Works across shadow DOMs.
+function findChatUserElement(targetLower) {
+    // Strategy 1: rs-rooms-nav-room elements (Reddit chat web components)
+    const rooms = document.querySelectorAll('rs-rooms-nav-room');
+    for (const room of rooms) {
+        if (!room.shadowRoot) continue;
+        const chatLink = room.shadowRoot.querySelector('a[aria-label]');
+        if (chatLink) {
+            const ariaLabel = chatLink.getAttribute('aria-label') || '';
+            if (ariaLabel.toLowerCase().includes(targetLower)) {
+                console.log('✓ Found via rs-rooms-nav-room aria-label:', ariaLabel);
+                return chatLink;
+            }
+        }
+        const deepText = getDeepTextContent(room).toLowerCase();
+        if (deepText.includes(targetLower)) {
+            console.log('✓ Found via rs-rooms-nav-room text content');
+            return room.shadowRoot.querySelector('a') || room;
+        }
+    }
+
+    // Strategy 2: Deep search ALL shadow DOMs for clickable elements with username
+    const allClickables = querySelectorDeep('a, button, [role="listitem"], [role="option"], [role="link"]');
+    for (const el of allClickables) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+        if (text.includes(targetLower) || ariaLabel.includes(targetLower)) {
+            console.log('✓ Found via deep clickable search:', el.tagName, text.substring(0, 50));
+            return el;
+        }
+    }
+
+    // Strategy 3: Standard DOM links/buttons containing username
+    const allLinks = document.querySelectorAll('a, button');
+    for (const link of allLinks) {
+        const linkText = (link.textContent || '').trim().toLowerCase();
+        if (linkText === targetLower || linkText === `u/${targetLower}` || linkText.includes(targetLower)) {
+            console.log('✓ Found via standard DOM text:', link.tagName, linkText.substring(0, 50));
+            return link;
+        }
+    }
+
+    // Strategy 4: Walk entire DOM tree including shadow roots for text nodes
+    const findClickableWithText = (root) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while ((node = walker.nextNode())) {
+            if (node.textContent.trim().toLowerCase().includes(targetLower)) {
+                let el = node.parentElement;
+                while (el && el !== root) {
+                    if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'listitem' || el.onclick) {
+                        console.log('✓ Found via text node walk:', el.tagName);
+                        return el;
+                    }
+                    el = el.parentElement;
+                }
+            }
+        }
+        const elements = root.querySelectorAll('*');
+        for (const el of elements) {
+            if (el.shadowRoot) {
+                const result = findClickableWithText(el.shadowRoot);
+                if (result) return result;
+            }
+        }
+        return null;
+    };
+
+    return findClickableWithText(document);
+}
+
+async function executeFindChatUser(targetUser) {
+    console.log('🔍 Looking for chat conversation with:', targetUser);
+    const targetLower = targetUser.toLowerCase();
+
+    const userRoom = await waitForElement(() => findChatUserElement(targetLower), 12000);
+
+    if (userRoom) {
+        console.log('✓ Chat conversation found. Clicking to open...');
+        userRoom.click();
+        await new Promise(r => setTimeout(r, 1500));
+
+        chrome.runtime.sendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: true, step: 'FIND_CHAT_USER' }
+        });
+        return { success: true };
+    } else {
+        console.error('❌ Could not find chat conversation for:', targetUser);
+        chrome.runtime.sendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `Chat with ${targetUser} not found`, step: 'FIND_CHAT_USER' }
+        });
+        return { success: false, error: `Chat with ${targetUser} not found` };
+    }
+}
+
+// Combined command: find user in chat sidebar, open conversation, type and send.
+// Runs entirely within the content script to avoid state-transition issues when
+// clicking a conversation causes a soft/hard navigation.
+async function executeDirectChatSend(targetUser, text) {
+    console.log('📨 Direct chat send to:', targetUser, '| message length:', text?.length);
+
+    const targetLower = targetUser.toLowerCase();
+    const userRoom = await waitForElement(() => findChatUserElement(targetLower), 12000);
+    if (!userRoom) {
+        console.error('❌ Could not find chat conversation for:', targetUser);
+        chrome.runtime.sendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `Chat with ${targetUser} not found`, step: 'DIRECT_CHAT_SEND' }
+        });
+        return { success: false, error: `Chat with ${targetUser} not found` };
+    }
+
+    console.log('✓ Found conversation for', targetUser, '- clicking...');
+    userRoom.click();
+
+    // Wait for conversation to open and chat input to appear
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Type and send using the existing logic
+    return await executeTypeMessage(text);
 }
 
 async function executeTypeMessage(text) {
@@ -2922,6 +3102,7 @@ async function showPreview(message, author, postData = {}) {
           <button id="save-template-btn" class="btn-text">Save as Template</button>
           <button id="regenerate-btn" class="btn-text">Regenerate</button>
         </div>
+        <button id="add-to-queue-btn" class="btn-outline" style="width:100%;margin-top:8px;">Add to Queue</button>
       </div>
     `;
 
@@ -3010,6 +3191,41 @@ async function showPreview(message, author, postData = {}) {
 
     shadowRoot.getElementById('regenerate-btn').addEventListener('click', () => {
         checkPageStatus();
+    });
+
+    shadowRoot.getElementById('add-to-queue-btn').addEventListener('click', () => {
+        const text = shadowRoot.getElementById('dm-message').value;
+        const queueBtn = shadowRoot.getElementById('add-to-queue-btn');
+        queueBtn.disabled = true;
+        queueBtn.innerText = 'Adding...';
+
+        chrome.runtime.sendMessage({
+            action: 'ADD_TO_QUEUE',
+            data: {
+                recipientUsername: author,
+                generatedMessage: text,
+                subreddit: postData.subreddit || '',
+                postUrl: postData.url || '',
+                postTitle: postData.title || '',
+                postBody: postData.body || '',
+                messageType: 'outreach',
+                queueMode: 'review',
+                status: 'pending'
+            }
+        }, (response) => {
+            if (response && response.success) {
+                queueBtn.innerText = 'Added to Queue!';
+                showToast('Added to outreach queue', 'success');
+                setTimeout(() => {
+                    queueBtn.innerText = 'Add to Queue';
+                    queueBtn.disabled = false;
+                }, 2000);
+            } else {
+                queueBtn.innerText = 'Add to Queue';
+                queueBtn.disabled = false;
+                showToast('Failed to add to queue', 'error');
+            }
+        });
     });
 }
 

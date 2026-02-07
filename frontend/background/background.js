@@ -12,6 +12,7 @@ const AutomationState = {
     CLICKING_CHAT: 'CLICKING_CHAT',
     NAVIGATING_CHAT: 'NAVIGATING_CHAT',
     WAITING_FOR_CHAT: 'WAITING_FOR_CHAT',
+    FINDING_CHAT_USER: 'FINDING_CHAT_USER',
     TYPING_MESSAGE: 'TYPING_MESSAGE',
     COMPLETED: 'COMPLETED',
     // Subreddit Automation States
@@ -91,6 +92,47 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return;
         }
         startAutomation(tabId, request.data);
+    }
+
+    if (request.action === 'DIRECT_SEND_REPLY') {
+        // Triggered by content script when dashboard opens a Reddit chat tab
+        // with #__rdm_send= hash. The tab is already on the chat page.
+        const tabId = sender.tab?.id;
+        if (!tabId) {
+            console.error('No tab ID for DIRECT_SEND_REPLY');
+            return;
+        }
+        const { targetUser, message, queueItemId, conversationId } = request.data;
+        console.log(`Direct send reply for u/${targetUser} on tab ${tabId}`);
+
+        activeTasks[tabId] = {
+            status: AutomationState.TYPING_MESSAGE,
+            data: {
+                targetUser,
+                message,
+                queueItemId: queueItemId || null,
+                conversationId: conversationId || null,
+                isReply: true
+            },
+            retries: 0
+        };
+
+        // Send combined find-and-send command. The content script handles
+        // the entire flow: find user → open conversation → type → send.
+        // We set status to TYPING_MESSAGE so handleStepCompletion's
+        // TYPE_MESSAGE success handler fires on completion.
+        setTimeout(() => {
+            if (activeTasks[tabId]?.status === AutomationState.TYPING_MESSAGE) {
+                chrome.tabs.sendMessage(tabId, {
+                    action: 'EXECUTE_ACTION',
+                    command: 'DIRECT_CHAT_SEND',
+                    targetUser: targetUser,
+                    text: message
+                }).catch(err => {
+                    console.error('Failed to send DIRECT_CHAT_SEND:', err);
+                });
+            }
+        }, 3000);
     }
 
     if (request.action === 'START_SUBREDDIT_AUTOMATION') {
@@ -566,6 +608,7 @@ async function processNextStep(tabId) {
                     });
                 }, 2000);
                 break;
+
         }
     } catch (error) {
         console.error('Automation Error:', error);
@@ -963,6 +1006,45 @@ chrome.commands.onCommand.addListener(async (command) => {
 // --- Settings Update Handler & Dashboard Data ---
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'LOGIN') {
+        api.resetApiConfig();
+        api.login(request.email, request.password)
+            .then(result => {
+                // Auto-start reply queue polling after successful login
+                startReplyQueuePolling();
+                sendResponse({ success: true, ...result });
+            })
+            .catch(err => sendResponse({ error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'LOGOUT') {
+        // Stop reply queue polling on logout
+        stopReplyQueuePolling();
+        api.logout()
+            .then(() => sendResponse({ success: true }))
+            .catch(() => sendResponse({ success: true }));
+        return true;
+    }
+
+    if (request.action === 'SWITCH_TEAM') {
+        const newTeamId = request.teamId;
+        if (!newTeamId) {
+            sendResponse({ error: 'No teamId provided' });
+            return true;
+        }
+        api.switchTeam(newTeamId)
+            .then(() => sendResponse({ success: true, teamId: newTeamId }))
+            .catch(err => sendResponse({ error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'GET_TEAMS') {
+        chrome.storage.local.get(['teams', 'teamId'])
+            .then(data => sendResponse({ teams: data.teams || [], currentTeamId: data.teamId || null }));
+        return true;
+    }
+
     if (request.action === 'SETTINGS_UPDATED') {
         console.log('Settings updated:', request.settings);
         // Reset API config cache so new settings are used
@@ -1012,6 +1094,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    if (request.action === 'ADD_TO_QUEUE') {
+        api.addToQueue(request.data).then(item => sendResponse({ success: true, data: item })).catch(e => sendResponse({ success: false, error: e.message }));
+        return true;
+    }
+
     // Chat message sync (for reply detection)
     if (request.action === 'SYNC_CHAT_MESSAGES') {
         const syncData = request.data;
@@ -1052,90 +1139,134 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'GET_REPLY_QUEUE_STATUS') {
-        sendResponse({
-            isPolling: replyQueueInterval !== null,
-            isProcessing: replyQueueProcessing
+        chrome.alarms.get(REPLY_QUEUE_ALARM_NAME).then(alarm => {
+            sendResponse({
+                isPolling: !!alarm,
+                isProcessing: replyQueueProcessing
+            });
         });
         return true;
     }
 });
 
 // =============================================================================
-// REPLY QUEUE PROCESSING
+// REPLY QUEUE PROCESSING (uses chrome.alarms for MV3 reliability)
 // =============================================================================
 
-let replyQueueInterval = null;
+const REPLY_QUEUE_ALARM_NAME = 'reply-queue-poll';
+const REPLY_QUEUE_POLL_INTERVAL_MINUTES = 0.25; // 15 seconds (minimum chrome.alarms supports ~0.08 min in MV3 dev)
 let replyQueueProcessing = false;
 
-function startReplyQueuePolling() {
-    if (replyQueueInterval) {
+// Handle alarm events for reply queue polling
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== REPLY_QUEUE_ALARM_NAME) return;
+
+    if (replyQueueProcessing) {
+        console.log('Reply queue: already processing, skipping poll');
+        return;
+    }
+
+    // Check if still authenticated before polling
+    const authed = await api.isAuthenticated();
+    if (!authed) {
+        console.log('Reply queue: not authenticated, stopping polling');
+        stopReplyQueuePolling();
+        return;
+    }
+
+    try {
+        const nextReply = await api.getNextReplyToSend();
+
+        if (nextReply) {
+            console.log('Found approved reply to send:', nextReply.id);
+            replyQueueProcessing = true;
+            await processReplyQueueItem(nextReply);
+            replyQueueProcessing = false;
+        }
+    } catch (err) {
+        console.error('Reply queue poll error:', err);
+        replyQueueProcessing = false;
+    }
+});
+
+async function startReplyQueuePolling() {
+    const existing = await chrome.alarms.get(REPLY_QUEUE_ALARM_NAME);
+    if (existing) {
         console.log('Reply queue polling already active');
         return;
     }
 
-    console.log('Starting reply queue polling...');
+    console.log('Starting reply queue polling (chrome.alarms)...');
+    chrome.alarms.create(REPLY_QUEUE_ALARM_NAME, {
+        delayInMinutes: 0.08, // Fire first alarm almost immediately (~5s)
+        periodInMinutes: REPLY_QUEUE_POLL_INTERVAL_MINUTES
+    });
 
-    // Poll every 10 seconds for approved replies
-    replyQueueInterval = setInterval(async () => {
-        if (replyQueueProcessing) {
-            console.log('Reply queue: already processing, skipping poll');
-            return;
-        }
-
-        try {
-            const nextReply = await api.getNextReplyToSend();
-
-            if (nextReply) {
-                console.log('Found approved reply to send:', nextReply.id);
-                replyQueueProcessing = true;
-                await processReplyQueueItem(nextReply);
-                replyQueueProcessing = false;
-            }
-        } catch (err) {
-            console.error('Reply queue poll error:', err);
+    // Also do an immediate check (alarm delay is not instant)
+    try {
+        const nextReply = await api.getNextReplyToSend();
+        if (nextReply) {
+            console.log('Found approved reply to send (immediate):', nextReply.id);
+            replyQueueProcessing = true;
+            await processReplyQueueItem(nextReply);
             replyQueueProcessing = false;
         }
-    }, 10000);
-
-    // Immediately check for items
-    (async () => {
-        try {
-            const nextReply = await api.getNextReplyToSend();
-            if (nextReply) {
-                console.log('Found approved reply to send (immediate):', nextReply.id);
-                replyQueueProcessing = true;
-                await processReplyQueueItem(nextReply);
-                replyQueueProcessing = false;
-            }
-        } catch (err) {
-            console.error('Reply queue immediate check error:', err);
-        }
-    })();
+    } catch (err) {
+        console.error('Reply queue immediate check error:', err);
+    }
 }
 
-function stopReplyQueuePolling() {
-    if (replyQueueInterval) {
-        console.log('Stopping reply queue polling...');
-        clearInterval(replyQueueInterval);
-        replyQueueInterval = null;
-    }
+async function stopReplyQueuePolling() {
+    console.log('Stopping reply queue polling...');
+    await chrome.alarms.clear(REPLY_QUEUE_ALARM_NAME);
 }
 
 async function processReplyQueueItem(item) {
     console.log(`Processing reply queue item: ${item.id} to u/${item.recipientUsername}`);
 
-    // Find an active Reddit tab or notify user
+    // Find an active Reddit tab or create one
     const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
     let tabId = tabs[0]?.id;
 
     if (!tabId) {
-        console.log('No Reddit tab found - creating notification');
-        chrome.notifications.create({
-            type: 'basic',
-            iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-            title: 'Reply Queue',
-            message: `Please open a Reddit tab to send reply to u/${item.recipientUsername}`
+        console.log('No Reddit tab found - creating one for reply automation');
+        const newTab = await chrome.tabs.create({
+            url: `https://www.reddit.com/user/${item.recipientUsername}/`,
+            active: false
         });
+        tabId = newTab.id;
+
+        // Wait for the tab to load before proceeding
+        await new Promise((resolve) => {
+            const listener = (updatedTabId, changeInfo) => {
+                if (updatedTabId === tabId && changeInfo.status === 'complete') {
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    resolve();
+                }
+            };
+            chrome.tabs.onUpdated.addListener(listener);
+            // Safety timeout - don't wait forever
+            setTimeout(() => {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+            }, 15000);
+        });
+
+        // Since we navigated directly to the profile, set state accordingly
+        activeTasks[tabId] = {
+            status: AutomationState.WAITING_FOR_PROFILE,
+            data: {
+                targetUser: item.recipientUsername,
+                message: item.finalMessage,
+                queueItemId: item.id,
+                conversationId: item.conversationId,
+                isReply: true
+            },
+            retries: 0
+        };
+
+        // Profile is already loaded, process next step
+        processNextStep(tabId);
         return;
     }
 
@@ -1164,8 +1295,23 @@ async function processReplyQueueItem(item) {
     // When complete, handleStepCompletion will mark the queue item as sent
 }
 
-// Extend handleStepCompletion to handle reply queue items
-const originalHandleStepCompletion = handleStepCompletion;
-// Note: We can't easily override the function, so we add this logic inline in the existing function
-// The logic is already handled above - on successful TYPE_MESSAGE, we check for task.data.isReply
+// =============================================================================
+// AUTO-START REPLY QUEUE POLLING ON SERVICE WORKER LOAD
+// =============================================================================
+
+// In MV3, the service worker restarts after being killed.
+// Check auth state and restart polling if the user is logged in.
+(async () => {
+    try {
+        const authed = await api.isAuthenticated();
+        if (authed) {
+            console.log('User authenticated on worker start - auto-starting reply queue polling');
+            startReplyQueuePolling();
+        } else {
+            console.log('User not authenticated on worker start - reply queue polling not started');
+        }
+    } catch (err) {
+        console.error('Error checking auth on worker start:', err);
+    }
+})();
 

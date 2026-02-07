@@ -13,6 +13,10 @@ const RETRY_DELAY_BASE = 1000;
 let apiConfig = {
     baseUrl: null,
     apiKey: null,
+    accessToken: null,
+    refreshToken: null,
+    expiresAt: null,
+    teamId: null,
     initialized: false
 };
 
@@ -21,6 +25,10 @@ function resetApiConfig() {
     apiConfig = {
         baseUrl: null,
         apiKey: null,
+        accessToken: null,
+        refreshToken: null,
+        expiresAt: null,
+        teamId: null,
         initialized: false
     };
 }
@@ -31,24 +39,138 @@ async function getApiConfig() {
         return apiConfig;
     }
 
-    const data = await chrome.storage.local.get(['backendUrl', 'apiKey']);
+    const data = await chrome.storage.local.get([
+        'backendUrl', 'apiKey', 'accessToken', 'refreshToken', 'expiresAt', 'teamId'
+    ]);
 
-    if (data.backendUrl) {
-        apiConfig = {
-            baseUrl: data.backendUrl.replace(/\/$/, ''), // Remove trailing slash
-            apiKey: data.apiKey || null,
-            initialized: true
-        };
-        return apiConfig;
-    }
+    const baseUrl = (data.backendUrl || 'http://localhost:3000').replace(/\/$/, '');
 
-    // Default to localhost for development
     apiConfig = {
-        baseUrl: 'http://localhost:3000',
+        baseUrl,
         apiKey: data.apiKey || null,
+        accessToken: data.accessToken || null,
+        refreshToken: data.refreshToken || null,
+        expiresAt: data.expiresAt || null,
+        teamId: data.teamId || null,
         initialized: true
     };
     return apiConfig;
+}
+
+// --- Authentication Functions ---
+
+async function login(email, password) {
+    const config = await getApiConfig();
+    const response = await fetchWithTimeout(`${config.baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+    }, 10000);
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Login failed' }));
+        throw new Error(error.detail || 'Invalid email or password');
+    }
+
+    const data = await response.json();
+
+    // Store tokens and team info
+    const authData = {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        expiresAt: data.session.expires_at,
+        teamId: data.current_team?.id || null,
+        teams: data.teams || [],
+        userEmail: data.user.email,
+        userName: data.user.full_name
+    };
+    await chrome.storage.local.set(authData);
+
+    // Update cached config
+    apiConfig.accessToken = authData.accessToken;
+    apiConfig.refreshToken = authData.refreshToken;
+    apiConfig.expiresAt = authData.expiresAt;
+    apiConfig.teamId = authData.teamId;
+
+    return { user: data.user, teams: data.teams, currentTeam: data.current_team };
+}
+
+async function logout() {
+    try {
+        await apiRequest('/auth/logout', { method: 'POST' });
+    } catch {
+        // Ignore errors, clear local state regardless
+    }
+    await chrome.storage.local.remove([
+        'accessToken', 'refreshToken', 'expiresAt', 'teamId', 'teams', 'userEmail', 'userName'
+    ]);
+    apiConfig.accessToken = null;
+    apiConfig.refreshToken = null;
+    apiConfig.expiresAt = null;
+    apiConfig.teamId = null;
+}
+
+async function isAuthenticated() {
+    const data = await chrome.storage.local.get(['accessToken', 'expiresAt']);
+    if (!data.accessToken) return false;
+    // Check if token is expired (with 60s buffer)
+    if (data.expiresAt && Date.now() / 1000 > data.expiresAt - 60) {
+        // Try to refresh
+        try {
+            await refreshAccessToken();
+            return true;
+        } catch {
+            return false;
+        }
+    }
+    return true;
+}
+
+async function getAuthInfo() {
+    const data = await chrome.storage.local.get(['userEmail', 'userName', 'teamId']);
+    return { email: data.userEmail, name: data.userName, teamId: data.teamId };
+}
+
+async function switchTeam(newTeamId) {
+    await chrome.storage.local.set({ teamId: newTeamId });
+    apiConfig.teamId = newTeamId;
+    apiConfig.initialized = false;
+}
+
+async function refreshAccessToken() {
+    const config = await getApiConfig();
+    if (!config.refreshToken) {
+        throw new Error('No refresh token available');
+    }
+
+    const response = await fetchWithTimeout(`${config.baseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: config.refreshToken })
+    }, 10000);
+
+    if (!response.ok) {
+        // Refresh failed - clear auth
+        await chrome.storage.local.remove([
+            'accessToken', 'refreshToken', 'expiresAt', 'teamId', 'userEmail', 'userName'
+        ]);
+        apiConfig.accessToken = null;
+        apiConfig.refreshToken = null;
+        apiConfig.expiresAt = null;
+        throw new Error('Session expired. Please log in again.');
+    }
+
+    const data = await response.json();
+    const authData = {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        expiresAt: data.session.expires_at
+    };
+    await chrome.storage.local.set(authData);
+
+    apiConfig.accessToken = authData.accessToken;
+    apiConfig.refreshToken = authData.refreshToken;
+    apiConfig.expiresAt = authData.expiresAt;
 }
 
 // Fetch with timeout support
@@ -91,16 +213,36 @@ function isRetryableError(error, response) {
 
 async function apiRequest(endpoint, options = {}, retries = 0) {
     const config = await getApiConfig();
+
+    // Auto-refresh token if expiring within 60s
+    if (config.accessToken && config.expiresAt && Date.now() / 1000 > config.expiresAt - 60) {
+        try {
+            await refreshAccessToken();
+        } catch {
+            // Refresh failed, continue with current token (will get 401)
+        }
+    }
+
     const url = `${config.baseUrl}/api${endpoint}`;
 
-    // Build headers with API key if configured
+    // Build headers
     const headers = {
         'Content-Type': 'application/json',
         ...options.headers
     };
 
-    // Add API key header if configured
-    if (config.apiKey) {
+    // Add JWT token (primary auth)
+    if (config.accessToken) {
+        headers['Authorization'] = `Bearer ${config.accessToken}`;
+    }
+
+    // Add team context header
+    if (config.teamId) {
+        headers['X-Team-ID'] = config.teamId;
+    }
+
+    // Add API key as fallback (legacy)
+    if (config.apiKey && !config.accessToken) {
         headers['X-API-Key'] = config.apiKey;
     }
 
@@ -529,55 +671,6 @@ async function getAccountHealth(accountId) {
 }
 
 // ============================================
-// RULES FUNCTIONS
-// ============================================
-
-async function getRules(filters = {}) {
-    const queryParams = new URLSearchParams();
-    if (filters.activeOnly) queryParams.set('activeOnly', 'true');
-    if (filters.type) queryParams.set('type', filters.type);
-
-    const result = await apiRequest(`/rules?${queryParams}`);
-    return result.data || [];
-}
-
-async function createRule(ruleData) {
-    const result = await apiRequest('/rules', {
-        method: 'POST',
-        body: JSON.stringify(ruleData)
-    });
-    return result.data;
-}
-
-async function updateRule(id, updates) {
-    const result = await apiRequest(`/rules/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(updates)
-    });
-    return result.data;
-}
-
-async function deleteRule(id) {
-    const result = await apiRequest(`/rules/${id}`, {
-        method: 'DELETE'
-    });
-    return result.success;
-}
-
-async function evaluateRules(post, userProfile = null) {
-    const result = await apiRequest('/rules/evaluate', {
-        method: 'POST',
-        body: JSON.stringify({ post, userProfile })
-    });
-    return result.data;
-}
-
-async function getRuleTemplates() {
-    const result = await apiRequest('/rules/templates');
-    return result.data || [];
-}
-
-// ============================================
 // CONVERSATIONS FUNCTIONS
 // ============================================
 
@@ -969,8 +1062,16 @@ async function queueFollowUp(conversationId, message, accountId) {
 
 // ES Module exports
 export {
+    // Authentication
+    login,
+    logout,
+    isAuthenticated,
+    getAuthInfo,
+    refreshAccessToken,
+
     // Config management
     resetApiConfig,
+    switchTeam,
 
     // Original functions
     isConfigured,
@@ -1032,14 +1133,6 @@ export {
     getSafetyEvents,
     logSafetyEvent,
     getAccountHealth,
-
-    // Rules
-    getRules,
-    createRule,
-    updateRule,
-    deleteRule,
-    evaluateRules,
-    getRuleTemplates,
 
     // Conversations
     getConversations,

@@ -14,7 +14,10 @@ export const supabase = createClient(
     auth: {
       autoRefreshToken: true,
       persistSession: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
+      flowType: 'implicit',
+      // Bypass navigator.locks which can hang in some browser environments
+      lock: async (name, acquireTimeout, fn) => await fn(),
     },
   }
 );

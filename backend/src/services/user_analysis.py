@@ -68,7 +68,7 @@ def get_client() -> Optional[Client]:
 
 async def fetch_user_posts(username: str, limit: int = 100) -> List[Dict[str, Any]]:
     """Fetch user's recent posts"""
-    user_agent = "Reddit-Insight-Gatherer/1.0"
+    user_agent = "Reddit-Automated-DM/1.0"
 
     async with httpx.AsyncClient() as client:
         try:
@@ -91,7 +91,7 @@ async def fetch_user_posts(username: str, limit: int = 100) -> List[Dict[str, An
 
 async def fetch_user_comments(username: str, limit: int = 100) -> List[Dict[str, Any]]:
     """Fetch user's recent comments"""
-    user_agent = "Reddit-Insight-Gatherer/1.0"
+    user_agent = "Reddit-Automated-DM/1.0"
 
     async with httpx.AsyncClient() as client:
         try:

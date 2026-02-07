@@ -1,6 +1,6 @@
 """
 API Routes
-All REST API endpoints for the Reddit Insight Backend
+All REST API endpoints for the Reddit Automated DM Backend
 """
 
 import os
@@ -17,7 +17,6 @@ from ..services import queue
 from ..services import accounts
 from ..services import rotation
 from ..services import safety
-from ..services import rules
 from ..services import conversations
 from ..services import user_analysis
 from ..services import lead_scoring
@@ -26,7 +25,6 @@ from ..services import ab_testing
 from ..services import analytics
 from ..services import conversation_ai
 from ..services import automation_settings
-from ..services import campaigns
 from ..services import skipped_posts
 
 router = APIRouter()
@@ -175,33 +173,6 @@ class SafetyEventRequest(BaseModel):
     accountId: Optional[str] = None
     eventType: str
     details: Optional[Dict[str, Any]] = None
-
-
-class RuleCreateRequest(BaseModel):
-    name: str
-    description: Optional[str] = None
-    ruleType: str
-    value: Dict[str, Any]
-    isActive: Optional[bool] = True
-    priority: Optional[int] = 0
-
-
-class RuleUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    value: Optional[Dict[str, Any]] = None
-    isActive: Optional[bool] = None
-    priority: Optional[int] = None
-
-
-class RuleEvaluateRequest(BaseModel):
-    post: Dict[str, Any]
-    userProfile: Optional[Dict[str, Any]] = None
-
-
-class RuleTestRequest(BaseModel):
-    rule: Dict[str, Any]
-    testData: Dict[str, Any]
 
 
 class ConversationCreateRequest(BaseModel):
@@ -789,60 +760,6 @@ async def log_safety_event_route(request: SafetyEventRequest):
 async def get_account_health_route(account_id: str):
     health = await safety.get_account_health(account_id)
     return {"success": True, "data": health}
-
-
-# --- Rules Routes ---
-
-@router.get("/rules")
-async def get_rules_route(
-    request: Request,
-    activeOnly: bool = False,
-    type: Optional[str] = None
-):
-    team_id = get_current_team_id(request)
-    filters = {"activeOnly": activeOnly, "ruleType": type}
-    rules_list = await rules.get_rules(filters, team_id=team_id)
-    return {"success": True, "data": rules_list}
-
-
-@router.post("/rules")
-async def create_rule_route(request: Request, body: RuleCreateRequest):
-    team_id = get_current_team_id(request)
-    rule = await rules.create_rule(body.model_dump(), team_id=team_id)
-    return {"success": True, "data": rule}
-
-
-@router.get("/rules/templates")
-async def get_rule_templates():
-    templates = rules.get_default_rule_templates()
-    return {"success": True, "data": templates}
-
-
-@router.patch("/rules/{rule_id}")
-async def update_rule_route(request: Request, rule_id: str, body: RuleUpdateRequest):
-    team_id = get_current_team_id(request)
-    rule = await rules.update_rule(rule_id, body.model_dump(exclude_none=True), team_id=team_id)
-    return {"success": True, "data": rule}
-
-
-@router.delete("/rules/{rule_id}")
-async def delete_rule_route(request: Request, rule_id: str):
-    team_id = get_current_team_id(request)
-    success = await rules.delete_rule(rule_id, team_id=team_id)
-    return {"success": success}
-
-
-@router.post("/rules/evaluate")
-async def evaluate_rules_route(request: Request, body: RuleEvaluateRequest):
-    team_id = get_current_team_id(request)
-    result = await rules.evaluate_rules(body.post, body.userProfile, team_id=team_id)
-    return {"success": True, "data": result}
-
-
-@router.post("/rules/test")
-async def test_rule_route(request: RuleTestRequest):
-    result = rules.test_rule(request.rule, request.testData)
-    return {"success": True, "data": result}
 
 
 # --- Conversations Routes ---
@@ -1547,85 +1464,6 @@ async def save_automation_settings_route(request: Request, body: AutomationSetti
     team_id = get_current_team_id(request)
     result = await automation_settings.save_automation_settings(body.model_dump(exclude_none=True), team_id=team_id)
     return {"success": True, "data": result}
-
-
-# =============================================================================
-# CAMPAIGNS ROUTES
-# =============================================================================
-
-class CampaignCreateRequest(BaseModel):
-    name: str
-    description: Optional[str] = None
-    subreddits: Optional[List[str]] = None
-    messageTone: Optional[str] = None
-    targetPersona: Optional[str] = None
-    businessContext: Optional[str] = None
-    status: Optional[str] = "draft"
-
-
-class CampaignUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    subreddits: Optional[List[str]] = None
-    messageTone: Optional[str] = None
-    targetPersona: Optional[str] = None
-    businessContext: Optional[str] = None
-    status: Optional[str] = None
-
-
-@router.get("/campaigns")
-async def get_campaigns_route(
-    request: Request,
-    status: Optional[str] = None,
-    limit: int = Query(50, le=200)
-):
-    """Get all campaigns"""
-    team_id = get_current_team_id(request)
-    filters = {"status": status, "limit": limit}
-    campaign_list = await campaigns.get_campaigns(filters, team_id=team_id)
-    return {"success": True, "data": campaign_list}
-
-
-@router.post("/campaigns")
-async def create_campaign_route(request: Request, body: CampaignCreateRequest):
-    """Create a new campaign"""
-    team_id = get_current_team_id(request)
-    campaign = await campaigns.create_campaign(body.model_dump(), team_id=team_id)
-    return {"success": True, "data": campaign}
-
-
-@router.get("/campaigns/{campaign_id}")
-async def get_campaign_route(request: Request, campaign_id: str):
-    """Get a single campaign"""
-    team_id = get_current_team_id(request)
-    campaign = await campaigns.get_campaign(campaign_id, team_id=team_id)
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    return {"success": True, "data": campaign}
-
-
-@router.patch("/campaigns/{campaign_id}")
-async def update_campaign_route(request: Request, campaign_id: str, body: CampaignUpdateRequest):
-    """Update a campaign"""
-    team_id = get_current_team_id(request)
-    campaign = await campaigns.update_campaign(campaign_id, body.model_dump(exclude_none=True), team_id=team_id)
-    return {"success": True, "data": campaign}
-
-
-@router.delete("/campaigns/{campaign_id}")
-async def delete_campaign_route(request: Request, campaign_id: str):
-    """Delete a campaign"""
-    team_id = get_current_team_id(request)
-    success = await campaigns.delete_campaign(campaign_id, team_id=team_id)
-    return {"success": success}
-
-
-@router.get("/campaigns/{campaign_id}/stats")
-async def get_campaign_stats_route(request: Request, campaign_id: str):
-    """Get campaign statistics"""
-    team_id = get_current_team_id(request)
-    stats = await campaigns.get_campaign_stats(campaign_id, team_id=team_id)
-    return {"success": True, "data": stats}
 
 
 # =============================================================================

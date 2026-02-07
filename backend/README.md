@@ -1,6 +1,6 @@
-# Reddit Insight Backend (Python)
+# Reddit Automated DM Backend (Python)
 
-Backend API for the Reddit Insight Gatherer Chrome Extension, built with FastAPI.
+Backend API for the Reddit Automated DM Chrome Extension, built with FastAPI.
 
 ## Requirements
 

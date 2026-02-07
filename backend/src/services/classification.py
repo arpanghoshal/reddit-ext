@@ -213,8 +213,8 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://reddit-insight-gatherer.local",
-                "X-Title": "Reddit Insight Gatherer"
+                "HTTP-Referer": "https://reddit-automated-dm.local",
+                "X-Title": "Reddit Automated DM"
             },
             json={
                 "model": settings.get("model", DEFAULT_MODEL),

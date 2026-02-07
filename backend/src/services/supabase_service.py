@@ -6,6 +6,7 @@ Database operations for DM history, automation logs, settings, and analytics
 import os
 import random
 import string
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from supabase import create_client, Client
@@ -131,18 +132,26 @@ async def _create_or_update_conversation(
                 conversation_id = conv_result.data[0]["id"]
                 print(f"Conversation created for {recipient}")
 
-        # Add the message to the messages table
+        # Add the message to the messages table (with fingerprint dedup)
         if conversation_id and data.get("messageContent"):
+            content = data.get("messageContent")
+            normalized = " ".join(content.lower().strip().split())
+            fingerprint = hashlib.sha256(f"{normalized}|outbound".encode('utf-8')).hexdigest()[:16]
+
             msg_insert = {
                 "conversation_id": conversation_id,
                 "direction": "outbound",
-                "content": data.get("messageContent"),
+                "content": content,
                 "sent_at": now,
-                "is_ai_generated": True
+                "is_ai_generated": True,
+                "fingerprint": fingerprint
             }
             if team_id:
                 msg_insert["team_id"] = team_id
-            client.table("messages").insert(msg_insert).execute()
+            client.table("messages").upsert(
+                msg_insert,
+                on_conflict="conversation_id,fingerprint"
+            ).execute()
             print(f"Message added to conversation {conversation_id}")
 
     except Exception as e:

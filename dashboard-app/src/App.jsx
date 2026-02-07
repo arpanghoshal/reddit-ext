@@ -1,14 +1,12 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Filter, Users, Shield, Settings as SettingsIcon, Target, XCircle, LogOut, BarChart2, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Users, Shield, Settings as SettingsIcon, XCircle, LogOut, BarChart2, ClipboardList } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Dashboard from './pages/Dashboard';
 import Queue from './pages/Queue';
 import Inbox from './pages/Inbox';
 import Accounts from './pages/Accounts';
-import Rules from './pages/Rules';
 import Settings from './pages/Settings';
-import Campaigns from './pages/Campaigns';
 import Skipped from './pages/Skipped';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -45,10 +43,9 @@ function AppLayout() {
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/queue', icon: MessageSquare, label: 'Queue' },
     { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
-    { to: '/campaigns', icon: Target, label: 'Campaigns' },
     { to: '/accounts', icon: Users, label: 'Accounts' },
-    { to: '/rules', icon: Filter, label: 'Rules' },
     { to: '/skipped', icon: XCircle, label: 'Skipped' },
+    { to: '/team-settings', icon: Users, label: 'Team' },
     { to: '/analytics', icon: BarChart2, label: 'Analytics' },
     { to: '/audit-log', icon: ClipboardList, label: 'Audit Log' },
     { to: '/settings', icon: SettingsIcon, label: 'Settings' },
@@ -72,7 +69,7 @@ function AppLayout() {
       <aside className="w-64 bg-[#1a1a1b] text-white flex flex-col border-r border-[#343536]">
         <div className="p-4 border-b border-[#343536]">
           <h1 className="text-xl font-bold text-[#ff4500]">
-            Reddit Insight
+            Reddit Automated DM
           </h1>
           <p className="text-sm text-[#818384]">Automation Dashboard</p>
         </div>
@@ -132,14 +129,12 @@ function AppLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-[#030303]" key={`${authKey}-${currentTeam?.id}`}>
+      <main className="flex-1 overflow-auto bg-[#dae0e6]" key={`${authKey}-${currentTeam?.id}`}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/queue" element={<Queue />} />
           <Route path="/inbox" element={<Inbox />} />
-          <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/accounts" element={<Accounts />} />
-          <Route path="/rules" element={<Rules />} />
           <Route path="/skipped" element={<Skipped />} />
           <Route path="/analytics" element={<TeamAnalytics />} />
           <Route path="/audit-log" element={<AuditLog />} />

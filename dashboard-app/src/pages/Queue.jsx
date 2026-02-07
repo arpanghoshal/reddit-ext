@@ -3,7 +3,7 @@ import { Check, X, Edit2, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Send
 import { Link } from 'react-router-dom';
 import * as api from '../api/client';
 
-function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQueue }) {
+function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQueue, onSend }) {
   const [expanded, setExpanded] = useState(false);
 
   const statusColors = {
@@ -118,6 +118,16 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
               </button>
             </div>
           )}
+          {item.status === 'approved' && isReplyQueue && onSend && (
+            <button
+              onClick={() => onSend(item)}
+              className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
+              title="Send via Reddit"
+            >
+              <Send size={16} />
+              Send
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -133,8 +143,8 @@ export default function Queue() {
   const [messageType, setMessageType] = useState('outreach');
   const [selectedIds, setSelectedIds] = useState(new Set());
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
     setError(null);
     try {
       const [queueItems, queueStats] = await Promise.all([
@@ -143,7 +153,7 @@ export default function Queue() {
           messageType: messageType,
           limit: 100
         }),
-        api.getQueueStats()
+        api.getQueueStats({ messageType })
       ]);
       setItems(queueItems || []);
       setStats(queueStats);
@@ -151,13 +161,22 @@ export default function Queue() {
       console.error('Failed to load queue:', err);
       setError('Failed to load queue data');
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(true);
     setSelectedIds(new Set());
+    const interval = setInterval(() => loadData(), 15000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [filter, messageType]);
 
   const handleApprove = async (id) => {
@@ -212,6 +231,16 @@ export default function Queue() {
       newSelected.add(id);
     }
     setSelectedIds(newSelected);
+  };
+
+  const handleSend = (item) => {
+    const message = item.editedMessage || item.generatedMessage;
+    api.triggerExtensionSend(
+      item.recipientUsername,
+      message,
+      item.id,
+      item.conversationId || null
+    );
   };
 
   const selectAll = () => {
@@ -359,6 +388,7 @@ export default function Queue() {
               onSelect={toggleSelect}
               isSelected={selectedIds.has(item.id)}
               isReplyQueue={messageType === 'reply'}
+              onSend={messageType === 'reply' ? handleSend : undefined}
             />
           ))}
         </div>
