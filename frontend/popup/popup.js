@@ -1,7 +1,7 @@
 // Popup Script for Reddit Automated DM Extension
 
 const DEFAULT_DASHBOARD_URL = 'http://localhost:5173';
-const DEFAULT_BACKEND_URL = 'http://localhost:3000';
+const DEFAULT_BACKEND_URL = 'https://backend-production-423ef.up.railway.app';
 
 // Load on popup open
 document.addEventListener('DOMContentLoaded', async () => {
@@ -129,49 +129,16 @@ function showToast(message, type = 'info') {
 
 function clearAuthMessages() {
     const errorEl = document.getElementById('auth-error');
-    const successEl = document.getElementById('auth-success');
     errorEl.style.display = 'none';
-    successEl.style.display = 'none';
 }
 
 function showAuthError(message) {
     const errorEl = document.getElementById('auth-error');
     errorEl.textContent = message;
     errorEl.style.display = 'block';
-    document.getElementById('auth-success').style.display = 'none';
-}
-
-function showAuthSuccess(message) {
-    const successEl = document.getElementById('auth-success');
-    successEl.textContent = message;
-    successEl.style.display = 'block';
-    document.getElementById('auth-error').style.display = 'none';
 }
 
 function initEventListeners() {
-    // Auth toggle (switch between Sign In / Sign Up)
-    document.getElementById('auth-toggle-link').addEventListener('click', (e) => {
-        e.preventDefault();
-        const loginForm = document.getElementById('login-form');
-        const signupForm = document.getElementById('signup-form');
-        const toggleText = document.getElementById('toggle-text');
-        const toggleLink = document.getElementById('auth-toggle-link');
-
-        clearAuthMessages();
-
-        if (loginForm.style.display !== 'none') {
-            loginForm.style.display = 'none';
-            signupForm.style.display = 'block';
-            toggleText.textContent = 'Already have an account?';
-            toggleLink.textContent = 'Sign In';
-        } else {
-            loginForm.style.display = 'block';
-            signupForm.style.display = 'none';
-            toggleText.textContent = "Don't have an account?";
-            toggleLink.textContent = 'Sign Up';
-        }
-    });
-
     // Login form
     document.getElementById('login-form').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -206,48 +173,6 @@ function initEventListeners() {
         } finally {
             loginBtn.disabled = false;
             loginBtn.textContent = 'Sign In';
-        }
-    });
-
-    // Signup form
-    document.getElementById('signup-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const fullName = document.getElementById('signup-name').value;
-        const email = document.getElementById('signup-email').value;
-        const password = document.getElementById('signup-password').value;
-        const signupBtn = document.getElementById('signup-btn');
-
-        clearAuthMessages();
-        signupBtn.disabled = true;
-        signupBtn.textContent = 'Creating account...';
-
-        try {
-            const response = await chrome.runtime.sendMessage({
-                action: 'SIGNUP',
-                email,
-                password,
-                fullName
-            });
-
-            if (response && response.error) {
-                throw new Error(response.error);
-            }
-
-            showAuthSuccess(response.message || 'Account created! Check your email to verify, then sign in.');
-
-            // Switch to login form so user can sign in
-            document.getElementById('signup-form').style.display = 'none';
-            document.getElementById('login-form').style.display = 'block';
-            document.getElementById('toggle-text').textContent = "Don't have an account?";
-            document.getElementById('auth-toggle-link').textContent = 'Sign Up';
-
-            // Pre-fill the login email
-            document.getElementById('login-email').value = email;
-        } catch (err) {
-            showAuthError(err.message || 'Signup failed');
-        } finally {
-            signupBtn.disabled = false;
-            signupBtn.textContent = 'Create Account';
         }
     });
 
