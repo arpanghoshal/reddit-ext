@@ -118,7 +118,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
   );
 }
 
-function AddAccountModal({ isOpen, onClose, onAdd }) {
+function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -140,64 +140,47 @@ function AddAccountModal({ isOpen, onClose, onAdd }) {
     }
   };
 
-  const handleCapture = () => {
+  const handleCapture = async () => {
     setCapturing(true);
-    setCaptureStatus('Log into the Reddit account you want to add, then the cookies will be captured automatically...');
+    setCaptureStatus('Opening Reddit... The extension will capture cookies and register the account automatically.');
 
-    // Open Reddit with capture hash — the extension will capture cookies
+    // Snapshot current account usernames so we can detect new ones
+    let existingUsernames = new Set();
+    try {
+      const current = await api.getAccounts();
+      existingUsernames = new Set((current || []).map(a => a.username?.toLowerCase()));
+    } catch {}
+
+    // Open Reddit with capture hash — the extension will capture cookies and call the API
     window.open('https://www.reddit.com/#__rdm_capture_cookies', '_blank');
 
-    // Poll chrome.storage for captured cookies (via extension messaging)
-    // Since dashboard can't access chrome.storage directly, we use a workaround:
-    // Poll a known API-less approach — check via window message or just instruct the user
+    // Poll the backend for a newly added account
     let pollCount = 0;
     const pollInterval = setInterval(async () => {
       pollCount++;
       if (pollCount > 30) { // 30 seconds timeout
         clearInterval(pollInterval);
         setCapturing(false);
-        setCaptureStatus('Capture timed out. Make sure the extension is installed and you are on Reddit.');
+        setCaptureStatus('Capture timed out. Make sure the extension is installed and you are logged into Reddit.');
         return;
       }
 
       try {
-        // Try to get the captured cookies via the extension's storage
-        // We use a message to the extension's background script via a temporary tab
-        // Since the dashboard isn't on reddit.com, we need to check via our API or local storage
-        // For simplicity, poll local storage that the popup/content script may have written
-        const stored = localStorage.getItem('rdm_captured_cookies');
-        if (stored) {
-          const data = JSON.parse(stored);
-          if (data.capturedAt && Date.now() - data.capturedAt < 60000) {
-            clearInterval(pollInterval);
-            localStorage.removeItem('rdm_captured_cookies');
-
-            if (data.username && data.cookies) {
-              setUsername(data.username);
-              setCaptureStatus(`Captured cookies for u/${data.username}! Click "Add Account" to save.`);
-              setCapturing(false);
-              // Auto-add with cookies
-              setLoading(true);
-              try {
-                await onAdd({ username: data.username, cookies: data.cookies });
-                setUsername('');
-                setCaptureStatus(null);
-                onClose();
-              } catch (err) {
-                setCaptureStatus(`Failed to save: ${err.message}`);
-              } finally {
-                setLoading(false);
-              }
-            } else {
-              setCaptureStatus('Could not detect Reddit username. Please make sure you are logged in.');
-              setCapturing(false);
-            }
-          }
+        const accounts = await api.getAccounts();
+        const newAccount = (accounts || []).find(
+          a => !existingUsernames.has(a.username?.toLowerCase())
+        );
+        if (newAccount) {
+          clearInterval(pollInterval);
+          setCapturing(false);
+          setCaptureStatus(`Account u/${newAccount.username} added successfully!`);
+          if (onRefresh) onRefresh();
+          setTimeout(() => onClose(), 1500);
         }
-      } catch (err) {
+      } catch {
         // Continue polling
       }
-    }, 1000);
+    }, 2000);
   };
 
   if (!isOpen) return null;
@@ -409,6 +392,7 @@ export default function Accounts() {
         isOpen={showAddModal}
         onClose={() => setShowAddModal(false)}
         onAdd={handleAddAccount}
+        onRefresh={loadData}
       />
     </div>
   );

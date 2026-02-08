@@ -111,7 +111,9 @@ async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = Non
         if team_id:
             insert_data["team_id"] = team_id
 
-        result = client.table("reddit_accounts").insert(insert_data).execute()
+        result = client.table("reddit_accounts").upsert(
+            insert_data, on_conflict="username"
+        ).execute()
 
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:

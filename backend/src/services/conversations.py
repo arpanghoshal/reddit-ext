@@ -370,7 +370,7 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
         print("Missing participant username")
         return None
 
-    # If we have a username but no account_id, try to resolve it
+    # If we have a username but no account_id, try to resolve or auto-create
     if not account_id and account_username:
         client = get_client()
         if client:
@@ -384,8 +384,21 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
                 if acct_result.data:
                     account_id = acct_result.data[0]["id"]
                     print(f"Resolved account '{account_username}' to id {account_id}")
+                else:
+                    # Auto-create the Reddit account
+                    new_account = {
+                        "username": account_username,
+                        "status": "active",
+                        "warmup_mode": False,
+                    }
+                    if team_id:
+                        new_account["team_id"] = team_id
+                    create_result = client.table("reddit_accounts").insert(new_account).execute()
+                    if create_result.data:
+                        account_id = create_result.data[0]["id"]
+                        print(f"Auto-created account '{account_username}' with id {account_id}")
             except Exception as e:
-                print(f"Failed to resolve account by username: {e}")
+                print(f"Failed to resolve/create account by username: {e}")
 
     # Get or create conversation
     # First try scoped to the specific account

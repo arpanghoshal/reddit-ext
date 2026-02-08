@@ -1185,6 +1185,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
+
+    if (request.action === 'REGISTER_CAPTURED_ACCOUNT') {
+        // Register a captured account via the backend API
+        const { username, cookies: capturedCookies } = request;
+        if (!username) {
+            sendResponse({ success: false, error: 'No username' });
+            return true;
+        }
+        api.addAccount({ username, cookies: capturedCookies })
+            .then(result => {
+                console.log(`Account u/${username} registered via API`);
+                sendResponse({ success: true, data: result });
+            })
+            .catch(err => {
+                console.error(`Failed to register account u/${username}:`, err);
+                sendResponse({ success: false, error: err.message });
+            });
+        return true;
+    }
 });
 
 // =============================================================================

@@ -1462,14 +1462,24 @@ function checkCookieCaptureInstructions() {
         }
 
         if (response && response.cookies && response.cookies.length > 0) {
-            // Store temporarily so the dashboard can pick it up
-            chrome.storage.local.set({
-                capturedCookies: response.cookies,
-                capturedUsername: response.username,
-                capturedAt: Date.now()
-            }, () => {
-                console.log(`Cookies captured for u/${response.username || 'unknown'} (${response.cookies.length} cookies)`);
-                // Notify via storage event — the dashboard polls for this
+            console.log(`Cookies captured for u/${response.username || 'unknown'} (${response.cookies.length} cookies)`);
+
+            // Register the account via the backend API directly
+            chrome.runtime.sendMessage({
+                action: 'REGISTER_CAPTURED_ACCOUNT',
+                username: response.username,
+                cookies: response.cookies
+            }, (regResult) => {
+                if (chrome.runtime.lastError) {
+                    console.error('Account registration failed:', chrome.runtime.lastError.message);
+                }
+                // Store result so dashboard can detect completion
+                chrome.storage.local.set({
+                    capturedCookies: response.cookies,
+                    capturedUsername: response.username,
+                    capturedAt: Date.now(),
+                    capturedRegistered: !!(regResult && regResult.success)
+                });
             });
         } else {
             console.warn('No cookies captured. Make sure you are logged into Reddit.');
