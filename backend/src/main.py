@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reddit Automated DM Backend",
     description="Backend API for Reddit Automated DM Chrome Extension",
-    version="1.0.0",
+    version="0.0.1",
     lifespan=lifespan,
     # Disable docs in production if needed
     docs_url="/docs" if os.getenv("ENVIRONMENT") != "production" else None,
@@ -116,7 +116,7 @@ async def health_check():
     return {
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0"
+        "version": "0.0.1"
     }
 
 # Include API routes

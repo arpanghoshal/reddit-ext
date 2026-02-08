@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Reddit Automated DM",
-  "version": "2.0.0",
+  "version": "0.0.1",
   "description": "Automate sending personalized DMs to Reddit users.",
   "permissions": [
     "storage",

@@ -1,6 +1,6 @@
 [project]
 name = "reddit-automated-dm-backend"
-version = "1.1.0"
+version = "0.0.1"
 description = "Backend API for Reddit Automated DM Chrome Extension"
 readme = "README.md"
 requires-python = ">=3.11"
