@@ -300,7 +300,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         console.log(`Skipping current item for tab ${tabId}`);
 
+        const task = activeTasks[tabId];
         const queue = subredditQueues[tabId];
+
+        // Log skipped post to backend
+        if (task && task.data) {
+            api.logSkippedPost({
+                postUrl: task.data.postUrl || '',
+                postTitle: task.data.postTitle || null,
+                subreddit: task.data.subreddit || (queue ? queue.subreddit : null),
+                author: task.data.targetUser || null,
+                sessionId: queue ? queue.sessionId : null,
+                skipReason: 'error_skipped',
+                skipDetails: {
+                    source: 'error_recovery',
+                    error: request.context?.error || null
+                }
+            }).catch(err => console.error('Failed to log skipped post:', err));
+        }
+
         if (queue && queue.isActive) {
             queue.failedCount++;
             queue.currentIndex++;
@@ -360,6 +378,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.log('DM skipped by user');
 
             const queue = subredditQueues[tabId];
+
+            // Log skipped post to backend
+            if (task.data) {
+                api.logSkippedPost({
+                    postUrl: task.data.postUrl || '',
+                    postTitle: task.data.postTitle || null,
+                    subreddit: task.data.subreddit || (queue ? queue.subreddit : null),
+                    author: task.data.targetUser || null,
+                    sessionId: queue ? queue.sessionId : null,
+                    skipReason: 'user_skipped',
+                    skipDetails: { source: 'dm_confirmation' }
+                }).catch(err => console.error('Failed to log skipped post:', err));
+            }
+
             if (queue && queue.isActive) {
                 // Move to next item in queue
                 queue.currentIndex++;
@@ -826,6 +858,21 @@ function handleStepCompletion(tabId, result) {
                         automationType: 'batch',
                         sessionId: queue.sessionId
                     });
+
+                    // Log as skipped post too
+                    api.logSkippedPost({
+                        postUrl: task.data.postUrl || '',
+                        postTitle: task.data.postTitle || null,
+                        subreddit: task.data.subreddit || queue.subreddit,
+                        author: task.data.targetUser,
+                        sessionId: queue.sessionId,
+                        skipReason: 'max_retries_exceeded',
+                        skipDetails: {
+                            source: 'automation_failure',
+                            retries: task.retries,
+                            lastError: result.error || null
+                        }
+                    }).catch(err => console.error('Failed to log skipped post:', err));
                 }
 
                 // Update Supabase session progress

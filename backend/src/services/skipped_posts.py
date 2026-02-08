@@ -113,7 +113,7 @@ async def get_skip_stats(team_id: Optional[str] = None) -> Dict[str, Any]:
         return {"total": 0, "byReason": {}, "bySubreddit": {}}
 
 
-async def log_skipped_post(data: Dict[str, Any]) -> bool:
+async def log_skipped_post(data: Dict[str, Any], team_id: Optional[str] = None) -> bool:
     """Log a skipped post (for use by automation)"""
     client = get_client()
     if not client:
@@ -130,7 +130,8 @@ async def log_skipped_post(data: Dict[str, Any]) -> bool:
             "skip_reason": data.get("skipReason"),
             "skip_details": data.get("skipDetails"),
             "classification_id": data.get("classificationId"),
-            "qualification_id": data.get("qualificationId")
+            "qualification_id": data.get("qualificationId"),
+            "team_id": team_id
         }
 
         # Remove None values

@@ -62,7 +62,7 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const fetchUserTeams = async (userId) => {
+  const fetchUserTeams = async (userId, preferredTeamId = null) => {
     try {
       const { data, error } = await supabase
         .from('team_members')
@@ -92,12 +92,12 @@ export function AuthProvider({ children }) {
 
       setTeams(teamList);
 
-      // Set current team from localStorage or default to personal
-      const savedTeamId = localStorage.getItem('currentTeamId');
-      const savedTeam = teamList.find((t) => t.id === savedTeamId);
+      // Set current team: prefer the explicit team, then localStorage, then personal
+      const targetTeamId = preferredTeamId || localStorage.getItem('currentTeamId');
+      const targetTeam = teamList.find((t) => t.id === targetTeamId);
       const personalTeam = teamList.find((t) => t.isPersonal);
 
-      const selectedTeam = savedTeam || personalTeam || teamList[0] || null;
+      const selectedTeam = targetTeam || personalTeam || teamList[0] || null;
       setCurrentTeam(selectedTeam);
 
       // Always persist the selected team to localStorage so the API client
@@ -168,8 +168,8 @@ export function AuthProvider({ children }) {
     return session?.access_token;
   }, [session]);
 
-  const refreshTeams = useCallback(async () => {
-    if (user) return fetchUserTeams(user.id);
+  const refreshTeams = useCallback(async (preferredTeamId = null) => {
+    if (user) return fetchUserTeams(user.id, preferredTeamId);
   }, [user]);
 
   const value = useMemo(() => ({

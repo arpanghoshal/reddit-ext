@@ -9,6 +9,7 @@ import httpx
 
 # Import user analysis for personalization
 from . import user_analysis
+from . import reddit_comments
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "deepseek/deepseek-v3.2"
@@ -53,6 +54,13 @@ async def generate_question(input_data: Dict[str, Any]) -> str:
             subreddit_culture = await user_analysis.get_subreddit_culture(subreddit)
     except Exception as e:
         print(f"[DEBUG] Could not load user profile: {e}")
+
+    # Fetch post comments for richer context
+    comments_text = ""
+    try:
+        comments_text = await reddit_comments.get_post_comments_text(post.get("url", ""))
+    except Exception as e:
+        print(f"[DEBUG] Could not fetch post comments: {e}")
 
     # Build enhanced system prompt with personalization
     personalization_section = ""
@@ -125,11 +133,12 @@ HARD RULES:
 - Keep it short - 1-2 sentences max
 - Output ONLY the message, nothing else"""
 
+    comments_section = f"\n{comments_text}\n" if comments_text else ""
     user_prompt = f"""Their post in r/{post.get('subreddit', 'Unknown')}:
 "{post.get('title', 'No title')}"
 
 {post.get('body', '') or '(no body text)'}
-
+{comments_section}
 Author: u/{post.get('author', 'unknown')}
 
 Write a quick DM to them:"""

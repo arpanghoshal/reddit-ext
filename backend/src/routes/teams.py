@@ -6,10 +6,13 @@ CRUD operations for teams, members, and invitations
 import os
 import re
 import secrets
+import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
+
+logger = logging.getLogger(__name__)
 from supabase import create_client, Client
 
 from ..middleware.supabase_auth import get_current_user_id, get_current_team_id
@@ -506,13 +509,45 @@ async def invite_member(request: Request, team_id: str, data: InviteMemberReques
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to create invitation")
 
-        # TODO: Send invitation email
-        # For now, return the invite link that can be shared
+        # Build the full invite URL
+        frontend_url = os.getenv("SITE_URL", "http://localhost:5173")
         invite_url = f"/accept-invite?token={token}"
+        full_invite_url = f"{frontend_url}{invite_url}"
+
+        # Send invitation email via Supabase Auth
+        is_new_user = not bool(profile_check.data)
+
+        if is_new_user:
+            # New user: Supabase creates the user and sends an invite email with magic link
+            try:
+                client.auth.admin.invite_user_by_email(
+                    data.email,
+                    {
+                        "redirect_to": full_invite_url,
+                        "data": {
+                            "full_name": data.email.split("@")[0],
+                        }
+                    }
+                )
+            except Exception as invite_err:
+                logger.warning(f"Failed to send invite email to {data.email}: {invite_err}")
+        else:
+            # Existing user: send a magic link email for authentication
+            try:
+                client.auth.admin.generate_link({
+                    "type": "magiclink",
+                    "email": data.email,
+                    "options": {
+                        "redirect_to": full_invite_url,
+                    }
+                })
+            except Exception as link_err:
+                logger.warning(f"Failed to send magic link to {data.email}: {link_err}")
 
         return {
             "invitation": result.data[0],
             "invite_url": invite_url,
+            "full_invite_url": full_invite_url,
             "message": f"Invitation created for {data.email}"
         }
 

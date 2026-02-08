@@ -12,6 +12,9 @@ const REASON_COLORS = {
   'low_karma': '#f97316',
   'account_too_new': '#14b8a6',
   'blocked_subreddit': '#64748b',
+  'user_skipped': '#3b82f6',
+  'error_skipped': '#f43f5e',
+  'max_retries_exceeded': '#dc2626',
   'unknown': '#374151'
 };
 
@@ -24,6 +27,9 @@ const REASON_LABELS = {
   'low_karma': 'Low Karma',
   'account_too_new': 'Account Too New',
   'blocked_subreddit': 'Blocked Subreddit',
+  'user_skipped': 'User Skipped',
+  'error_skipped': 'Error Skipped',
+  'max_retries_exceeded': 'Max Retries Exceeded',
   'unknown': 'Unknown'
 };
 

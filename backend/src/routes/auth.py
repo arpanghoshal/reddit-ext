@@ -4,18 +4,36 @@ Handles user signup, login, and token refresh using Supabase Auth
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Request
+import logging
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
 def get_supabase_client() -> Client:
-    """Get Supabase client for auth operations"""
+    """Get Supabase client for auth operations (anon key)"""
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+
+    if not url or not key:
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase not configured"
+        )
+
+    return create_client(url, key)
+
+
+def get_service_client() -> Client:
+    """Get Supabase client with service role key (bypasses RLS)"""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
     if not url or not key:
         raise HTTPException(
@@ -43,8 +61,8 @@ class RefreshRequest(BaseModel):
 
 class AcceptInviteRequest(BaseModel):
     token: str
-    email: EmailStr
-    password: str
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
     full_name: Optional[str] = None
 
 
@@ -246,53 +264,141 @@ async def get_current_user(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to get user info: {e}")
 
 
-@router.post("/accept-invite")
-async def accept_invite(request: AcceptInviteRequest):
+@router.get("/invite-info")
+async def get_invite_info(token: str = Query(...)):
     """
-    Accept a team invitation.
-    Creates user if new, adds to team if existing.
+    Get invitation details by token. Public endpoint - no auth required.
     """
     try:
-        client = get_supabase_client()
+        client = get_service_client()
 
-        # Verify invitation token
         invite = client.table("team_invitations").select(
-            "*, teams(id, name)"
-        ).eq("token", request.token).eq("email", request.email).single().execute()
+            "email, role, expires_at, created_at, teams(id, name)"
+        ).eq("token", token).single().execute()
+
+        if not invite.data:
+            raise HTTPException(status_code=404, detail="Invitation not found or expired")
+
+        expires_at = datetime.fromisoformat(invite.data["expires_at"].replace("Z", "+00:00"))
+        if datetime.now(expires_at.tzinfo) > expires_at:
+            raise HTTPException(status_code=400, detail="Invitation has expired")
+
+        team = invite.data.get("teams", {})
+
+        return {
+            "email": invite.data["email"],
+            "role": invite.data["role"],
+            "team_name": team.get("name", "Unknown"),
+            "team_id": team.get("id"),
+            "expires_at": invite.data["expires_at"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/accept-invite")
+async def accept_invite(request: Request, data: AcceptInviteRequest):
+    """
+    Accept a team invitation.
+    Supports both authenticated (JWT/magic link) and unauthenticated (email+password) flows.
+    """
+    try:
+        client = get_service_client()
+
+        # Look up invitation by token
+        query = client.table("team_invitations").select(
+            "*, teams(id, name, slug)"
+        ).eq("token", data.token)
+
+        if data.email:
+            query = query.eq("email", data.email)
+
+        invite = query.single().execute()
 
         if not invite.data:
             raise HTTPException(status_code=400, detail="Invalid or expired invitation")
 
-        from datetime import datetime
         expires_at = datetime.fromisoformat(invite.data["expires_at"].replace("Z", "+00:00"))
         if datetime.now(expires_at.tzinfo) > expires_at:
             raise HTTPException(status_code=400, detail="Invitation has expired")
 
         team_id = invite.data["team_id"]
         role = invite.data["role"]
+        invite_email = invite.data["email"]
 
-        # Try to sign up the user (will fail if already exists)
-        try:
-            signup_response = client.auth.sign_up({
-                "email": request.email,
-                "password": request.password,
-                "options": {
-                    "data": {
-                        "full_name": request.full_name or request.email.split("@")[0]
+        # Determine user_id: check if request has a valid JWT
+        user_id = None
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            from ..middleware.supabase_auth import decode_supabase_jwt
+            token_str = auth_header.replace("Bearer ", "")
+            payload = decode_supabase_jwt(token_str)
+            if payload:
+                user_id = payload.get("sub")
+
+        if not user_id:
+            # Unauthenticated flow: require email and password
+            if not data.email or not data.password:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email and password are required when not authenticated"
+                )
+
+            anon_client = get_supabase_client()
+            try:
+                signup_response = anon_client.auth.sign_up({
+                    "email": data.email,
+                    "password": data.password,
+                    "options": {
+                        "data": {
+                            "full_name": data.full_name or data.email.split("@")[0]
+                        }
                     }
-                }
-            })
-            user_id = signup_response.user.id if signup_response.user else None
-        except Exception:
-            # User exists, try to login
-            login_response = client.auth.sign_in_with_password({
-                "email": request.email,
-                "password": request.password
-            })
-            user_id = login_response.user.id if login_response.user else None
+                })
+                user_id = signup_response.user.id if signup_response.user else None
+            except Exception:
+                login_response = anon_client.auth.sign_in_with_password({
+                    "email": data.email,
+                    "password": data.password
+                })
+                user_id = login_response.user.id if login_response.user else None
 
         if not user_id:
             raise HTTPException(status_code=400, detail="Failed to authenticate")
+
+        # Verify the authenticated user's email matches the invitation
+        try:
+            user_info = client.auth.admin.get_user_by_id(user_id)
+            if user_info and user_info.user and user_info.user.email != invite_email:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Your email does not match this invitation"
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # If we can't verify, proceed (edge case)
+
+        # Check if already a member
+        existing_member = client.table("team_members").select("id").eq(
+            "team_id", team_id
+        ).eq("user_id", user_id).execute()
+
+        team_data = invite.data.get("teams", {})
+
+        if existing_member.data:
+            # Already a member - clean up invitation and return success
+            client.table("team_invitations").delete().eq(
+                "id", invite.data["id"]
+            ).execute()
+            return {
+                "message": "You are already a member of this team",
+                "team": team_data,
+                "team_id": team_data.get("id"),
+            }
 
         # Add user to team
         client.table("team_members").insert({
@@ -309,7 +415,8 @@ async def accept_invite(request: AcceptInviteRequest):
 
         return {
             "message": "Successfully joined team",
-            "team": invite.data.get("teams", {})
+            "team": team_data,
+            "team_id": team_data.get("id"),
         }
 
     except HTTPException:

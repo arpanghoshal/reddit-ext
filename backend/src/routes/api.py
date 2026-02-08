@@ -1514,6 +1514,21 @@ async def get_skipped_posts_route(
     return {"success": True, "data": posts}
 
 
+@router.post("/skipped-posts")
+async def log_skipped_post_route(request: Request):
+    """Log a skipped post from the extension"""
+    team_id = get_current_team_id(request)
+    body = await request.json()
+    if not body.get("skipReason"):
+        raise HTTPException(status_code=400, detail="skipReason is required")
+    if not body.get("postUrl"):
+        raise HTTPException(status_code=400, detail="postUrl is required")
+    success = await skipped_posts.log_skipped_post(body, team_id=team_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to log skipped post")
+    return {"success": True}
+
+
 @router.get("/skipped-posts/stats")
 async def get_skip_stats_route(request: Request):
     """Get statistics about skipped posts"""

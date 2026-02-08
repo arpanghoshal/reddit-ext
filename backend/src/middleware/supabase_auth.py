@@ -22,6 +22,7 @@ PUBLIC_ENDPOINTS = {
     "/api/auth/login",
     "/api/auth/refresh",
     "/api/auth/accept-invite",
+    "/api/auth/invite-info",
     "/docs",
     "/openapi.json",
     "/redoc",

@@ -351,6 +351,15 @@ async function getDMsBySubreddit(limit = 10) {
     return result.data || [];
 }
 
+// --- Skipped Posts Functions ---
+
+async function logSkippedPost(data) {
+    return apiRequest('/skipped-posts', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+}
+
 // --- Automation Session Functions ---
 
 async function startAutomationSession(data) {
@@ -1081,6 +1090,7 @@ export {
     generateQuestion,
     getAvailableModels,
     logDM,
+    logSkippedPost,
     getDMHistory,
     getDMsBySubreddit,
     startAutomationSession,

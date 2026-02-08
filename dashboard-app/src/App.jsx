@@ -13,6 +13,7 @@ import Signup from './pages/Signup';
 import TeamSettings from './pages/TeamSettings';
 import TeamAnalytics from './pages/TeamAnalytics';
 import AuditLog from './pages/AuditLog';
+import AcceptInvite from './pages/AcceptInvite';
 import TeamSwitcher from './components/TeamSwitcher';
 
 function ProtectedRoute({ children }) {
@@ -37,6 +38,8 @@ function AppLayout() {
   const [authKey, setAuthKey] = useState(0);
   const { user, signOut, currentTeam } = useAuth();
 
+  const isPersonal = currentTeam?.isPersonal;
+
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/queue', icon: MessageSquare, label: 'Queue' },
@@ -44,8 +47,10 @@ function AppLayout() {
     { to: '/accounts', icon: Users, label: 'Accounts' },
     { to: '/skipped', icon: XCircle, label: 'Skipped' },
     { to: '/team-settings', icon: Users, label: 'Team' },
-    { to: '/analytics', icon: BarChart2, label: 'Analytics' },
-    { to: '/audit-log', icon: ClipboardList, label: 'Audit Log' },
+    ...(!isPersonal ? [
+      { to: '/analytics', icon: BarChart2, label: 'Analytics' },
+      { to: '/audit-log', icon: ClipboardList, label: 'Audit Log' },
+    ] : []),
     { to: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
 
@@ -110,7 +115,7 @@ function AppLayout() {
           </button>
           <div className="flex items-center gap-2 text-sm text-[#818384] px-4">
             <Shield size={16} />
-            <span>v1.3.0</span>
+            <span>v0.0.1</span>
           </div>
         </div>
       </aside>
@@ -123,8 +128,8 @@ function AppLayout() {
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/skipped" element={<Skipped />} />
-          <Route path="/analytics" element={<TeamAnalytics />} />
-          <Route path="/audit-log" element={<AuditLog />} />
+          <Route path="/analytics" element={isPersonal ? <Navigate to="/" replace /> : <TeamAnalytics />} />
+          <Route path="/audit-log" element={isPersonal ? <Navigate to="/" replace /> : <AuditLog />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/team-settings" element={<TeamSettings />} />
         </Routes>
@@ -141,6 +146,7 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/accept-invite" element={<AcceptInvite />} />
           <Route
             path="/*"
             element={

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import httpx
 from supabase import create_client, Client
+from . import reddit_comments
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "deepseek/deepseek-v3.2"
@@ -92,9 +93,10 @@ async def save_classification(post: Dict[str, Any], classification: Dict[str, An
         return None
 
 
-def build_classification_prompt(post: Dict[str, Any], settings: Dict[str, Any]) -> str:
+def build_classification_prompt(post: Dict[str, Any], settings: Dict[str, Any], comments_text: str = "") -> str:
     """Build the classification prompt for LLM"""
     insight_types = settings.get("insightTypes", [])
+    comments_section = f"\n{comments_text}\n" if comments_text else ""
     return f"""TASK: Classify this Reddit post for outreach relevance.
 
 BUSINESS CONTEXT:
@@ -107,6 +109,7 @@ POST DATA:
 - Title: {post.get('title', 'No title')}
 - Body: {post.get('body', 'No body content')}
 - Author: u/{post.get('author', 'unknown')}
+{comments_section}
 
 EVALUATE AND SCORE (0-100):
 1. Relevance Score: How relevant is this post to the business/product?
@@ -205,7 +208,10 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
     if not api_key:
         raise ValueError("OpenRouter API key not configured")
 
-    prompt = build_classification_prompt(post, settings)
+    # Fetch post comments for richer context
+    comments_text = await reddit_comments.get_post_comments_text(post.get("url", ""))
+
+    prompt = build_classification_prompt(post, settings, comments_text)
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
