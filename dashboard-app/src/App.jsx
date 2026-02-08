@@ -13,7 +13,6 @@ import Signup from './pages/Signup';
 import TeamSettings from './pages/TeamSettings';
 import TeamAnalytics from './pages/TeamAnalytics';
 import AuditLog from './pages/AuditLog';
-import SettingsModal from './components/Settings';
 import TeamSwitcher from './components/TeamSwitcher';
 
 function ProtectedRoute({ children }) {
@@ -35,7 +34,6 @@ function ProtectedRoute({ children }) {
 }
 
 function AppLayout() {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [authKey, setAuthKey] = useState(0);
   const { user, signOut, currentTeam } = useAuth();
 
@@ -50,10 +48,6 @@ function AppLayout() {
     { to: '/audit-log', icon: ClipboardList, label: 'Audit Log' },
     { to: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
-
-  const handleAuthChange = () => {
-    setAuthKey(prev => prev + 1);
-  };
 
   const handleSignOut = async () => {
     try {
@@ -108,13 +102,6 @@ function AppLayout() {
             </div>
           )}
           <button
-            onClick={() => setSettingsOpen(true)}
-            className="flex items-center gap-2 w-full px-4 py-2 text-[#818384] hover:text-white hover:bg-[#272729] rounded-lg transition-colors"
-          >
-            <Shield size={16} />
-            <span>API Key</span>
-          </button>
-          <button
             onClick={handleSignOut}
             className="flex items-center gap-2 w-full px-4 py-2 text-[#818384] hover:text-white hover:bg-[#272729] rounded-lg transition-colors"
           >
@@ -143,12 +130,6 @@ function AppLayout() {
         </Routes>
       </main>
 
-      {/* API Key Modal */}
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onAuthChange={handleAuthChange}
-      />
     </div>
   );
 }
