@@ -1,6 +1,6 @@
 # Reddit Automated DM - Chrome Extension
 
-Chrome extension frontend for the Reddit Automated DM.
+Chrome extension for the Reddit Automated DM.
 
 ## Setup
 
@@ -10,7 +10,7 @@ Chrome extension frontend for the Reddit Automated DM.
    - Go to `chrome://extensions/`
    - Enable "Developer mode"
    - Click "Load unpacked"
-   - Select this `frontend` folder
+   - Select this `extension` folder
 
 3. Configure the extension:
    - Click the extension icon and go to Settings
@@ -33,7 +33,7 @@ Chrome extension frontend for the Reddit Automated DM.
 ## Structure
 
 ```text
-frontend/
+extension/
 ├── manifest.json        # Extension configuration
 ├── background/          # Service worker
 │   └── background.js

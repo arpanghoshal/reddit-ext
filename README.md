@@ -9,7 +9,7 @@ This project consists of three parts:
 | Component     | Location         | Description                                                        |
 |---------------|------------------|--------------------------------------------------------------------|
 | **Backend**   | `backend/`       | FastAPI server handling LLM generation, database ops, and API keys |
-| **Frontend**  | `frontend/`      | Chrome extension with sidebar UI and automation                    |
+| **Extension** | `extension/`     | Chrome extension with sidebar UI and automation                    |
 | **Dashboard** | `dashboard-app/` | React web app for analytics and management                         |
 
 ## Prerequisites
@@ -73,7 +73,7 @@ API docs available at: <http://localhost:3000/docs>
 1. Open Chrome and go to `chrome://extensions/`
 2. Enable **Developer mode** (toggle in top-right)
 3. Click **Load unpacked**
-4. Select the `frontend` folder from this project
+4. Select the `extension` folder from this project
 5. Pin the extension to your toolbar for easy access
 
 ### 3. Configure the Extension
@@ -124,7 +124,7 @@ reddit_ext/
 │   ├── requirements.txt
 │   └── .env.example
 │
-├── frontend/               # Chrome extension
+├── extension/              # Chrome extension
 │   ├── manifest.json       # Extension config
 │   ├── background/         # Service worker
 │   ├── content/            # Reddit content script
@@ -165,4 +165,4 @@ reddit_ext/
 ## Documentation
 
 - [Backend API Reference](backend/README.md)
-- [Frontend Extension Guide](frontend/README.md)
+- [Extension Guide](extension/README.md)
