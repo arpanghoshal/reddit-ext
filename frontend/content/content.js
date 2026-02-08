@@ -1,5 +1,38 @@
 console.log('Reddit Automated DM: Content script loaded');
 
+// --- Extension Context Validity ---
+let contextInvalidated = false;
+
+function isContextValid() {
+    try {
+        return !contextInvalidated && chrome.runtime && !!chrome.runtime.id;
+    } catch {
+        return false;
+    }
+}
+
+function onContextInvalidated() {
+    if (contextInvalidated) return;
+    contextInvalidated = true;
+    console.log('Reddit Automated DM: Extension updated, cleaning up...');
+    stopChatSync();
+    // Remove injected UI elements
+    const toggleHost = document.getElementById('reddit-dm-toggle-host');
+    if (toggleHost) toggleHost.remove();
+    if (sidebarContainer) {
+        sidebarContainer.remove();
+        sidebarContainer = null;
+        document.body.style.marginRight = '';
+    }
+}
+
+// Detect context invalidation via chrome.runtime.id polling
+setInterval(() => {
+    if (!contextInvalidated && !isContextValid()) {
+        onContextInvalidated();
+    }
+}, 5000);
+
 // --- Configuration & State ---
 let isSidebarOpen = false;
 let sidebarWidth = 400;
@@ -40,6 +73,7 @@ function hasChatElements() {
 }
 
 async function syncChatMessages() {
+    if (!isContextValid()) { stopChatSync(); return; }
     // Allow sync on dedicated chat page OR when chat panel is open on any Reddit page
     if (!isOnChatPage() && !isChatPanelOpen()) return;
 
@@ -1374,6 +1408,7 @@ function injectPersistentToggle() {
         </svg>
     `;
     btn.addEventListener('click', () => {
+        if (!isContextValid()) { onContextInvalidated(); return; }
         const newState = !isSidebarOpen;
         chrome.storage.local.set({ isSidebarOpen: newState });
         toggleSidebar(newState);
@@ -1475,6 +1510,7 @@ function checkCookieCaptureInstructions() {
 
 // --- Initialization ---
 async function init() {
+    if (!isContextValid()) return;
     console.log('📍 Content script init() called on:', window.location.href);
     // Load state from storage
     const data = await chrome.storage.local.get(['isSidebarOpen', 'sidebarWidth']);
@@ -1496,6 +1532,7 @@ async function init() {
 
     // Listen for messages from background script
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (!isContextValid()) return;
         if (request.action === 'TOGGLE_SIDEBAR') {
             toggleSidebar(request.isOpen);
         } else if (request.action === 'GET_POST_DATA') {
@@ -1553,6 +1590,7 @@ async function init() {
 
     // Listen for storage changes (to sync across tabs)
     chrome.storage.onChanged.addListener((changes, area) => {
+        if (!isContextValid()) return;
         if (area === 'local') {
             if (changes.isSidebarOpen) {
                 toggleSidebar(changes.isSidebarOpen.newValue);
@@ -1568,6 +1606,7 @@ async function init() {
 
     // Fallback keyboard shortcut listener (in case chrome.commands doesn't work)
     document.addEventListener('keydown', (e) => {
+        if (!isContextValid()) return;
         // Ctrl+Shift+R (Windows/Linux) or Alt+R (Mac) to toggle sidebar
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
         const isToggleShortcut = isMac
