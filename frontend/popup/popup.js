@@ -139,6 +139,10 @@ function showAuthError(message) {
 }
 
 function initEventListeners() {
+    // Set OS-specific shortcut hint
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    document.getElementById('shortcut-hint').textContent = isMac ? '(Alt+R)' : '(Ctrl+Shift+R)';
+
     // Login form
     document.getElementById('login-form').addEventListener('submit', async (e) => {
         e.preventDefault();
