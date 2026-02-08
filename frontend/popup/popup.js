@@ -1,6 +1,6 @@
 // Popup Script for Reddit Automated DM Extension
 
-const DEFAULT_DASHBOARD_URL = 'http://localhost:5173';
+const DEFAULT_DASHBOARD_URL = 'https://reddit-ext-dashboard.vercel.app';
 const DEFAULT_BACKEND_URL = 'https://backend-production-423ef.up.railway.app';
 
 // Load on popup open
