@@ -4,8 +4,11 @@ All REST API endpoints for the Reddit Automated DM Backend
 """
 
 import os
+import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 from typing import Dict, Any, List, Optional
 
 from ..middleware.supabase_auth import get_current_team_id
@@ -209,6 +212,7 @@ class ConversationSyncRequest(BaseModel):
     redditConversationId: Optional[str] = None
     messages: List[Dict[str, Any]]
     accountId: Optional[str] = None
+    accountUsername: Optional[str] = None
 
 
 # --- LLM Routes ---
@@ -351,8 +355,14 @@ async def classify_post_route(request: ClassifyRequest):
     post = request.post.model_dump()
     settings = request.settings.model_dump() if request.settings else {}
 
-    result = await classification.classify_post(post, settings)
-    return {"success": True, "data": result}
+    try:
+        result = await classification.classify_post(post, settings)
+        return {"success": True, "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Classification failed for {request.post.url}: {e}")
+        raise HTTPException(status_code=500, detail=f"Classification failed: {str(e)}")
 
 
 @router.post("/classify/batch")

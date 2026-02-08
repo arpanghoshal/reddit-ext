@@ -1218,6 +1218,59 @@ function extractMessagesFromDOM(participantUsername) {
     });
 
     console.log(`Extracted ${messages.length} messages`);
+
+    // TEXT-BASED FALLBACK: If no messages were found via DOM selectors,
+    // try parsing the visible text from the chat area.
+    // Reddit's Shadow DOM can be opaque — this catches messages the selectors miss.
+    if (messages.length === 0 && chatContainer) {
+        console.log('🔍 Attempting text-based fallback extraction...');
+        const rawText = getDeepTextContent(chatContainer);
+        const currentUser = getCurrentUsername();
+
+        // Split text into lines and look for message-like content
+        const lines = rawText.split(/\n/).map(l => l.trim()).filter(l => l.length > 0);
+        let lastAuthor = null;
+
+        for (const line of lines) {
+            // Skip very short or very long lines
+            if (line.length < 3 || line.length > 5000) continue;
+
+            // Skip lines that are just timestamps like "2:32 AM", "Today", "Yesterday"
+            if (/^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(line)) continue;
+            if (/^(Today|Yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/i.test(line)) continue;
+
+            // Skip common UI text
+            if (/^(Send|Reply|Edit|Delete|Cancel|Save|Message|Chat|Type a message|Write)$/i.test(line)) continue;
+
+            // Detect author lines (username-only lines often precede messages)
+            if (/^[a-zA-Z0-9_-]{3,20}$/.test(line)) {
+                lastAuthor = line.toLowerCase();
+                continue;
+            }
+
+            // Skip lines that are just the participant or current user name
+            if (line.toLowerCase() === participantUsername?.toLowerCase()) continue;
+            if (currentUser && line.toLowerCase() === currentUser) continue;
+
+            // This looks like a message — deduplicate
+            if (seenContent.has(line)) continue;
+            seenContent.add(line);
+
+            const isOutbound = currentUser && lastAuthor === currentUser;
+            messages.push({
+                direction: isOutbound ? 'outbound' : 'inbound',
+                content: line,
+                sentAt: new Date().toISOString(),
+                isAiGenerated: false
+            });
+        }
+
+        if (messages.length > 0) {
+            console.log(`🔍 Text fallback extracted ${messages.length} messages`);
+        }
+    }
+
+    console.log(`Total extracted: ${messages.length} messages`);
     return messages;
 }
 
@@ -1487,7 +1540,6 @@ async function init() {
             ensureSidebarVisible();
             setTimeout(() => renderRunningState(request.status), 300);
         }
-        return true;
     });
 
     // Check for direct-send instructions from dashboard (via URL hash)
@@ -2544,6 +2596,69 @@ function checkPageStatus() {
     });
 }
 
+function showSettingsReview(onConfirm) {
+    if (!shadowRoot) return;
+    const contentArea = shadowRoot.getElementById('content-area');
+
+    chrome.storage.local.get(['businessDesc', 'persona', 'tone', 'dmSendMode'], (items) => {
+        contentArea.innerHTML = `
+          <div class="review-panel">
+            <header>
+                <button id="review-back-btn" class="btn-icon" title="Back">←</button>
+                <h2>Review Settings</h2>
+            </header>
+            <div class="form-group">
+                <label for="review-business-desc">Business Description</label>
+                <textarea id="review-business-desc" rows="2">${escapeHtml(items.businessDesc || '')}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="review-persona">Target Persona</label>
+                <input type="text" id="review-persona" value="${escapeHtml(items.persona || '')}" placeholder="e.g. Startup founders">
+            </div>
+            <div class="form-group">
+                <label for="review-tone">Message Tone</label>
+                <select id="review-tone">
+                    <option value="Curious"${items.tone === 'Curious' ? ' selected' : ''}>Curious</option>
+                    <option value="Empathetic"${items.tone === 'Empathetic' ? ' selected' : ''}>Empathetic</option>
+                    <option value="Casual"${items.tone === 'Casual' ? ' selected' : ''}>Casual Reddit-native</option>
+                    <option value="Professional"${items.tone === 'Professional' ? ' selected' : ''}>Professional</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="review-dm-mode">DM Send Mode</label>
+                <select id="review-dm-mode">
+                    <option value="confirm"${(items.dmSendMode || 'confirm') === 'confirm' ? ' selected' : ''}>Ask before sending</option>
+                    <option value="auto"${items.dmSendMode === 'auto' ? ' selected' : ''}>Auto-send</option>
+                </select>
+            </div>
+            <div class="review-actions">
+                <button id="review-cancel-btn" class="btn-cancel">Cancel</button>
+                <button id="review-confirm-btn" class="btn-primary">Confirm & Start</button>
+            </div>
+          </div>
+        `;
+
+        shadowRoot.getElementById('review-back-btn').addEventListener('click', () => {
+            checkPageStatus();
+        });
+
+        shadowRoot.getElementById('review-cancel-btn').addEventListener('click', () => {
+            checkPageStatus();
+        });
+
+        shadowRoot.getElementById('review-confirm-btn').addEventListener('click', async () => {
+            const businessDesc = shadowRoot.getElementById('review-business-desc').value;
+            const persona = shadowRoot.getElementById('review-persona').value;
+            const tone = shadowRoot.getElementById('review-tone').value;
+            const dmSendMode = shadowRoot.getElementById('review-dm-mode').value;
+
+            await chrome.storage.local.set({ businessDesc, persona, tone, dmSendMode });
+            chrome.runtime.sendMessage({ action: 'SETTINGS_UPDATED' });
+            onConfirm();
+        });
+    });
+}
+
 function renderSubredditInfo(data, container) {
     container.innerHTML = `
       <div class="post-info">
@@ -2612,32 +2727,82 @@ function renderSubredditInfo(data, container) {
             return;
         }
 
-        // Show confirmation dialog
-        const confirmed = confirm(
-            `Start automation for ${links.length} posts in r/${escapeHtml(data.name)}?\n\n` +
-            `This will:\n` +
-            `• Navigate to each post\n` +
-            `• Generate a personalized DM\n` +
-            `• Send the DM to the post author\n\n` +
-            `You can stop at any time by pressing Alt+S.`
-        );
+        // Show settings review before starting
+        showSettingsReview(() => {
+            console.log(`Starting automation on ${links.length} posts`);
 
-        if (!confirmed) {
-            btn.disabled = false;
-            btn.innerHTML = 'Start Subreddit Automation';
-            btn.classList.remove('loading');
-            return;
-        }
+            chrome.runtime.sendMessage({
+                action: 'START_SUBREDDIT_AUTOMATION',
+                data: {
+                    subreddit: data.name,
+                    posts: links
+                }
+            });
+        });
+    });
+}
 
-        btn.innerHTML = '<span class="spinner"></span> Starting...';
+function generateDMForPost(data) {
+    if (!shadowRoot) return;
+    const contentArea = shadowRoot.getElementById('content-area');
 
-        console.log(`Starting automation on ${links.length} posts`);
+    // Re-render post info with loading state
+    contentArea.innerHTML = `
+      <div class="post-info">
+        <div class="meta">
+          <span class="subreddit">r/${escapeHtml(data.subreddit)}</span>
+          <span class="author">u/${escapeHtml(data.author)}</span>
+        </div>
+        <h2 class="post-title">${truncate(data.title, 60)}</h2>
+        <button id="generate-btn" class="btn-primary loading" disabled>
+            <span class="spinner"></span> Generating...
+        </button>
+      </div>
+    `;
 
+    // Add spinner styles if not present
+    if (!shadowRoot.querySelector('#spinner-style')) {
+        const style = document.createElement('style');
+        style.id = 'spinner-style';
+        style.textContent = `
+            .spinner {
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border: 2px solid rgba(255,255,255,0.3);
+                border-radius: 50%;
+                border-top-color: #fff;
+                animation: spin 0.8s linear infinite;
+                vertical-align: middle;
+                margin-right: 6px;
+            }
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+            .btn-primary.loading {
+                opacity: 0.8;
+                cursor: wait;
+            }
+        `;
+        shadowRoot.appendChild(style);
+    }
+
+    chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone'], (settings) => {
         chrome.runtime.sendMessage({
-            action: 'START_SUBREDDIT_AUTOMATION',
-            data: {
-                subreddit: data.name,
-                posts: links
+            action: 'GENERATE_QUESTION',
+            data: { post: data, settings: settings }
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                showToast('Error: ' + chrome.runtime.lastError.message, 'error');
+                checkPageStatus();
+                return;
+            }
+
+            if (response && response.success) {
+                showPreview(response.data, data.author, data);
+            } else {
+                showToast('Generation failed: ' + (response?.error || 'Unknown error'), 'error');
+                checkPageStatus();
             }
         });
     });
@@ -2655,69 +2820,10 @@ function renderPostInfo(data, container) {
       </div>
     `;
 
-    shadowRoot.getElementById('generate-btn').addEventListener('click', async () => {
-        const btn = shadowRoot.getElementById('generate-btn');
-        const originalText = btn.innerText;
-
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Generating...';
-        btn.classList.add('loading');
-
-        // Add spinner styles if not present
-        if (!shadowRoot.querySelector('#spinner-style')) {
-            const style = document.createElement('style');
-            style.id = 'spinner-style';
-            style.textContent = `
-                .spinner {
-                    display: inline-block;
-                    width: 14px;
-                    height: 14px;
-                    border: 2px solid rgba(255,255,255,0.3);
-                    border-radius: 50%;
-                    border-top-color: #fff;
-                    animation: spin 0.8s linear infinite;
-                    vertical-align: middle;
-                    margin-right: 6px;
-                }
-                @keyframes spin {
-                    to { transform: rotate(360deg); }
-                }
-                .btn-primary.loading {
-                    opacity: 0.8;
-                    cursor: wait;
-                }
-            `;
-            shadowRoot.appendChild(style);
-        }
-
-        try {
-            const settings = await chrome.storage.local.get(['businessDesc', 'persona', 'insightTypes', 'tone']);
-
-            chrome.runtime.sendMessage({
-                action: 'GENERATE_QUESTION',
-                data: { post: data, settings: settings }
-            }, (response) => {
-                btn.disabled = false;
-                btn.innerText = originalText;
-                btn.classList.remove('loading');
-
-                if (chrome.runtime.lastError) {
-                    showToast('Error: ' + chrome.runtime.lastError.message, 'error');
-                    return;
-                }
-
-                if (response && response.success) {
-                    showPreview(response.data, data.author, data);
-                } else {
-                    showToast('Generation failed: ' + (response?.error || 'Unknown error'), 'error');
-                }
-            });
-        } catch (err) {
-            btn.disabled = false;
-            btn.innerText = originalText;
-            btn.classList.remove('loading');
-            showToast('Error: ' + err.message, 'error');
-        }
+    shadowRoot.getElementById('generate-btn').addEventListener('click', () => {
+        showSettingsReview(() => {
+            generateDMForPost(data);
+        });
     });
 }
 

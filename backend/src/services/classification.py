@@ -12,7 +12,7 @@ import httpx
 from supabase import create_client, Client
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-r1t-chimera:free"
+DEFAULT_MODEL = "deepseek/deepseek-v3.2"
 
 _supabase: Optional[Client] = None
 

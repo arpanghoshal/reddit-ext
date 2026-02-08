@@ -1096,3 +1096,80 @@ textarea {
     font-weight: 700;
     color: #d7dadc;
 }
+
+/* Settings Review Panel */
+.review-panel {
+    padding: 0;
+}
+
+.review-panel header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 16px;
+}
+
+.review-panel header .btn-icon {
+    flex-shrink: 0;
+}
+
+.review-panel header h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.review-panel .form-group {
+    margin-bottom: 14px;
+}
+
+.review-panel .form-group label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #818384;
+    margin-bottom: 6px;
+}
+
+.review-panel textarea {
+    min-height: 48px;
+    font-size: 13px;
+}
+
+.review-panel input[type="text"],
+.review-panel select {
+    font-size: 13px;
+}
+
+.review-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.review-actions .btn-primary {
+    flex: 2;
+}
+
+.review-actions .btn-cancel {
+    flex: 1;
+    padding: 10px;
+    background-color: transparent;
+    color: #818384;
+    border: 1px solid var(--border-color);
+    border-radius: 9999px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.review-actions .btn-cancel:hover {
+    border-color: #818384;
+    color: #d7dadc;
+}

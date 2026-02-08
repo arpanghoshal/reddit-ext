@@ -193,6 +193,9 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
 
         messages = [transform_message(row) for row in msg_result.data] if msg_result.data else []
 
+        # Override totalMessages with actual count (the stored counter can drift)
+        conversation["totalMessages"] = len(messages)
+
         return {**conversation, "messages": messages}
     except Exception as e:
         print(f"Error fetching conversation: {e}")
@@ -289,12 +292,23 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
 
         # Use upsert with the unique (conversation_id, fingerprint) constraint
         # to silently skip duplicates from concurrent syncs
-        msg_result = client.table("messages").upsert(
-            insert_data,
-            on_conflict="conversation_id,fingerprint"
-        ).execute()
+        msg_result = None
+        try:
+            msg_result = client.table("messages").upsert(
+                insert_data,
+                on_conflict="conversation_id,fingerprint"
+            ).execute()
+        except Exception as upsert_err:
+            print(f"Upsert failed (fingerprint dedup), falling back to insert: {upsert_err}")
+            # Fallback: insert without fingerprint (migration 011 may not be applied)
+            insert_data.pop("fingerprint", None)
+            try:
+                msg_result = client.table("messages").insert(insert_data).execute()
+            except Exception as insert_err:
+                print(f"Insert fallback also failed: {insert_err}")
+                return None
 
-        if not msg_result.data:
+        if not msg_result or not msg_result.data:
             return None
 
         # Update conversation stats
@@ -350,10 +364,28 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
     reddit_conversation_id = sync_data.get("redditConversationId")
     messages = sync_data.get("messages", [])
     account_id = sync_data.get("accountId")
+    account_username = sync_data.get("accountUsername")
 
     if not participant_username:
         print("Missing participant username")
         return None
+
+    # If we have a username but no account_id, try to resolve it
+    if not account_id and account_username:
+        client = get_client()
+        if client:
+            try:
+                acct_result = client.table("reddit_accounts").select("id").ilike(
+                    "username", account_username
+                )
+                if team_id:
+                    acct_result = acct_result.eq("team_id", team_id)
+                acct_result = acct_result.limit(1).execute()
+                if acct_result.data:
+                    account_id = acct_result.data[0]["id"]
+                    print(f"Resolved account '{account_username}' to id {account_id}")
+            except Exception as e:
+                print(f"Failed to resolve account by username: {e}")
 
     # Get or create conversation
     # First try scoped to the specific account
@@ -428,6 +460,13 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
 
     print(f"Sync for {participant_username}: {added_count} new messages added "
           f"(received {len(messages)}, existing {len(existing_messages)})")
+
+    # Update total_messages to match actual count
+    if added_count > 0:
+        all_messages = await get_messages(conversation["id"])
+        await update_conversation(conversation["id"], {
+            "totalMessages": len(all_messages)
+        }, team_id=team_id)
 
     # Return updated conversation
     return await get_conversation(conversation["id"], team_id=team_id)

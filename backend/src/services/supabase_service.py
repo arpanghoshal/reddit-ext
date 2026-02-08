@@ -107,17 +107,15 @@ async def _create_or_update_conversation(
         now = datetime.utcnow().isoformat()
 
         if existing.data and len(existing.data) > 0:
-            # Update existing conversation
+            # Update existing conversation (don't increment total_messages yet)
             conversation_id = existing.data[0]["id"]
-            new_total = (existing.data[0].get("total_messages") or 0) + 1
             client.table("conversations").update({
                 "last_message_at": now,
                 "last_message_direction": "outbound",
-                "total_messages": new_total,
                 "updated_at": now
             }).eq("id", conversation_id).execute()
         else:
-            # Create new conversation
+            # Create new conversation (total_messages starts at 0, updated after insert)
             conv_insert = {
                 "participant_username": recipient,
                 "account_id": data.get("accountId"),
@@ -125,7 +123,7 @@ async def _create_or_update_conversation(
                 "status": "active",
                 "last_message_at": now,
                 "last_message_direction": "outbound",
-                "total_messages": 1,
+                "total_messages": 0,
                 "has_reply": False
             }
             if team_id:
@@ -151,11 +149,33 @@ async def _create_or_update_conversation(
             }
             if team_id:
                 msg_insert["team_id"] = team_id
-            client.table("messages").upsert(
-                msg_insert,
-                on_conflict="conversation_id,fingerprint"
-            ).execute()
-            print(f"Message added to conversation {conversation_id}")
+
+            msg_ok = False
+            try:
+                client.table("messages").upsert(
+                    msg_insert,
+                    on_conflict="conversation_id,fingerprint"
+                ).execute()
+                msg_ok = True
+            except Exception as upsert_err:
+                print(f"Message upsert failed, trying insert without fingerprint: {upsert_err}")
+                msg_insert.pop("fingerprint", None)
+                try:
+                    client.table("messages").insert(msg_insert).execute()
+                    msg_ok = True
+                except Exception as insert_err:
+                    print(f"Message insert fallback also failed: {insert_err}")
+
+            if msg_ok:
+                # Update total_messages based on actual count
+                count_result = client.table("messages").select("id", count="exact").eq(
+                    "conversation_id", conversation_id
+                ).execute()
+                actual_count = count_result.count if count_result.count is not None else 1
+                client.table("conversations").update({
+                    "total_messages": actual_count
+                }).eq("id", conversation_id).execute()
+                print(f"Message added to conversation {conversation_id} (total: {actual_count})")
 
     except Exception as e:
         print(f"Failed to create/update conversation: {e}")

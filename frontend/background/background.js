@@ -1131,7 +1131,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return api.syncConversation({
                     participantUsername: syncData.participantUsername,
                     messages: syncData.messages,
-                    accountId: detected.accountId || null
+                    accountId: detected.accountId || null,
+                    accountUsername: detected.username || null
                 });
             }).then(result => {
                 console.log('Chat sync completed:', result);

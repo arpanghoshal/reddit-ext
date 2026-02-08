@@ -84,7 +84,7 @@ CREATE TABLE public.conversations (
   status text DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'interested'::text, 'cold'::text, 'closed'::text, 'converted'::text])),
   last_message_at timestamp with time zone,
   last_message_direction text CHECK (last_message_direction = ANY (ARRAY['inbound'::text, 'outbound'::text])),
-  total_messages integer DEFAULT 1,
+  total_messages integer DEFAULT 0,
   has_reply boolean DEFAULT false,
   notes text,
   tags ARRAY,
@@ -142,10 +142,13 @@ CREATE TABLE public.dm_queue (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   team_id uuid,
+  message_type text NOT NULL DEFAULT 'outreach'::text,
+  conversation_id uuid,
   CONSTRAINT dm_queue_pkey PRIMARY KEY (id),
   CONSTRAINT dm_queue_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.reddit_accounts(id),
   CONSTRAINT dm_queue_classification_id_fkey FOREIGN KEY (classification_id) REFERENCES public.post_classifications(id),
-  CONSTRAINT dm_queue_team_id_fkey FOREIGN KEY (team_id) REFERENCES public.teams(id)
+  CONSTRAINT dm_queue_team_id_fkey FOREIGN KEY (team_id) REFERENCES public.teams(id),
+  CONSTRAINT dm_queue_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.conversations(id)
 );
 CREATE TABLE public.filter_rules (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -201,6 +204,7 @@ CREATE TABLE public.messages (
   is_ai_generated boolean DEFAULT false,
   created_at timestamp with time zone DEFAULT now(),
   team_id uuid,
+  fingerprint text,
   CONSTRAINT messages_pkey PRIMARY KEY (id),
   CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.conversations(id),
   CONSTRAINT messages_team_id_fkey FOREIGN KEY (team_id) REFERENCES public.teams(id)

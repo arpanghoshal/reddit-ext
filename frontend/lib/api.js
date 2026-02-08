@@ -320,7 +320,8 @@ async function getStatus() {
 async function generateQuestion(post, settings) {
     const result = await apiRequest('/generate', {
         method: 'POST',
-        body: JSON.stringify({ post, settings })
+        body: JSON.stringify({ post, settings }),
+        timeout: 30000
     });
     return result.message;
 }
@@ -419,7 +420,8 @@ function generateSessionId() {
 async function classifyPost(post, settings = {}) {
     const result = await apiRequest('/classify', {
         method: 'POST',
-        body: JSON.stringify({ post, settings })
+        body: JSON.stringify({ post, settings }),
+        timeout: 30000
     });
     return result.data;
 }
