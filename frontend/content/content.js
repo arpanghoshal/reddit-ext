@@ -17,8 +17,6 @@ function onContextInvalidated() {
     console.log('Reddit Automated DM: Extension updated, cleaning up...');
     stopChatSync();
     // Remove injected UI elements
-    const toggleHost = document.getElementById('reddit-dm-toggle-host');
-    if (toggleHost) toggleHost.remove();
     if (sidebarContainer) {
         sidebarContainer.remove();
         sidebarContainer = null;
@@ -1354,82 +1352,6 @@ function stopChatSync() {
     }
 }
 
-// --- Persistent Toggle Button ---
-function injectPersistentToggle() {
-    if (document.getElementById('reddit-dm-toggle-host')) return;
-
-    const host = document.createElement('div');
-    host.id = 'reddit-dm-toggle-host';
-    const shadow = host.attachShadow({ mode: 'open' });
-
-    const style = document.createElement('style');
-    style.textContent = `
-        .toggle-btn {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            background: #0079d3;
-            border: none;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-            transition: background-color 0.2s, transform 0.2s;
-            z-index: 2147483646;
-            padding: 0;
-        }
-        .toggle-btn:hover {
-            background: #0060a8;
-            transform: scale(1.08);
-        }
-        .toggle-btn svg {
-            width: 24px;
-            height: 24px;
-            fill: white;
-        }
-        .toggle-btn.active {
-            background: #ff4500;
-        }
-        .toggle-btn.active:hover {
-            background: #cc3700;
-        }
-    `;
-
-    const btn = document.createElement('button');
-    btn.className = 'toggle-btn';
-    btn.title = 'Toggle Reddit DM Sidebar';
-    btn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-            <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
-        </svg>
-    `;
-    btn.addEventListener('click', () => {
-        if (!isContextValid()) { onContextInvalidated(); return; }
-        const newState = !isSidebarOpen;
-        chrome.storage.local.set({ isSidebarOpen: newState });
-        toggleSidebar(newState);
-        updatePersistentToggle(newState);
-    });
-
-    shadow.appendChild(style);
-    shadow.appendChild(btn);
-    document.body.appendChild(host);
-}
-
-function updatePersistentToggle(isOpen) {
-    const host = document.getElementById('reddit-dm-toggle-host');
-    if (!host) return;
-    const btn = host.shadowRoot.querySelector('.toggle-btn');
-    if (btn) {
-        btn.classList.toggle('active', isOpen);
-        btn.title = isOpen ? 'Close Reddit DM Sidebar' : 'Open Reddit DM Sidebar';
-    }
-}
-
 // --- Direct Send from Dashboard ---
 // Detects #__rdm_send= in the URL hash (set by dashboard "Send Now" / Queue "Send").
 // Parses the base64 JSON payload and forwards to background for automation.
@@ -1516,10 +1438,6 @@ async function init() {
     const data = await chrome.storage.local.get(['isSidebarOpen', 'sidebarWidth']);
     isSidebarOpen = data.isSidebarOpen || false;
     sidebarWidth = data.sidebarWidth || 400;
-
-    // Always show the persistent toggle button
-    injectPersistentToggle();
-    updatePersistentToggle(isSidebarOpen);
 
     if (isSidebarOpen) {
         injectSidebar();
@@ -2253,7 +2171,6 @@ function toggleSidebar(isOpen) {
     } else {
         removeSidebar();
     }
-    updatePersistentToggle(isOpen);
 }
 
 // Ensure sidebar is visible (auto-open when automation is running)
