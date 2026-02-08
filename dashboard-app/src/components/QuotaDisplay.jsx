@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, XCircle, BarChart2, Users, MessageSquare } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { getQuotaStatus } from '../api/client';
 
 /**
  * QuotaDisplay Component
@@ -17,22 +17,8 @@ export default function QuotaDisplay({ compact = false }) {
 
   const fetchQuotaStatus = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-
-      const response = await fetch('/api/quotas/status', {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'X-Team-ID': localStorage.getItem('currentTeamId') || ''
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch quota status');
-      }
-
-      const data = await response.json();
-      setQuotaStatus(data.data);
+      const data = await getQuotaStatus();
+      setQuotaStatus(data);
     } catch (err) {
       console.error('Error fetching quota status:', err);
       setError(err.message);

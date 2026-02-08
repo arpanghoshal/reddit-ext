@@ -4,7 +4,7 @@ import {
   UserPlus, UserMinus, Settings, MessageSquare,
   Target, Shield, ChevronLeft, ChevronRight
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { getAuditLog } from '../api/client';
 
 /**
  * AuditLog Page
@@ -34,35 +34,13 @@ export default function AuditLog() {
   const fetchAuditLog = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
+      const filterParams = {
+        ...filters,
+        limit: pagination.limit,
+        offset: pagination.offset
+      };
 
-      if (filters.action) params.append('action', filters.action);
-      if (filters.user_id) params.append('user_id', filters.user_id);
-      if (filters.resource_type) params.append('resource_type', filters.resource_type);
-      if (filters.start_date) params.append('start_date', filters.start_date);
-      if (filters.end_date) params.append('end_date', filters.end_date);
-
-      params.append('limit', pagination.limit.toString());
-      params.append('offset', pagination.offset.toString());
-
-      const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-
-      const response = await fetch(`/api/audit?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'X-Team-ID': localStorage.getItem('currentTeamId') || ''
-        }
-      });
-
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('You do not have permission to view the audit log');
-        }
-        throw new Error('Failed to fetch audit log');
-      }
-
-      const data = await response.json();
+      const data = await getAuditLog(filterParams);
       setEntries(data.data || []);
       setPagination(prev => ({
         ...prev,

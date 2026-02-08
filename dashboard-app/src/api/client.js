@@ -47,7 +47,7 @@ async function getAccessToken() {
     }
 }
 
-async function apiRequest(endpoint, options = {}) {
+export async function apiRequest(endpoint, options = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
     const apiKey = getApiKey();
     const teamId = getCurrentTeamId();

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { apiRequest } from '../api/client';
 import {
   Users,
   Plus,
@@ -17,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export default function TeamSettings() {
-  const { user, teams, currentTeam, switchTeam, refreshTeams, getAccessToken } = useAuth();
+  const { user, teams, currentTeam, switchTeam, refreshTeams } = useAuth();
   const [activeTab, setActiveTab] = useState('members');
   const [members, setMembers] = useState([]);
   const [invitations, setInvitations] = useState([]);
@@ -56,17 +57,7 @@ export default function TeamSettings() {
     if (!currentTeam) return;
 
     try {
-      const token = getAccessToken();
-      const response = await fetch(`/api/teams/${currentTeam.id}/members`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.detail || 'Failed to fetch members');
-      }
-
-      const { members: memberList } = await response.json();
+      const { members: memberList } = await apiRequest(`/teams/${currentTeam.id}/members`);
       setMembers(
         (memberList || []).map((m) => ({
           id: m.id,
@@ -89,14 +80,7 @@ export default function TeamSettings() {
     if (!currentTeam) return;
 
     try {
-      const token = getAccessToken();
-      const response = await fetch(`/api/teams/${currentTeam.id}/invitations`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) return;
-
-      const { invitations: inviteList } = await response.json();
+      const { invitations: inviteList } = await apiRequest(`/teams/${currentTeam.id}/invitations`);
       setInvitations(inviteList || []);
     } catch (err) {
       console.error('Error fetching invitations:', err);
@@ -111,17 +95,10 @@ export default function TeamSettings() {
     setError('');
 
     try {
-      const response = await fetch('/api/teams', {
+      const data = await apiRequest('/teams', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getAccessToken()}`,
-        },
         body: JSON.stringify({ name: newTeamName }),
       });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Failed to create team');
 
       setShowCreateTeam(false);
       setNewTeamName('');
@@ -148,17 +125,10 @@ export default function TeamSettings() {
     setInviteLink('');
 
     try {
-      const response = await fetch(`/api/teams/${currentTeam.id}/invitations`, {
+      const data = await apiRequest(`/teams/${currentTeam.id}/invitations`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getAccessToken()}`,
-        },
         body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
       });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Failed to send invitation');
 
       setSuccess(`Invitation sent to ${inviteEmail}`);
       setInviteLink(window.location.origin + data.invite_url);
@@ -173,22 +143,10 @@ export default function TeamSettings() {
 
   const handleUpdateMemberRole = async (memberId, newRole) => {
     try {
-      const response = await fetch(
-        `/api/teams/${currentTeam.id}/members/${memberId}`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getAccessToken()}`,
-          },
-          body: JSON.stringify({ role: newRole }),
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to update role');
-      }
+      await apiRequest(`/teams/${currentTeam.id}/members/${memberId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: newRole }),
+      });
 
       setSuccess('Member role updated');
       fetchMembers();
@@ -201,20 +159,9 @@ export default function TeamSettings() {
     if (!confirm('Are you sure you want to remove this member?')) return;
 
     try {
-      const response = await fetch(
-        `/api/teams/${currentTeam.id}/members/${memberId}`,
-        {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${getAccessToken()}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to remove member');
-      }
+      await apiRequest(`/teams/${currentTeam.id}/members/${memberId}`, {
+        method: 'DELETE',
+      });
 
       setSuccess('Member removed');
       fetchMembers();
@@ -225,20 +172,9 @@ export default function TeamSettings() {
 
   const handleCancelInvitation = async (invitationId) => {
     try {
-      const response = await fetch(
-        `/api/teams/${currentTeam.id}/invitations/${invitationId}`,
-        {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${getAccessToken()}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to cancel invitation');
-      }
+      await apiRequest(`/teams/${currentTeam.id}/invitations/${invitationId}`, {
+        method: 'DELETE',
+      });
 
       setSuccess('Invitation cancelled');
       fetchInvitations();
@@ -255,19 +191,10 @@ export default function TeamSettings() {
     setError('');
 
     try {
-      const response = await fetch(`/api/teams/${currentTeam.id}`, {
+      await apiRequest(`/teams/${currentTeam.id}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getAccessToken()}`,
-        },
         body: JSON.stringify({ name: teamName }),
       });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to update team');
-      }
 
       setSuccess('Team updated');
       await refreshTeams();

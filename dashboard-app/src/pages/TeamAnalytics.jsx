@@ -3,7 +3,7 @@ import {
   BarChart2, TrendingUp, MessageSquare, Users, Clock, Calendar,
   ArrowUp, ArrowDown, RefreshCw, Download
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { getTeamAnalytics } from '../api/client';
 
 /**
  * TeamAnalytics Page
@@ -22,22 +22,8 @@ export default function TeamAnalytics() {
   const fetchAnalytics = async () => {
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-
-      const response = await fetch(`/api/team-analytics?period=${period}`, {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'X-Team-ID': localStorage.getItem('currentTeamId') || ''
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch analytics');
-      }
-
-      const data = await response.json();
-      setAnalytics(data.data);
+      const data = await getTeamAnalytics(period);
+      setAnalytics(data);
     } catch (err) {
       console.error('Error fetching analytics:', err);
       setError(err.message);
