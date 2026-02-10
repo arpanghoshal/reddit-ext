@@ -76,6 +76,15 @@ async def log_dm(data: Dict[str, Any], team_id: Optional[str] = None) -> Optiona
             if recipient:
                 await _create_or_update_conversation(client, recipient, dm_record, data, team_id)
 
+            # Record contact for dedup (covers extension direct sends)
+            if team_id and recipient:
+                from . import dedup
+                await dedup.record_contact(
+                    recipient, team_id,
+                    source="dm_history",
+                    account_id=data.get("accountId"),
+                )
+
             return dm_record
         return None
     except Exception as e:
@@ -137,7 +146,9 @@ async def _create_or_update_conversation(
         if conversation_id and data.get("messageContent"):
             content = data.get("messageContent")
             normalized = " ".join(content.lower().strip().split())
-            fingerprint = hashlib.sha256(f"{normalized}|outbound".encode('utf-8')).hexdigest()[:16]
+            # Include minute-level timestamp to allow same message text sent >1 min apart
+            minute_bucket = now[:16]  # "2026-02-10T14:30"
+            fingerprint = hashlib.sha256(f"{normalized}|outbound|{minute_bucket}".encode('utf-8')).hexdigest()[:16]
 
             msg_insert = {
                 "conversation_id": conversation_id,
@@ -314,6 +325,7 @@ async def save_settings(settings: Dict[str, Any], team_id: Optional[str] = None)
             "persona": settings.get("persona"),
             "insight_types": settings.get("insightTypes", []),
             "tone": settings.get("tone", "Curious"),
+            "business_context": settings.get("businessContext"),
             "updated_at": datetime.utcnow().isoformat()
         }
 

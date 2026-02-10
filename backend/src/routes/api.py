@@ -49,6 +49,7 @@ class Settings(BaseModel):
     insightTypes: Optional[List[str]] = None
     tone: Optional[str] = None
     model: Optional[str] = None
+    businessContext: Optional[str] = None
 
 
 class GenerateRequest(BaseModel):
@@ -65,6 +66,7 @@ class DMLogRequest(BaseModel):
     status: Optional[str] = "sent"
     automationType: Optional[str] = "single"
     sessionId: Optional[str] = None
+    accountId: Optional[str] = None
 
 
 class SessionStartRequest(BaseModel):
@@ -84,6 +86,7 @@ class SettingsSaveRequest(BaseModel):
     persona: Optional[str] = None
     insightTypes: Optional[List[str]] = None
     tone: Optional[str] = None
+    businessContext: Optional[str] = None
 
 
 class ClassifyRequest(BaseModel):
@@ -225,8 +228,8 @@ async def generate_message(request: GenerateRequest):
     post = request.post.model_dump()
     settings = request.settings.model_dump() if request.settings else {}
 
-    message = await llm.generate_question({"post": post, "settings": settings})
-    return {"success": True, "message": message}
+    result = await llm.generate_question({"post": post, "settings": settings})
+    return {"success": True, "message": result["message"], "reasoning": result.get("reasoning", "")}
 
 
 @router.get("/models")
@@ -240,6 +243,14 @@ async def get_models():
 async def log_dm(request: Request, body: DMLogRequest):
     team_id = get_current_team_id(request)
     result = await supabase.log_dm(body.model_dump(), team_id=team_id)
+
+    # Auto-increment account DM counter when a DM is successfully sent
+    if body.accountId and body.status == "sent":
+        try:
+            await accounts.increment_dm_count(body.accountId, team_id=team_id)
+        except Exception as e:
+            logger.warning(f"Failed to increment DM count for account {body.accountId}: {e}")
+
     return {"success": True, "data": result}
 
 
@@ -311,7 +322,7 @@ async def save_settings(request: Request, body: SettingsSaveRequest):
 async def get_status():
     return {
         "supabaseConfigured": supabase.is_configured(),
-        "openrouterConfigured": bool(os.getenv("OPENROUTER_API_KEY"))
+        "geminiConfigured": bool(os.getenv("GOOGLE_GEMINI_API_KEY"))
     }
 
 
@@ -498,6 +509,8 @@ async def get_queue_route(
 async def add_to_queue_route(request: Request, body: QueueAddRequest):
     team_id = get_current_team_id(request)
     item = await queue.add_to_queue(body.model_dump(), team_id=team_id)
+    if item and isinstance(item, dict) and item.get("error") == "duplicate_recipient":
+        raise HTTPException(status_code=409, detail=item.get("message", "Recipient already contacted"))
     return {"success": True, "data": item}
 
 
@@ -1259,13 +1272,15 @@ class PreSendCheckRequest(BaseModel):
 
 
 @router.post("/safety/pre-send-check")
-async def pre_send_safety_check_route(request: PreSendCheckRequest):
+async def pre_send_safety_check_route(http_request: Request, request: PreSendCheckRequest):
     """Comprehensive pre-send safety check"""
+    team_id = get_current_team_id(http_request)
     result = await safety.pre_send_safety_check(
         account_id=request.accountId,
         recipient_username=request.recipientUsername,
         message=request.message,
-        subreddit=request.subreddit
+        subreddit=request.subreddit,
+        team_id=team_id,
     )
     return {"success": True, "data": result}
 
@@ -1292,6 +1307,19 @@ async def check_duplicate_recipient_route(request: DuplicateCheckRequest):
         lookback_days=request.lookbackDays
     )
     return {"success": True, "data": result}
+
+
+class ContactedCheckRequest(BaseModel):
+    recipientUsername: str
+
+
+@router.post("/safety/check-contacted")
+async def check_contacted_route(http_request: Request, request: ContactedCheckRequest):
+    """Check if recipient was ever contacted by this team. Used by extension before sending."""
+    from ..services import dedup
+    team_id = get_current_team_id(http_request)
+    result = await dedup.has_been_contacted(request.recipientUsername, team_id)
+    return {"success": True, "data": {"contacted": result.get("contacted", False), "source": result.get("source")}}
 
 
 # =============================================================================

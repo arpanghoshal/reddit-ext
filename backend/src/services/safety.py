@@ -846,7 +846,9 @@ async def pre_send_safety_check(
     account_id: str,
     recipient_username: str,
     message: str,
-    subreddit: str = None
+    subreddit: str = None,
+    team_id: str = None,
+    message_type: str = "outreach",
 ) -> Dict[str, Any]:
     """
     Comprehensive pre-send safety check
@@ -856,6 +858,8 @@ async def pre_send_safety_check(
         recipient_username: Target username
         message: Message to send
         subreddit: Target subreddit
+        team_id: Team ID for cross-account dedup
+        message_type: 'outreach' or 'reply' (replies skip dedup)
 
     Returns:
         Safety check result with approval/denial
@@ -871,19 +875,27 @@ async def pre_send_safety_check(
             "recommendation": "pause_and_review"
         }
 
-    # 2. Check for duplicate recipient
-    duplicate_check = await check_duplicate_recipient(
-        recipient_username,
-        exclude_account_id=account_id
-    )
-
-    if duplicate_check.get("is_duplicate"):
-        return {
-            "approved": False,
-            "reason": "Recipient already contacted by another account",
-            "duplicate_check": duplicate_check,
-            "recommendation": "skip"
-        }
+    # 2. Check for duplicate recipient (cross-account, no time limit, skip for replies)
+    if message_type != "reply" and team_id:
+        from . import dedup
+        duplicate_check = await dedup.has_been_contacted(recipient_username, team_id)
+        if duplicate_check.get("contacted"):
+            return {
+                "approved": False,
+                "reason": "Recipient already contacted",
+                "duplicate_check": duplicate_check,
+                "recommendation": "skip"
+            }
+    elif message_type != "reply":
+        # Fallback to old check if no team_id (shouldn't happen, but safe)
+        duplicate_check = await check_duplicate_recipient(recipient_username)
+        if duplicate_check.get("is_duplicate"):
+            return {
+                "approved": False,
+                "reason": "Recipient already contacted",
+                "duplicate_check": duplicate_check,
+                "recommendation": "skip"
+            }
 
     # 3. Check message similarity
     similarity_check = await check_message_similarity(message, account_id)

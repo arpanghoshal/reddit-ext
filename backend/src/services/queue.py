@@ -4,9 +4,12 @@ Manages the queue of pending, approved, and sent DMs
 """
 
 import os
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -65,6 +68,20 @@ async def add_to_queue(item: Dict[str, Any], team_id: Optional[str] = None) -> O
         print("Supabase not configured - cannot add to queue")
         return None
 
+    # Dedup check: block if recipient was already contacted (skip for replies)
+    message_type = item.get("messageType", "outreach")
+    recipient = (item.get("recipientUsername") or "").lower().strip()
+    if message_type != "reply" and team_id and recipient:
+        from . import dedup
+        check = await dedup.has_been_contacted(recipient, team_id)
+        if check.get("contacted"):
+            logger.info(f"Blocked duplicate queue add for u/{recipient} (source: {check.get('source')})")
+            return {
+                "error": "duplicate_recipient",
+                "message": f"User u/{recipient} has already been contacted",
+                "source": check.get("source"),
+            }
+
     try:
         insert_data = {
             "account_id": item.get("accountId"),
@@ -93,6 +110,15 @@ async def add_to_queue(item: Dict[str, Any], team_id: Optional[str] = None) -> O
             insert_data["conversation_id"] = item.get("conversationId")
 
         result = client.table("dm_queue").insert(insert_data).execute()
+
+        # Record contact for dedup (outreach only)
+        if result.data and message_type != "reply" and team_id and recipient:
+            from . import dedup
+            await dedup.record_contact(
+                recipient, team_id,
+                source="dm_queue",
+                account_id=item.get("accountId"),
+            )
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
@@ -362,6 +388,19 @@ async def mark_as_sent(item_id: str, team_id: Optional[str] = None) -> Optional[
         if team_id:
             query = query.eq("team_id", team_id)
         result = query.execute()
+
+        # Record contact for dedup (ensures coverage for items queued before this change)
+        if result.data and team_id:
+            row = result.data[0]
+            recipient = (row.get("recipient_username") or "").lower().strip()
+            msg_type = row.get("message_type", "outreach")
+            if recipient and msg_type != "reply":
+                from . import dedup
+                await dedup.record_contact(
+                    recipient, team_id,
+                    source="dm_queue",
+                    account_id=row.get("account_id"),
+                )
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
