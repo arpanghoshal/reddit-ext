@@ -1,42 +1,63 @@
 """
 LLM Service
-Handles interactions with OpenRouter API for message generation
+Handles interactions with Google Gemini API for message generation
 """
 
-import os
+import json
+import logging
 from typing import Dict, Any, List, Optional
-import httpx
 
-# Import user analysis for personalization
+from . import gemini_client
 from . import user_analysis
 from . import reddit_comments
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-v3.2"
+logger = logging.getLogger(__name__)
 
 
-async def generate_question(input_data: Dict[str, Any]) -> str:
+def _clean_message(text: str) -> str:
+    """Remove em dashes, en dashes, and other unwanted characters from generated messages."""
+    text = text.replace("\u2014", "-")  # em dash
+    text = text.replace("\u2013", "-")  # en dash
+    return text
+
+
+def _parse_message_response(raw: str) -> Dict[str, str]:
+    """Parse LLM response that should contain message + reasoning JSON."""
+    raw = raw.strip()
+
+    # Try JSON parse first
+    try:
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+
+        parsed = json.loads(raw)
+        return {
+            "message": _clean_message(parsed.get("message", "").strip()),
+            "reasoning": parsed.get("reasoning", "").strip(),
+        }
+    except (json.JSONDecodeError, IndexError):
+        pass
+
+    # Fallback: treat entire output as the message
+    return {"message": _clean_message(raw), "reasoning": ""}
+
+
+async def generate_question(input_data: Dict[str, Any]) -> Dict[str, str]:
     """
-    Generate a DM question based on a Reddit post
+    Generate a DM question based on a Reddit post.
 
     Args:
         input_data: Dict containing 'post' and 'settings'
 
     Returns:
-        Generated message string
+        Dict with 'message' and 'reasoning' keys
     """
     post = input_data.get("post", {})
     settings = input_data.get("settings", {})
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OpenRouter API key not configured")
-
-    model = settings.get("model") or DEFAULT_MODEL
-    print(f"[DEBUG] Using model: {model}")
-
     # Fetch user profile for deep personalization
-    user_profile = None
     personalization_context = {}
     subreddit_culture = {}
 
@@ -46,152 +67,184 @@ async def generate_question(input_data: Dict[str, Any]) -> str:
             user_profile = await user_analysis.get_or_analyze(author)
             if user_profile and not user_profile.get("error"):
                 personalization_context = user_profile.get("personalization_context", {})
-                print(f"[DEBUG] User profile loaded for {author}")
+                logger.debug(f"User profile loaded for {author}")
 
         # Get subreddit culture
         subreddit = post.get("subreddit", "")
         if subreddit:
             subreddit_culture = await user_analysis.get_subreddit_culture(subreddit)
     except Exception as e:
-        print(f"[DEBUG] Could not load user profile: {e}")
+        logger.debug(f"Could not load user profile: {e}")
 
     # Fetch post comments for richer context
     comments_text = ""
     try:
         comments_text = await reddit_comments.get_post_comments_text(post.get("url", ""))
     except Exception as e:
-        print(f"[DEBUG] Could not fetch post comments: {e}")
+        logger.debug(f"Could not fetch post comments: {e}")
 
-    # Build enhanced system prompt with personalization
+    # Build rich personalization section
     personalization_section = ""
     if personalization_context:
         sections = []
         if personalization_context.get("interest_summary"):
-            sections.append(f"- {personalization_context['interest_summary']}")
+            sections.append(f"- Interests: {personalization_context['interest_summary']}")
         if personalization_context.get("pain_summary"):
-            sections.append(f"- {personalization_context['pain_summary']}")
+            sections.append(f"- Pain points: {personalization_context['pain_summary']}")
         if personalization_context.get("professional_context"):
-            sections.append(f"- {personalization_context['professional_context']}")
+            sections.append(f"- Professional context: {personalization_context['professional_context']}")
         if personalization_context.get("style_guidance"):
-            sections.append(f"- Style: {personalization_context['style_guidance']}")
+            sections.append(f"- How they write: {personalization_context['style_guidance']}")
         if personalization_context.get("length_guidance"):
-            sections.append(f"- Length: {personalization_context['length_guidance']}")
+            sections.append(f"- Message length preference: {personalization_context['length_guidance']}")
 
         if sections:
             personalization_section = f"""
-USER PROFILE INSIGHTS:
+WHO THIS PERSON IS (from their Reddit activity):
 {chr(10).join(sections)}
+Use these insights to connect with them on their level. Reference their world, not yours.
 """
 
     subreddit_section = ""
     if subreddit_culture:
         subreddit_section = f"""
-SUBREDDIT CULTURE (r/{post.get('subreddit', 'unknown')}):
-- Typical Tone: {subreddit_culture.get('typical_tone', 'friendly')}
-- Greeting Style: {', '.join(subreddit_culture.get('greeting_examples', ['Hey', 'Hi']))}
-- Avoid: {', '.join(subreddit_culture.get('taboo_topics', []))}
-- Culture: {subreddit_culture.get('culture_notes', '')}
+r/{post.get('subreddit', 'unknown')} CULTURE:
+- People here talk like: {subreddit_culture.get('typical_tone', 'friendly')}
+- Common openers: {', '.join(subreddit_culture.get('greeting_examples', ['Hey', 'Hi']))}
+- Never mention: {', '.join(subreddit_culture.get('taboo_topics', []))}
+- Vibe: {subreddit_culture.get('culture_notes', '')}
+Match this community's energy. Don't stick out as an outsider.
 """
 
-    system_prompt = f"""You're writing a casual Reddit DM as a real person reaching out genuinely.
+    business_context_section = ""
+    business_context = settings.get("businessContext") or ""
+    if business_context:
+        business_context_section = f"""
+YOUR CONTEXT (use this to inform your angle, but NEVER pitch or sell):
+{business_context}
+"""
 
-CONTEXT:
-Business: {settings.get('businessDesc', 'Not specified')}
-Looking for: {settings.get('persona', 'General')}
-Want to learn about: {', '.join(settings.get('insightTypes', [])) or 'their experience'}
-Vibe: {settings.get('tone', 'Curious')}
-{personalization_section}{subreddit_section}
-WRITE LIKE A HUMAN:
-- Use contractions (you're, I'm, don't, it's, that's)
-- Lowercase is fine for casual openers (hey, yo, hi there)
-- Skip the formalities - no "I hope this message finds you well"
-- Write how you'd actually text a friend about something interesting
-- One thought, naturally expressed. Not a checklist of points
-- It's ok to trail off or use "..." or "haha" or "lol" if it fits
-- DON'T start with "I" - mix it up (saw your post, your post about X, that thing you mentioned)
-- Sound curious, not like you're conducting an interview
+    tone = settings.get("tone", "Curious")
+    tone_instructions = _get_tone_instructions(tone)
 
-AVOID THESE AI TELLS:
-- "I came across your post" (robotic)
-- "I'd love to hear your thoughts" (too formal)
-- "Would you be open to..." (salesy)
-- "I noticed that..." (sounds scripted)
-- Perfect grammar and punctuation (real people are messier)
-- Starting every sentence the same way
+    system_prompt = f"""You are a real person on Reddit writing a DM to someone whose post caught your eye.
 
-GOOD EXAMPLES:
-- "yo saw your post about X - been dealing with the same thing. how'd you end up handling it?"
-- "that thing you mentioned about X is so real. did you ever figure out a good solution?"
-- "your post hit home lol. been stuck on the same problem - mind if i ask what you tried?"
+YOUR GOAL: Start a genuine conversation. You want to understand their experience. You have real context about who they are - USE IT to make this feel personal, not generic.
 
-BAD EXAMPLES (don't do these):
-- "I noticed your post about X. I would love to learn more about your experience."
-- "Hi! I saw your post and found it very interesting. Could you share more details?"
+BUSINESS BACKGROUND (shapes your perspective, but NEVER mention it directly):
+- What you do: {settings.get('businessDesc', 'Not specified')}
+- Who you're looking to connect with: {settings.get('persona', 'General')}
+- What you want to learn: {', '.join(settings.get('insightTypes', [])) or 'their experience'}
+{business_context_section}{personalization_section}{subreddit_section}
+TONE: {tone}
+{tone_instructions}
 
-HARD RULES:
+DEEP PERSONALIZATION RULES:
+- You've read their post AND their profile. Reference something SPECIFIC from their post.
+- If you know their interests, weave that in naturally ("saw you're into X too")
+- If you know their communication style, mirror it exactly
+- If they write long technical posts, you can be slightly more detailed
+- If they write short casual comments, keep it ultra brief
+- Show you actually understand their situation, don't just reference it superficially
+
+CRITICAL FORMATTING:
+- NEVER use em dashes or en dashes. Use regular hyphens (-) only.
+- 1-2 sentences max for the message
 - NO selling, pitching, links, or product mentions
-- Keep it short - 1-2 sentences max
-- Output ONLY the message, nothing else"""
 
-    comments_section = f"\n{comments_text}\n" if comments_text else ""
-    user_prompt = f"""Their post in r/{post.get('subreddit', 'Unknown')}:
-"{post.get('title', 'No title')}"
+RESPOND WITH VALID JSON:
+{{"message": "your DM message here", "reasoning": "2-3 sentences explaining: what specific context you used from their profile/post, why you chose this angle, and what makes this feel personal vs generic"}}"""
 
+    # Build user prompt with all available context
+    comments_section = f"\nTOP COMMENTS ON THEIR POST:\n{comments_text}\n" if comments_text else ""
+
+    source_comment = post.get("source_comment_body") or ""
+    comment_source_section = ""
+    if source_comment:
+        comment_source_section = f"""
+THE SPECIFIC COMMENT THAT FLAGGED THEM AS A LEAD:
+"{source_comment}"
+(This is what they actually said - reference this directly in your message)
+"""
+
+    user_prompt = f"""POST in r/{post.get('subreddit', 'Unknown')}:
+Title: "{post.get('title', 'No title')}"
+
+Body:
 {post.get('body', '') or '(no body text)'}
-{comments_section}
+{comments_section}{comment_source_section}
 Author: u/{post.get('author', 'unknown')}
 
-Write a quick DM to them:"""
+Write a DM to this person. Use everything you know about them. Make it impossible for them to think this is a template."""
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/reddit-automated-dm",
-                "X-Title": "Reddit Automated DM"
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.85,  # Higher temp for more human-like variation
-                "max_tokens": 150
-            },
-            timeout=60.0
-        )
+    result = await gemini_client.generate_content(
+        system_instruction=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.85,
+        max_tokens=300,
+    )
 
-        if response.status_code != 200:
-            error_data = response.json()
-            print(f"[DEBUG] OpenRouter error response: {error_data}")
-            raise ValueError(error_data.get("error", {}).get("message", "Failed to generate question"))
+    return _parse_message_response(result)
 
-        data = response.json()
 
-        if not data.get("choices") or not data["choices"][0].get("message"):
-            print(f"Unexpected API response structure: {data}")
-            raise ValueError("Invalid API response format")
+def _get_tone_instructions(tone: str) -> str:
+    """Get detailed writing instructions for each tone."""
+    tones = {
+        "Curious": """HOW TO WRITE (Curious tone):
+- Lead with genuine curiosity about THEIR specific situation
+- Ask about something specific from their post, not a generic question
+- Show you're fascinated by their particular take or experience
+- "wait so when you said X, did you mean...?" or "curious how that worked out for you"
+- Think: a smart person who read their post and genuinely wants to know more""",
 
-        return data["choices"][0]["message"]["content"].strip()
+        "Helpful": """HOW TO WRITE (Helpful tone):
+- Lead by showing you relate to their problem or situation
+- Share a tiny relevant nugget from your own experience (not a pitch)
+- Make them feel like you've been where they are
+- "been through something similar - what helped me was thinking about X differently"
+- Think: a peer who's been in their shoes and casually mentioning something useful""",
+
+        "Casual": """HOW TO WRITE (Casual tone):
+- Super laid back. Think texting a friend.
+- Use lowercase, abbreviations, "lol", "tbh", "ngl" naturally
+- Very short - could be just one line
+- "yo that thing about X is so relatable lol. how'd you end up dealing with it?"
+- Think: someone who just genuinely vibes with what they posted""",
+
+        "Professional": """HOW TO WRITE (Professional tone):
+- Still casual enough for Reddit, but slightly more polished
+- Show you understand the professional context of their post
+- Reference specific details that show business/industry knowledge
+- "your point about X in the context of Y is spot on - been seeing the same thing"
+- Think: a knowledgeable peer having a watercooler conversation""",
+
+        "Friendly": """HOW TO WRITE (Friendly tone):
+- Warm and approachable, like someone they'd want to grab coffee with
+- Lead with validation or shared experience
+- Make them feel good about what they shared
+- "dude your post about X really resonated - we've been wrestling with the same thing"
+- Think: a genuinely nice person who found a kindred spirit""",
+
+        "Direct": """HOW TO WRITE (Direct tone):
+- Get straight to the point. No fluff.
+- Reference the specific thing that caught your attention
+- Ask one clear, direct question
+- "saw your post about X. quick q - did Y approach actually work?"
+- Think: a busy person who respects their time and gets to the point""",
+    }
+    return tones.get(tone, tones["Curious"])
 
 
 def get_available_models() -> List[Dict[str, str]]:
     """Get list of available LLM models"""
     return [
-        {"id": "deepseek/deepseek-v3.2", "name": "DeepSeek V3"},
-        {"id": "google/gemma-2-9b-it:free", "name": "Gemma 2 9B (Free)"},
-        {"id": "meta-llama/llama-3.1-8b-instruct:free", "name": "Llama 3.1 8B (Free)"},
-        {"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku"},
-        {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini"}
+        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
     ]
 
 
 async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict[str, Any] = None) -> str:
     """
-    Generate a reply suggestion for an ongoing conversation
+    Generate a reply suggestion for an ongoing conversation.
 
     Args:
         conversation: Conversation object with messages
@@ -201,15 +254,9 @@ async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict
         Generated reply suggestion
     """
     settings = settings or {}
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OpenRouter API key not configured")
-
-    model = settings.get("model", DEFAULT_MODEL)
 
     # Fetch user profile for context
     participant_username = conversation.get("participantUsername", "")
-    user_profile = None
     personalization_context = {}
 
     try:
@@ -218,7 +265,7 @@ async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict
             if user_profile and not user_profile.get("error"):
                 personalization_context = user_profile.get("personalization_context", {})
     except Exception as e:
-        print(f"[DEBUG] Could not load user profile for reply: {e}")
+        logger.debug(f"Could not load user profile for reply: {e}")
 
     # Format conversation history
     messages = conversation.get("messages", [])
@@ -232,89 +279,75 @@ async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict
     if personalization_context:
         sections = []
         if personalization_context.get("interest_summary"):
-            sections.append(f"- {personalization_context['interest_summary']}")
+            sections.append(f"- Their interests: {personalization_context['interest_summary']}")
         if personalization_context.get("style_guidance"):
-            sections.append(f"- Communication style: {personalization_context['style_guidance']}")
+            sections.append(f"- How they write: {personalization_context['style_guidance']}")
         if personalization_context.get("length_guidance"):
-            sections.append(f"- {personalization_context['length_guidance']}")
+            sections.append(f"- Their message length: {personalization_context['length_guidance']}")
+        if personalization_context.get("professional_context"):
+            sections.append(f"- Professional context: {personalization_context['professional_context']}")
 
         if sections:
             personalization_section = f"""
-USER PROFILE:
+WHO YOU'RE TALKING TO:
 {chr(10).join(sections)}
+Mirror their style. If they're brief, be brief. If they're detailed, match it.
 """
 
-    system_prompt = f"""You're continuing a Reddit DM conversation as a real person, not a bot.
+    business_context_section = ""
+    business_context = settings.get("businessContext") or settings.get("business_context", "")
+    if business_context:
+        business_context_section = f"""
+YOUR CONTEXT (informs your replies but never pitch directly):
+{business_context}
+"""
 
-CONTEXT:
+    tone = settings.get("tone") or settings.get("tone", "Curious")
+    tone_instructions = _get_tone_instructions(tone)
+
+    system_prompt = f"""You're in a Reddit DM conversation. You're a real person, not a bot.
+
+BACKGROUND:
 Business: {settings.get('businessDesc') or settings.get('business_desc', 'Not specified')}
-Vibe: casual chat, learning from them
-Status: {conversation.get('status', 'active')}
-{personalization_section}
-WRITE LIKE A HUMAN:
-- Mirror their energy - if they're chill, be chill. if they're detailed, match it
+Conversation status: {conversation.get('status', 'active')}
+{business_context_section}{personalization_section}
+TONE: {tone}
+{tone_instructions}
+
+CONVERSATION RULES:
+- Read their last message carefully. React to what they ACTUALLY said.
+- Mirror their energy exactly. Chill = chill. Detailed = detailed.
 - Use contractions naturally (that's, I'm, you're, don't)
-- React genuinely to what they said before asking more
+- Acknowledge what they said FIRST, then continue the conversation
 - It's ok to say "oh interesting" or "haha yeah" or "oh nice"
-- Don't interrogate - have a conversation
-- Match their message length roughly
+- NEVER use em dashes or en dashes - use regular hyphens (-) only
 
-HOW REAL CONVOS FLOW:
-- Acknowledge what they said → share a quick thought → maybe ask something
-- "oh that makes sense - yeah I've been wondering about that too. did X work out?"
-- "haha fair enough. so what ended up happening with Y?"
-- NOT: "Thank you for sharing. That is very helpful. Could you elaborate on..."
+READ THE ROOM:
+- Interested/enthusiastic -> keep the momentum, maybe suggest a next step casually
+- Lukewarm/short replies -> keep it light, don't push
+- Cold/negative -> be gracious, zero pressure, leave the door open
 
-AVOID AI TELLS:
+NEVER DO THESE:
 - "Thank you for sharing" (robotic)
 - "That's really insightful" (sycophantic)
 - "I appreciate you taking the time" (too formal)
 - "Would you mind elaborating" (interview mode)
-- Perfect punctuation and capitalization
 
-READ THE ROOM:
-- They seem interested → keep it flowing naturally, maybe suggest next step casually
-- They seem lukewarm → back off a bit, keep it light
-- They seem cold → be gracious, no pressure, leave door open
+Output ONLY the reply message, nothing else."""
 
-Output ONLY the reply, nothing else"""
-
-    user_prompt = f"""The convo so far:
+    user_prompt = f"""The conversation so far:
 {conversation_context}
 
-Your reply:"""
+Write your next reply:"""
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/reddit-automated-dm",
-                "X-Title": "Reddit Automated DM"
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7,
-                "max_tokens": 200
-            },
-            timeout=60.0
-        )
+    result = await gemini_client.generate_content(
+        system_instruction=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.7,
+        max_tokens=200,
+    )
 
-        if response.status_code != 200:
-            error_data = response.json()
-            raise ValueError(error_data.get("error", {}).get("message", "Failed to generate reply suggestion"))
-
-        data = response.json()
-
-        if not data.get("choices") or not data["choices"][0].get("message"):
-            raise ValueError("Invalid API response format")
-
-        return data["choices"][0]["message"]["content"].strip()
+    return _clean_message(result)
 
 
 async def generate_follow_up(
@@ -323,7 +356,7 @@ async def generate_follow_up(
     settings: Dict[str, Any] = None
 ) -> str:
     """
-    Generate a follow-up message for a cold conversation
+    Generate a follow-up message for a cold conversation.
 
     Args:
         conversation: Conversation object
@@ -334,94 +367,73 @@ async def generate_follow_up(
         Generated follow-up message
     """
     settings = settings or {}
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OpenRouter API key not configured")
-
-    model = settings.get("model", DEFAULT_MODEL)
     participant_username = conversation.get("participantUsername", "there")
 
-    # Get user profile for optimal timing and personalization
-    user_profile = None
+    # Get user profile for personalization
     personalization_hint = ""
 
     try:
         if participant_username and participant_username != "there":
             user_profile = await user_analysis.get_or_analyze(participant_username)
             if user_profile and not user_profile.get("error"):
-                # Get a relevant interest to potentially reference
                 interests = user_profile.get("interests", [])
                 if interests:
                     top_interest = interests[0].get("topic", "")
                     if top_interest:
-                        personalization_hint = f"\nNote: User is active in {top_interest} - you could reference this naturally"
+                        personalization_hint = f"\nThey're active in: {top_interest} - you could reference this to make the follow-up feel personal"
+                style = user_profile.get("personalization_context", {}).get("style_guidance", "")
+                if style:
+                    personalization_hint += f"\nTheir writing style: {style}"
     except Exception as e:
-        print(f"[DEBUG] Could not load user profile for follow-up: {e}")
+        logger.debug(f"Could not load user profile for follow-up: {e}")
 
-    system_prompt = f"""You're sending a casual follow-up to someone who didn't reply. Be a real person, not a robot.
+    business_context_section = ""
+    business_context = settings.get("businessContext") or settings.get("business_context", "")
+    if business_context:
+        business_context_section = f"""
+YOUR CONTEXT:
+{business_context}
+"""
+
+    tone = settings.get("tone") or "Curious"
+
+    system_prompt = f"""You're following up with someone who didn't reply to your Reddit DM. Be a real person.
 
 CONTEXT:
-It's been {days_since_last_message} days since you messaged
+Days since your last message: {days_since_last_message}
 Their username: u/{participant_username}
-Status: {conversation.get('status', 'no reply')}{personalization_hint}
+Conversation status: {conversation.get('status', 'no reply')}{personalization_hint}
+{business_context_section}
+THE VIBE:
+- You're a real person casually checking in
+- Zero guilt, zero pressure
+- Give them an easy out
+- If they're not into it, that's totally fine
+- One short sentence max
+- NEVER use em dashes or en dashes - use regular hyphens (-) only
 
-HUMAN FOLLOW-UPS SOUND LIKE:
+GOOD FOLLOW-UPS:
 - "hey just bumping this in case it got buried - no worries if you're busy tho"
 - "figured I'd check back - totally get it if you're not interested btw"
 - "hey! sorry to bug you again, just curious if you had thoughts on this"
-- Keep it super short - one casual sentence
 
-DON'T SOUND LIKE A BOT:
+NEVER DO:
 - "I wanted to follow up on my previous message" (corporate)
 - "I hope this finds you well" (email template)
 - "Just circling back" (LinkedIn vibes)
 - "I understand you must be busy" (passive aggressive)
-- "At your earliest convenience" (formal)
-
-THE VIBE:
-- You're a real person who sent a message and is casually checking in
-- Zero guilt, zero pressure
-- Give them an easy out
-- If they're not into it, that's totally fine
-
-AVOID:
-- Being apologetic (one "sorry to bug" max)
 - Multiple sentences
 - Questions that demand answers
-- Anything that sounds automated
 
-Output ONLY the message, nothing else"""
+Output ONLY the message, nothing else."""
 
     user_prompt = "Write a quick follow-up:"
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/reddit-automated-dm",
-                "X-Title": "Reddit Automated DM"
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7,
-                "max_tokens": 150
-            },
-            timeout=60.0
-        )
+    result = await gemini_client.generate_content(
+        system_instruction=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.7,
+        max_tokens=150,
+    )
 
-        if response.status_code != 200:
-            error_data = response.json()
-            raise ValueError(error_data.get("error", {}).get("message", "Failed to generate follow-up"))
-
-        data = response.json()
-
-        if not data.get("choices") or not data["choices"][0].get("message"):
-            raise ValueError("Invalid API response format")
-
-        return data["choices"][0]["message"]["content"].strip()
+    return _clean_message(result)

@@ -398,6 +398,85 @@ export async function getQuotaStatus() {
     return result.data;
 }
 
+// ============================================================================
+// Discovery
+// ============================================================================
+
+export async function startDiscovery(data) {
+    const result = await apiRequest('/discovery/start', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    return result.data;
+}
+
+export async function getDiscoverySessions(limit = 20, offset = 0) {
+    const result = await apiRequest(`/discovery/sessions?limit=${limit}&offset=${offset}`);
+    return result.data;
+}
+
+export async function getDiscoverySession(sessionId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}`);
+    return result.data;
+}
+
+export async function cancelDiscovery(sessionId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/cancel`, { method: 'POST' });
+    return result.data;
+}
+
+export async function getDiscoverySubreddits(sessionId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/subreddits`);
+    return result.data;
+}
+
+export async function getDiscoveryLeads(sessionId, filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const qs = params.toString();
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads${qs ? '?' + qs : ''}`);
+    return result.data;
+}
+
+export async function getDiscoveryLeadDetail(sessionId, leadId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/${leadId}`);
+    return result.data;
+}
+
+export async function generateLeadMessage(sessionId, leadId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/${leadId}/generate-message`, {
+        method: 'POST',
+    });
+    return result.data;
+}
+
+export async function queueLead(sessionId, leadId, data) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/${leadId}/queue`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    return result.data;
+}
+
+export async function dismissLead(sessionId, leadId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/${leadId}/dismiss`, {
+        method: 'POST',
+    });
+    return result;
+}
+
+export async function bulkQueueLeads(sessionId, data) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/bulk-queue`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    return result.data;
+}
+
 // Extension Direct Send
 // Opens Reddit chat page with reply data encoded in the URL hash.
 // The Chrome extension's content script detects #__rdm_send= and triggers automation.
@@ -406,4 +485,63 @@ export function triggerExtensionSend(username, message, queueItemId, conversatio
     const encoded = btoa(JSON.stringify(payload));
     const url = `https://www.reddit.com/chat/#__rdm_send=${encoded}`;
     window.open(url, '_blank');
+}
+
+// ============================================================================
+// Automation Stats & Extension Communication
+// ============================================================================
+
+// Get automation stats for a discovery session (queued/approved/sent/failed counts)
+export async function getAutomationStats(sessionId) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/automation-stats`);
+    return result.data;
+}
+
+// Check if Chrome extension is available via bridge PING/PONG
+export function checkExtensionAvailable() {
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(false), 2000);
+        const handler = (event) => {
+            if (event.data?.type === 'RDM_EXTENSION_PONG') {
+                clearTimeout(timeout);
+                window.removeEventListener('message', handler);
+                resolve(true);
+            }
+        };
+        window.addEventListener('message', handler);
+        window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'PING' }, '*');
+    });
+}
+
+// Signal extension to start/stop outreach queue processing
+export function triggerOutreachPolling(start = true) {
+    const action = start ? 'START_OUTREACH_POLLING' : 'STOP_OUTREACH_POLLING';
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action, payload: {} }, '*');
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(false), 3000);
+        const handler = (event) => {
+            if (event.data?.type === 'RDM_AUTH_RESPONSE' && event.data?.action === action) {
+                clearTimeout(timeout);
+                window.removeEventListener('message', handler);
+                resolve(event.data.success);
+            }
+        };
+        window.addEventListener('message', handler);
+    });
+}
+
+// Get outreach queue status from extension
+export function getOutreachQueueStatus() {
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'GET_OUTREACH_STATUS', payload: {} }, '*');
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve({ isPolling: false, isProcessing: false }), 3000);
+        const handler = (event) => {
+            if (event.data?.type === 'RDM_AUTH_RESPONSE' && event.data?.action === 'GET_OUTREACH_STATUS') {
+                clearTimeout(timeout);
+                window.removeEventListener('message', handler);
+                resolve(event.data.data || { isPolling: false, isProcessing: false });
+            }
+        };
+        window.addEventListener('message', handler);
+    });
 }

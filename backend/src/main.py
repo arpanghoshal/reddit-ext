@@ -19,6 +19,7 @@ from .routes import teams as teams_routes
 from .routes import quotas as quotas_routes
 from .routes import audit as audit_routes
 from .routes import team_analytics as team_analytics_routes
+from .routes import discovery as discovery_routes
 from .middleware.supabase_auth import SupabaseAuthMiddleware
 
 # Load environment variables
@@ -41,9 +42,9 @@ def validate_required_env_vars():
     if not os.getenv("API_KEY"):
         warnings.append("API_KEY not set - API authentication is disabled (not recommended for production)")
 
-    # Check for OpenRouter key
-    if not os.getenv("OPENROUTER_API_KEY"):
-        warnings.append("OPENROUTER_API_KEY not set - LLM features will not work")
+    # Check for Gemini API key
+    if not os.getenv("GOOGLE_GEMINI_API_KEY"):
+        warnings.append("GOOGLE_GEMINI_API_KEY not set - LLM features will not work")
 
     # Check for Supabase
     if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
@@ -126,6 +127,7 @@ app.include_router(teams_routes.router, prefix="/api")
 app.include_router(quotas_routes.router, prefix="/api")
 app.include_router(audit_routes.router, prefix="/api")
 app.include_router(team_analytics_routes.router, prefix="/api")
+app.include_router(discovery_routes.router, prefix="/api")
 
 # Global error handler - sanitized for security
 @app.exception_handler(Exception)

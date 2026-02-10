@@ -5,11 +5,11 @@ Detect user intent from reply messages for intelligent conversation handling
 
 import os
 import re
+import logging
 from typing import Dict, Any, List, Optional
-import httpx
+from . import gemini_client
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-v3.2"
+logger = logging.getLogger(__name__)
 
 # Intent definitions with patterns and next actions
 INTENT_DEFINITIONS = {
@@ -200,14 +200,6 @@ async def detect_intent_llm(message: str, conversation_context: str = "") -> Dic
     Returns:
         Intent detection result
     """
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        return {
-            "intent": "unknown",
-            "confidence": 0,
-            "error": "No API key configured"
-        }
-
     intent_list = "\n".join([
         f"- {name}: {config['description']}"
         for name, config in INTENT_DEFINITIONS.items()
@@ -230,60 +222,37 @@ Previous context (if any): {conversation_context if conversation_context else "N
 Classify the intent:"""
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                OPENROUTER_API_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": DEFAULT_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 200
-                },
-                timeout=30.0
-            )
+        content = await gemini_client.generate_content(
+            system_instruction=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.3,
+            max_tokens=200,
+        )
 
-            if response.status_code != 200:
-                return {
-                    "intent": "unknown",
-                    "confidence": 0,
-                    "error": f"API error: {response.status_code}"
-                }
+        import json
 
-            data = response.json()
-            content = data["choices"][0]["message"]["content"].strip()
+        # Handle markdown code blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
 
-            # Parse JSON response
-            import json
+        result = json.loads(content)
 
-            # Handle markdown code blocks
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+        # Add next action from definitions
+        intent_name = result.get("intent", "unknown")
+        if intent_name in INTENT_DEFINITIONS:
+            result["next_action"] = INTENT_DEFINITIONS[intent_name]["next_action"]
+            result["priority"] = INTENT_DEFINITIONS[intent_name]["priority"]
+        else:
+            result["next_action"] = "manual_review"
+            result["priority"] = 99
 
-            result = json.loads(content)
-
-            # Add next action from definitions
-            intent_name = result.get("intent", "unknown")
-            if intent_name in INTENT_DEFINITIONS:
-                result["next_action"] = INTENT_DEFINITIONS[intent_name]["next_action"]
-                result["priority"] = INTENT_DEFINITIONS[intent_name]["priority"]
-            else:
-                result["next_action"] = "manual_review"
-                result["priority"] = 99
-
-            result["method"] = "llm"
-            return result
+        result["method"] = "llm"
+        return result
 
     except Exception as e:
-        print(f"Error in LLM intent detection: {e}")
+        logger.warning(f"Error in LLM intent detection: {e}")
         return {
             "intent": "unknown",
             "confidence": 0,

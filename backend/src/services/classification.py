@@ -6,14 +6,14 @@ Uses LLM to classify Reddit posts for relevance scoring
 import os
 import json
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-import httpx
 from supabase import create_client, Client
 from . import reddit_comments
+from . import gemini_client
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-v3.2"
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -204,55 +204,29 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
         print(f"Using cached classification for: {post.get('url')}")
         return cached
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OpenRouter API key not configured")
-
     # Fetch post comments for richer context
     comments_text = await reddit_comments.get_post_comments_text(post.get("url", ""))
 
     prompt = build_classification_prompt(post, settings, comments_text)
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://reddit-automated-dm.local",
-                "X-Title": "Reddit Automated DM"
-            },
-            json={
-                "model": settings.get("model", DEFAULT_MODEL),
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a lead qualification expert. Analyze Reddit posts and classify them for sales outreach relevance. Respond only with valid JSON."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 500
-            },
-            timeout=60.0
-        )
+    system_instruction = "You are a lead qualification expert. Analyze Reddit posts and classify them for sales outreach relevance. Respond only with valid JSON."
 
-        if response.status_code != 200:
-            error_text = response.text
-            raise ValueError(f"OpenRouter API error: {response.status_code} - {error_text}")
+    response_text = await gemini_client.generate_content(
+        system_instruction=system_instruction,
+        user_prompt=prompt,
+        temperature=0.3,
+        max_tokens=500,
+    )
 
-        data = response.json()
-        response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not response_text:
+        raise ValueError("Empty response from LLM")
 
-        if not response_text:
-            raise ValueError("Empty response from LLM")
+    classification = parse_classification_response(response_text)
 
-        classification = parse_classification_response(response_text)
+    # Save to cache
+    await save_classification(post, classification)
 
-        # Save to cache
-        await save_classification(post, classification)
-
-        return {**classification, "cached": False}
+    return {**classification, "cached": False}
 
 
 async def classify_batch(posts: List[Dict[str, Any]], settings: Dict[str, Any] = None) -> List[Dict[str, Any]]:

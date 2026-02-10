@@ -29,7 +29,8 @@ export default function Settings() {
     businessDesc: '',
     persona: '',
     tone: 'Curious',
-    insightTypes: []
+    insightTypes: [],
+    businessContext: ''
   });
 
   // Automation settings state
@@ -70,7 +71,8 @@ export default function Settings() {
           businessDesc: userSettings.business_desc || userSettings.businessDesc || '',
           persona: userSettings.persona || '',
           tone: userSettings.tone || 'Curious',
-          insightTypes: userSettings.insight_types || userSettings.insightTypes || []
+          insightTypes: userSettings.insight_types || userSettings.insightTypes || [],
+          businessContext: userSettings.business_context || userSettings.businessContext || ''
         });
       }
 
@@ -199,6 +201,22 @@ export default function Settings() {
                   onChange={e => setBusinessSettings(prev => ({ ...prev, persona: e.target.value }))}
                   placeholder="Describe your ideal customer or target audience..."
                   rows={3}
+                  className="w-full px-4 py-3 bg-[#272729] border border-[#343536] rounded-lg text-white placeholder-[#818384] focus:border-[#ff4500] focus:outline-none resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[#d7dadc] mb-2">
+                  Outreach Context
+                </label>
+                <p className="text-[#818384] text-xs mb-2">
+                  Provide additional context that will be used when generating messages. Include details like your value proposition, what kind of users you want to talk to, messaging guidelines, things to mention or avoid, etc.
+                </p>
+                <textarea
+                  value={businessSettings.businessContext}
+                  onChange={e => setBusinessSettings(prev => ({ ...prev, businessContext: e.target.value }))}
+                  placeholder={"Example:\n- We help SaaS founders reduce churn with AI-powered analytics\n- Looking to talk to founders/PMs who have >1000 users and struggle with retention\n- Don't mention pricing or competitors\n- Focus on understanding their current analytics stack\n- Our tool integrates with Mixpanel, Amplitude, and Segment"}
+                  rows={6}
                   className="w-full px-4 py-3 bg-[#272729] border border-[#343536] rounded-lg text-white placeholder-[#818384] focus:border-[#ff4500] focus:outline-none resize-none"
                 />
               </div>

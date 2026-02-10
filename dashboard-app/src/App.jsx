@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Users, Shield, Settings as SettingsIcon, XCircle, LogOut, BarChart2, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Users, Shield, Settings as SettingsIcon, XCircle, LogOut, BarChart2, ClipboardList, Search } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Dashboard from './pages/Dashboard';
 import Queue from './pages/Queue';
@@ -14,6 +14,7 @@ import TeamSettings from './pages/TeamSettings';
 import TeamAnalytics from './pages/TeamAnalytics';
 import AuditLog from './pages/AuditLog';
 import AcceptInvite from './pages/AcceptInvite';
+import Discovery from './pages/Discovery';
 import TeamSwitcher from './components/TeamSwitcher';
 
 function ProtectedRoute({ children }) {
@@ -42,6 +43,7 @@ function AppLayout() {
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/discovery', icon: Search, label: 'Discovery' },
     { to: '/queue', icon: MessageSquare, label: 'Queue' },
     { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
     { to: '/accounts', icon: Users, label: 'Accounts' },
@@ -124,6 +126,7 @@ function AppLayout() {
       <main className="flex-1 overflow-auto bg-[#dae0e6]" key={`${authKey}-${currentTeam?.id}`}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/discovery" element={<Discovery />} />
           <Route path="/queue" element={<Queue />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/accounts" element={<Accounts />} />
