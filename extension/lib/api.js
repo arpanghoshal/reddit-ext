@@ -496,8 +496,11 @@ async function getQueueStats() {
     return result.data;
 }
 
-async function getNextQueueItem(accountId = null) {
-    const url = accountId ? `/queue/next?accountId=${accountId}` : '/queue/next';
+async function getNextQueueItem(accountId = null, messageType = null) {
+    const params = [];
+    if (accountId) params.push(`accountId=${accountId}`);
+    if (messageType) params.push(`messageType=${messageType}`);
+    const url = params.length ? `/queue/next?${params.join('&')}` : '/queue/next';
     const result = await apiRequest(url);
     return result.data;
 }
@@ -991,6 +994,14 @@ async function checkDuplicateRecipient(recipientUsername, excludeAccountId = nul
     return result.data;
 }
 
+async function checkRecipientContacted(recipientUsername) {
+    const result = await apiRequest('/safety/check-contacted', {
+        method: 'POST',
+        body: JSON.stringify({ recipientUsername })
+    });
+    return result.data;
+}
+
 // =============================================================================
 // CONVERSATION AI (Automated Replies & Follow-ups)
 // =============================================================================
@@ -1201,6 +1212,7 @@ export {
     preSendSafetyCheck,
     getRiskAssessment,
     checkDuplicateRecipient,
+    checkRecipientContacted,
 
     // Conversation AI (Automated Replies & Follow-ups)
     getConversationsNeedingReply,

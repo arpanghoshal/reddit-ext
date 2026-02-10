@@ -223,6 +223,31 @@ button {
     margin-bottom: 12px;
 }
 
+/* Login Divider */
+.login-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 0;
+    color: #818384;
+    font-size: 12px;
+}
+
+.login-divider::before,
+.login-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #343536;
+}
+
+.login-hint {
+    font-size: 11px;
+    color: #818384;
+    text-align: center;
+    margin-top: 8px;
+}
+
 /* Shortcut Hint */
 .shortcut-hint {
     font-size: 11px;

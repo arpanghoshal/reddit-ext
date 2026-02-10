@@ -16,6 +16,7 @@
     "*://*.reddit.com/*",
     "*://chat.reddit.com/*",
     "https://backend-production-423ef.up.railway.app/*",
+    "https://reddit-ext-dashboard.vercel.app/*",
     "http://localhost:*/*",
     "http://127.0.0.1:*/*"
   ],
@@ -64,6 +65,16 @@
       "js": [
         "content/content.js"
       ]
+    },
+    {
+      "matches": [
+        "https://reddit-ext-dashboard.vercel.app/*",
+        "http://localhost:5173/*"
+      ],
+      "js": [
+        "content/dashboard_auth_bridge.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [

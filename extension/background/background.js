@@ -34,8 +34,29 @@ let subredditQueues = {};
 // Track which tab is waiting for chat to prevent race conditions
 let chatWaitingTabId = null;
 
+// Track pending setTimeout IDs per tabId for cancellation on stop
+let pendingTimeouts = {};
+
+function setTrackedTimeout(tabId, fn, delay) {
+    const timeoutId = setTimeout(() => {
+        if (pendingTimeouts[tabId]) pendingTimeouts[tabId].delete(timeoutId);
+        fn();
+    }, delay);
+    if (!pendingTimeouts[tabId]) pendingTimeouts[tabId] = new Set();
+    pendingTimeouts[tabId].add(timeoutId);
+    return timeoutId;
+}
+
+function clearAllTimeouts(tabId) {
+    if (pendingTimeouts[tabId]) {
+        for (const id of pendingTimeouts[tabId]) clearTimeout(id);
+        delete pendingTimeouts[tabId];
+    }
+}
+
 // Cleanup function to remove tasks for closed tabs
 function cleanupTask(tabId) {
+    clearAllTimeouts(tabId);
     if (activeTasks[tabId]) {
         console.log(`Cleaning up task for closed tab ${tabId}`);
         delete activeTasks[tabId];
@@ -140,7 +161,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // the entire flow: find user → open conversation → type → send.
             // We set status to TYPING_MESSAGE so handleStepCompletion's
             // TYPE_MESSAGE success handler fires on completion.
-            setTimeout(() => {
+            setTrackedTimeout(tabId, () => {
                 if (activeTasks[tabId]?.status === AutomationState.TYPING_MESSAGE) {
                     chrome.tabs.sendMessage(tabId, {
                         action: 'EXECUTE_ACTION',
@@ -215,7 +236,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'AUTOMATION_STEP_COMPLETE') {
         const tabId = sender.tab.id;
-        handleStepCompletion(tabId, request.result);
+        handleStepCompletion(tabId, request.result).catch(err => {
+            console.error('handleStepCompletion error:', err);
+        });
     }
 
     if (request.action === 'GET_AUTOMATION_STATUS') {
@@ -237,6 +260,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
         console.log(`Stopping automation for tab ${tabId}`);
 
+        // Cancel all pending timeouts for this tab first
+        clearAllTimeouts(tabId);
+
         if (activeTasks[tabId]) delete activeTasks[tabId];
         if (subredditQueues[tabId]) {
             const queue = subredditQueues[tabId];
@@ -254,6 +280,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             queue.isActive = false;
             delete subredditQueues[tabId];
         }
+
+        // Reset queue processing flags so polling isn't stuck
+        replyQueueProcessing = false;
+        outreachQueueProcessing = false;
 
         sendResponse({ success: true });
     }
@@ -287,7 +317,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 type: 'warning'
             });
 
-            setTimeout(() => {
+            setTrackedTimeout(tabId, () => {
                 processNextStep(tabId);
             }, delay);
         }
@@ -558,7 +588,37 @@ async function processNextStep(tabId) {
                 chrome.tabs.sendMessage(tabId, { action: 'GET_POST_DATA' }, async (postData) => {
                     if (!postData || !postData.valid) {
                         console.warn('Invalid post data, skipping...');
-                        handleStepCompletion(tabId, { success: false, error: 'Invalid post' });
+                        handleStepCompletion(tabId, { success: false, error: 'Invalid post' }).catch(err => console.error('handleStepCompletion error:', err));
+                        return;
+                    }
+
+                    // 1.5. Check if recipient was already contacted (skip for replies)
+                    if (postData.author && !task.data?.isReply) {
+                        try {
+                            const contactCheck = await api.checkRecipientContacted(postData.author);
+                            if (contactCheck && contactCheck.contacted) {
+                                console.log(`u/${postData.author} already contacted (source: ${contactCheck.source}), skipping`);
+                                const skipQueue = subredditQueues[tabId];
+                                api.logSkippedPost({
+                                    postUrl: postData.url || '',
+                                    postTitle: postData.title || null,
+                                    subreddit: postData.subreddit || (skipQueue ? skipQueue.subreddit : null),
+                                    author: postData.author,
+                                    sessionId: skipQueue ? skipQueue.sessionId : null,
+                                    skipReason: 'already_contacted',
+                                    skipDetails: { source: contactCheck.source }
+                                }).catch(err => console.error('Failed to log skipped post:', err));
+                                handleStepCompletion(tabId, { success: false, error: 'Already contacted' }).catch(err => console.error('handleStepCompletion error:', err));
+                                return;
+                            }
+                        } catch (err) {
+                            console.warn('Contact check failed, proceeding:', err.message);
+                        }
+                    }
+
+                    // Abort if task was stopped during contact check
+                    if (!activeTasks[tabId]) {
+                        console.log('Task cancelled during contact check, aborting');
                         return;
                     }
 
@@ -583,8 +643,20 @@ async function processNextStep(tabId) {
                             console.warn('Classification failed, continuing without:', classifyErr);
                         }
 
+                        // Abort if task was stopped during classification
+                        if (!activeTasks[tabId]) {
+                            console.log('Task cancelled during classification, aborting');
+                            return;
+                        }
+
                         // Generate DM
                         const message = await generateQuestion({ post: postData, settings });
+
+                        // Abort if task was stopped during DM generation
+                        if (!activeTasks[tabId]) {
+                            console.log('Task cancelled during DM generation, aborting');
+                            return;
+                        }
 
                         console.log('DM Generated:', message);
 
@@ -627,7 +699,7 @@ async function processNextStep(tabId) {
 
                     } catch (err) {
                         console.error('Generation failed:', err);
-                        handleStepCompletion(tabId, { success: false, error: 'Generation failed' });
+                        handleStepCompletion(tabId, { success: false, error: 'Generation failed' }).catch(err => console.error('handleStepCompletion error:', err));
                     }
                 });
                 break;
@@ -639,7 +711,7 @@ async function processNextStep(tabId) {
                 // Inject script to find and click chat
                 // We send a message to the content script to perform the action
                 // The content script must be ready.
-                setTimeout(() => {
+                setTrackedTimeout(tabId, () => {
                     chrome.tabs.sendMessage(tabId, {
                         action: 'EXECUTE_ACTION',
                         command: 'CLICK_CHAT_BUTTON'
@@ -654,7 +726,7 @@ async function processNextStep(tabId) {
                 console.log('Chat loaded. Attempting to type message...');
                 task.status = AutomationState.TYPING_MESSAGE;
 
-                setTimeout(() => {
+                setTrackedTimeout(tabId, () => {
                     chrome.tabs.sendMessage(tabId, {
                         action: 'EXECUTE_ACTION',
                         command: 'TYPE_MESSAGE',
@@ -670,7 +742,7 @@ async function processNextStep(tabId) {
     }
 }
 
-function handleStepCompletion(tabId, result) {
+async function handleStepCompletion(tabId, result) {
     const task = activeTasks[tabId];
     if (!task) return;
 
@@ -689,7 +761,7 @@ function handleStepCompletion(tabId, result) {
             // 1. Chat popup to render on same page
             // 2. New chat.reddit.com tab to open (handled by onCreated/onUpdated)
             // After 5.5 seconds, try to type on current tab (popup case)
-            setTimeout(() => {
+            setTrackedTimeout(tabId, () => {
                 // Only proceed if we're still waiting (didn't transfer to new tab)
                 if (chatWaitingTabId === tabId && activeTasks[tabId] &&
                     activeTasks[tabId].status === AutomationState.WAITING_FOR_CHAT) {
@@ -713,42 +785,38 @@ function handleStepCompletion(tabId, result) {
             task.retries = 0;
 
             // Record DM sent for rate limiting
-            recordDMSent();
+            const currentAccountId = task.data.accountId || cookies.getCurrentAccountId() || null;
+            recordDMSent(currentAccountId);
 
-            // Handle reply queue items
-            if (task.data.isReply && task.data.queueItemId) {
-                console.log('Marking reply queue item as sent:', task.data.queueItemId);
+            // Mark queue item as sent (replies and outreach)
+            if (task.data.queueItemId) {
+                console.log('Marking queue item as sent:', task.data.queueItemId);
 
-                // Mark queue item as sent
-                api.markQueueItemSent(task.data.queueItemId).catch(err => {
+                try {
+                    await api.markQueueItemSent(task.data.queueItemId);
+                } catch (err) {
                     console.error('Failed to mark queue item as sent:', err);
-                });
-
-                // Add message to conversation
-                if (task.data.conversationId) {
-                    api.addConversationMessage(task.data.conversationId, {
-                        direction: 'outbound',
-                        content: task.data.message,
-                        isAiGenerated: true
-                    }).catch(err => {
-                        console.error('Failed to add message to conversation:', err);
-                    });
                 }
             }
 
             // Log DM to Supabase (tagged with the current logged-in account)
+            // This also creates/updates the conversation and inserts the message
             const queue = subredditQueues[tabId];
-            api.logDM({
-                recipientUsername: task.data.targetUser,
-                postUrl: task.data.postUrl || null,
-                postTitle: task.data.postTitle || null,
-                subreddit: queue ? queue.subreddit : null,
-                messageContent: task.data.message,
-                status: 'sent',
-                automationType: task.data.isReply ? 'reply' : (queue ? 'batch' : 'single'),
-                sessionId: queue ? queue.sessionId : null,
-                accountId: task.data.accountId || cookies.getCurrentAccountId() || null
-            });
+            try {
+                await api.logDM({
+                    recipientUsername: task.data.targetUser,
+                    postUrl: task.data.postUrl || null,
+                    postTitle: task.data.postTitle || null,
+                    subreddit: queue ? queue.subreddit : null,
+                    messageContent: task.data.message,
+                    status: 'sent',
+                    automationType: task.data.isReply ? 'reply' : (queue ? 'batch' : 'single'),
+                    sessionId: queue ? queue.sessionId : null,
+                    accountId: task.data.accountId || cookies.getCurrentAccountId() || null
+                });
+            } catch (err) {
+                console.error('Failed to log DM:', err);
+            }
 
             // Show success toast
             chrome.tabs.sendMessage(tabId, {
@@ -763,15 +831,19 @@ function handleStepCompletion(tabId, result) {
 
                 // Update Supabase session progress
                 if (queue.sessionId) {
-                    api.updateAutomationSession(queue.sessionId, {
-                        processedCount: queue.currentIndex + 1,
-                        successCount: queue.successCount,
-                        failedCount: queue.failedCount
-                    });
+                    try {
+                        await api.updateAutomationSession(queue.sessionId, {
+                            processedCount: queue.currentIndex + 1,
+                            successCount: queue.successCount,
+                            failedCount: queue.failedCount
+                        });
+                    } catch (err) {
+                        console.error('Failed to update automation session:', err);
+                    }
                 }
 
                 // Check rate limit before continuing
-                canSendDM().then(result => {
+                canSendDM(currentAccountId).then(result => {
                     if (!result.allowed) {
                         console.log('Daily limit reached, stopping automation');
                         chrome.tabs.sendMessage(tabId, {
@@ -801,7 +873,7 @@ function handleStepCompletion(tabId, result) {
                             type: 'info'
                         }).catch(() => {});
 
-                        setTimeout(() => {
+                        setTrackedTimeout(tabId, () => {
                             console.log('Moving to next item in queue...');
                             queue.currentIndex++;
                             processNextQueueItem(tabId);
@@ -848,40 +920,52 @@ function handleStepCompletion(tabId, result) {
 
                 // Log failed DM attempt
                 if (task && task.data && task.data.targetUser) {
-                    api.logDM({
-                        recipientUsername: task.data.targetUser,
-                        postUrl: task.data.postUrl || null,
-                        postTitle: task.data.postTitle || null,
-                        subreddit: queue.subreddit,
-                        messageContent: task.data.message || '',
-                        status: 'failed',
-                        automationType: 'batch',
-                        sessionId: queue.sessionId
-                    });
+                    try {
+                        await api.logDM({
+                            recipientUsername: task.data.targetUser,
+                            postUrl: task.data.postUrl || null,
+                            postTitle: task.data.postTitle || null,
+                            subreddit: queue.subreddit,
+                            messageContent: task.data.message || '',
+                            status: 'failed',
+                            automationType: 'batch',
+                            sessionId: queue.sessionId
+                        });
+                    } catch (err) {
+                        console.error('Failed to log DM:', err);
+                    }
 
                     // Log as skipped post too
-                    api.logSkippedPost({
-                        postUrl: task.data.postUrl || '',
-                        postTitle: task.data.postTitle || null,
-                        subreddit: task.data.subreddit || queue.subreddit,
-                        author: task.data.targetUser,
-                        sessionId: queue.sessionId,
-                        skipReason: 'max_retries_exceeded',
-                        skipDetails: {
-                            source: 'automation_failure',
-                            retries: task.retries,
-                            lastError: result.error || null
-                        }
-                    }).catch(err => console.error('Failed to log skipped post:', err));
+                    try {
+                        await api.logSkippedPost({
+                            postUrl: task.data.postUrl || '',
+                            postTitle: task.data.postTitle || null,
+                            subreddit: task.data.subreddit || queue.subreddit,
+                            author: task.data.targetUser,
+                            sessionId: queue.sessionId,
+                            skipReason: 'max_retries_exceeded',
+                            skipDetails: {
+                                source: 'automation_failure',
+                                retries: task.retries,
+                                lastError: result.error || null
+                            }
+                        });
+                    } catch (err) {
+                        console.error('Failed to log skipped post:', err);
+                    }
                 }
 
                 // Update Supabase session progress
                 if (queue.sessionId) {
-                    api.updateAutomationSession(queue.sessionId, {
-                        processedCount: queue.currentIndex + 1,
-                        successCount: queue.successCount,
-                        failedCount: queue.failedCount
-                    });
+                    try {
+                        await api.updateAutomationSession(queue.sessionId, {
+                            processedCount: queue.currentIndex + 1,
+                            successCount: queue.successCount,
+                            failedCount: queue.failedCount
+                        });
+                    } catch (err) {
+                        console.error('Failed to update automation session:', err);
+                    }
                 }
 
                 // Show toast and move to next
@@ -989,11 +1073,24 @@ async function initRateLimiter() {
     }
 }
 
-async function canSendDM() {
+async function canSendDM(accountId = null) {
+    // If we have an accountId, check the backend (source of truth for per-account limits)
+    if (accountId) {
+        try {
+            const result = await api.canAccountSend(accountId);
+            if (result && !result.allowed) {
+                return { allowed: false, reason: result.reason || 'Account daily limit reached' };
+            }
+            if (result && result.allowed) return { allowed: true };
+        } catch (err) {
+            console.warn('Backend limit check failed, using local fallback:', err.message);
+        }
+    }
+
+    // Local fallback (global counter)
     const settings = await chrome.storage.local.get(['dailyLimit']);
     const dailyLimit = settings.dailyLimit || 50;
 
-    // Check daily limit
     if (rateLimitState.dailyCount >= dailyLimit) {
         return { allowed: false, reason: `Daily limit of ${dailyLimit} DMs reached` };
     }
@@ -1001,7 +1098,7 @@ async function canSendDM() {
     return { allowed: true };
 }
 
-async function recordDMSent() {
+async function recordDMSent(accountId = null) {
     rateLimitState.dailyCount++;
     rateLimitState.lastActionTime = Date.now();
     await chrome.storage.local.set({ rateLimitState });
@@ -1050,6 +1147,9 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
 
     if (command === 'stop-automation') {
+        // Cancel all pending timeouts for this tab
+        clearAllTimeouts(tab.id);
+
         if (activeTasks[tab.id]) delete activeTasks[tab.id];
         if (subredditQueues[tab.id]) {
             const queue = subredditQueues[tab.id];
@@ -1064,6 +1164,10 @@ chrome.commands.onCommand.addListener(async (command) => {
             queue.isActive = false;
             delete subredditQueues[tab.id];
         }
+
+        // Reset queue processing flags so polling isn't stuck
+        replyQueueProcessing = false;
+        outreachQueueProcessing = false;
 
         chrome.tabs.sendMessage(tab.id, {
             action: 'AUTOMATION_STOPPED'
@@ -1112,6 +1216,73 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'GET_TEAMS') {
         chrome.storage.local.get(['teams', 'teamId'])
             .then(data => sendResponse({ teams: data.teams || [], currentTeamId: data.teamId || null }));
+        return true;
+    }
+
+    // --- Dashboard Auth Sync Handlers ---
+
+    if (request.action === 'DASHBOARD_AUTH_SYNC') {
+        const p = request.payload;
+        if (!p || !p.accessToken) {
+            sendResponse({ success: false, error: 'Missing auth data' });
+            return true;
+        }
+        const authData = {
+            accessToken: p.accessToken,
+            refreshToken: p.refreshToken,
+            expiresAt: p.expiresAt,
+            teamId: p.teamId || null,
+            teams: p.teams || [],
+            userEmail: p.userEmail || '',
+            userName: p.userName || ''
+        };
+        chrome.storage.local.set(authData).then(() => {
+            api.resetApiConfig();
+            startReplyQueuePolling();
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+
+    if (request.action === 'DASHBOARD_LOGOUT_SYNC') {
+        stopReplyQueuePolling();
+        chrome.storage.local.remove([
+            'accessToken', 'refreshToken', 'expiresAt',
+            'teamId', 'teams', 'userEmail', 'userName'
+        ]).then(() => {
+            api.resetApiConfig();
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+
+    if (request.action === 'DASHBOARD_TEAM_SWITCH') {
+        const newTeamId = request.payload?.teamId;
+        if (!newTeamId) {
+            sendResponse({ success: false, error: 'No teamId' });
+            return true;
+        }
+        chrome.storage.local.set({ teamId: newTeamId }).then(() => {
+            api.resetApiConfig();
+            sendResponse({ success: true, teamId: newTeamId });
+        });
+        return true;
+    }
+
+    if (request.action === 'DASHBOARD_TOKEN_REFRESH') {
+        const p = request.payload;
+        if (!p || !p.accessToken) {
+            sendResponse({ success: false, error: 'Missing token data' });
+            return true;
+        }
+        chrome.storage.local.set({
+            accessToken: p.accessToken,
+            refreshToken: p.refreshToken,
+            expiresAt: p.expiresAt
+        }).then(() => {
+            api.resetApiConfig();
+            sendResponse({ success: true });
+        });
         return true;
     }
 
@@ -1223,6 +1394,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // Outreach Queue Management (triggered from dashboard via bridge)
+    if (request.action === 'START_OUTREACH_QUEUE_POLLING') {
+        startOutreachQueuePolling();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (request.action === 'STOP_OUTREACH_QUEUE_POLLING') {
+        stopOutreachQueuePolling();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (request.action === 'GET_OUTREACH_QUEUE_STATUS') {
+        chrome.alarms.get(OUTREACH_QUEUE_ALARM_NAME).then(alarm => {
+            sendResponse({
+                isPolling: !!alarm,
+                isProcessing: outreachQueueProcessing
+            });
+        });
+        return true;
+    }
+
     if (request.action === 'CAPTURE_REDDIT_COOKIES') {
         // Capture current browser Reddit cookies + detect logged-in username
         cookies.captureCurrentCookies().then(result => {
@@ -1278,6 +1472,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         return;
     }
 
+    // Check if daily limit allows sending
+    const limitCheck = await canSendDM();
+    if (!limitCheck.allowed) {
+        console.log('Reply queue: daily limit reached, skipping poll');
+        return;
+    }
+
     try {
         const nextReply = await api.getNextReplyToSend();
 
@@ -1308,12 +1509,17 @@ async function startReplyQueuePolling() {
 
     // Also do an immediate check (alarm delay is not instant)
     try {
-        const nextReply = await api.getNextReplyToSend();
-        if (nextReply) {
-            console.log('Found approved reply to send (immediate):', nextReply.id);
-            replyQueueProcessing = true;
-            await processReplyQueueItem(nextReply);
-            replyQueueProcessing = false;
+        const limitCheck = await canSendDM();
+        if (limitCheck.allowed) {
+            const nextReply = await api.getNextReplyToSend();
+            if (nextReply) {
+                console.log('Found approved reply to send (immediate):', nextReply.id);
+                replyQueueProcessing = true;
+                await processReplyQueueItem(nextReply);
+                replyQueueProcessing = false;
+            }
+        } else {
+            console.log('Reply queue: daily limit reached at startup');
         }
     } catch (err) {
         console.error('Reply queue immediate check error:', err);
@@ -1424,6 +1630,194 @@ async function processReplyQueueItem(item) {
 
     // The existing automation flow will handle clicking chat and typing the message
     // When complete, handleStepCompletion will mark the queue item as sent
+}
+
+// =============================================================================
+// OUTREACH QUEUE PROCESSING (dashboard-triggered, alarm-based like reply queue)
+// =============================================================================
+
+const OUTREACH_QUEUE_ALARM_NAME = 'outreach-queue-poll';
+const OUTREACH_QUEUE_POLL_INTERVAL_MINUTES = 0.5; // 30 seconds
+let outreachQueueProcessing = false;
+let lastOutreachSendTime = 0;
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== OUTREACH_QUEUE_ALARM_NAME) return;
+
+    if (outreachQueueProcessing) {
+        console.log('Outreach queue: already processing, skipping poll');
+        return;
+    }
+
+    // Rate limit: respect delay between DMs
+    const now = Date.now();
+    const minDelay = 20000; // 20s minimum between sends
+    if (lastOutreachSendTime && (now - lastOutreachSendTime) < minDelay) {
+        return;
+    }
+
+    const authed = await api.isAuthenticated();
+    if (!authed) {
+        console.log('Outreach queue: not authenticated, stopping polling');
+        stopOutreachQueuePolling();
+        return;
+    }
+
+    // Check if daily limit allows sending
+    const limitCheck = await canSendDM();
+    if (!limitCheck.allowed) {
+        console.log('Outreach queue: daily limit reached, stopping');
+        stopOutreachQueuePolling();
+        return;
+    }
+
+    try {
+        const nextItem = await api.getNextQueueItem(null, 'outreach');
+        if (nextItem) {
+            console.log('Found approved outreach item to send:', nextItem.id);
+            outreachQueueProcessing = true;
+            await processOutreachQueueItem(nextItem);
+            lastOutreachSendTime = Date.now();
+            outreachQueueProcessing = false;
+        } else {
+            // No more items - stop polling
+            console.log('Outreach queue: no more approved items, stopping');
+            stopOutreachQueuePolling();
+        }
+    } catch (err) {
+        console.error('Outreach queue poll error:', err);
+        outreachQueueProcessing = false;
+    }
+});
+
+async function startOutreachQueuePolling() {
+    const existing = await chrome.alarms.get(OUTREACH_QUEUE_ALARM_NAME);
+    if (existing) {
+        console.log('Outreach queue polling already active');
+        return;
+    }
+
+    console.log('Starting outreach queue polling (chrome.alarms)...');
+    chrome.alarms.create(OUTREACH_QUEUE_ALARM_NAME, {
+        delayInMinutes: 0.08,
+        periodInMinutes: OUTREACH_QUEUE_POLL_INTERVAL_MINUTES
+    });
+
+    // Immediate check
+    try {
+        const limitCheck = await canSendDM();
+        if (limitCheck.allowed) {
+            const nextItem = await api.getNextQueueItem(null, 'outreach');
+            if (nextItem) {
+                console.log('Found approved outreach item (immediate):', nextItem.id);
+                outreachQueueProcessing = true;
+                await processOutreachQueueItem(nextItem);
+                lastOutreachSendTime = Date.now();
+                outreachQueueProcessing = false;
+            }
+        } else {
+            console.log('Outreach queue: daily limit reached at startup');
+        }
+    } catch (err) {
+        console.error('Outreach queue immediate check error:', err);
+    }
+}
+
+async function stopOutreachQueuePolling() {
+    console.log('Stopping outreach queue polling...');
+    await chrome.alarms.clear(OUTREACH_QUEUE_ALARM_NAME);
+}
+
+async function processOutreachQueueItem(item) {
+    console.log(`Processing outreach queue item: ${item.id} to u/${item.recipientUsername}`);
+
+    // Account mismatch check
+    const detected = await cookies.detectCurrentAccount(true);
+    if (item.accountId && detected.accountId && item.accountId !== detected.accountId) {
+        const check = await cookies.checkAccountMatch(item.accountId);
+        console.warn('Outreach queue account mismatch:', check.reason);
+
+        chrome.notifications.create(`account-mismatch-outreach-${item.id}`, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icons/icon.svg'),
+            title: 'Outreach skipped — wrong account',
+            message: `DM to u/${item.recipientUsername} needs u/${check.expectedUsername || '???'} but you're logged in as u/${detected.username}. Switch accounts on Reddit.`
+        });
+
+        const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+        if (tabs[0]?.id) {
+            chrome.tabs.sendMessage(tabs[0].id, {
+                action: 'SHOW_TOAST',
+                message: `Outreach to u/${item.recipientUsername} skipped — log in as u/${check.expectedUsername || '???'} to send.`,
+                type: 'warning'
+            }).catch(() => {});
+        }
+        return;
+    }
+
+    // Find or create a Reddit tab
+    const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+    let tabId = tabs[0]?.id;
+
+    if (!tabId) {
+        console.log('No Reddit tab found - creating one for outreach automation');
+        const newTab = await chrome.tabs.create({
+            url: `https://www.reddit.com/user/${item.recipientUsername}/`,
+            active: false
+        });
+        tabId = newTab.id;
+
+        // Wait for tab to load
+        await new Promise((resolve) => {
+            const listener = (updatedTabId, changeInfo) => {
+                if (updatedTabId === tabId && changeInfo.status === 'complete') {
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    resolve();
+                }
+            };
+            chrome.tabs.onUpdated.addListener(listener);
+            setTimeout(() => {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+            }, 15000);
+        });
+
+        activeTasks[tabId] = {
+            status: AutomationState.WAITING_FOR_PROFILE,
+            data: {
+                targetUser: item.recipientUsername,
+                message: item.finalMessage,
+                queueItemId: item.id,
+                conversationId: null,
+                accountId: item.accountId || detected.accountId || null,
+                isReply: false
+            },
+            retries: 0
+        };
+
+        processNextStep(tabId);
+        return;
+    }
+
+    // Use existing Reddit tab
+    activeTasks[tabId] = {
+        status: AutomationState.NAVIGATING_PROFILE,
+        data: {
+            targetUser: item.recipientUsername,
+            message: item.finalMessage,
+            queueItemId: item.id,
+            conversationId: null,
+            accountId: item.accountId || detected.accountId || null,
+            isReply: false
+        },
+        retries: 0
+    };
+
+    notifyAutomationProgress(tabId);
+
+    const profileUrl = `https://www.reddit.com/user/${item.recipientUsername}/`;
+    await chrome.tabs.update(tabId, { url: profileUrl });
+    activeTasks[tabId].status = AutomationState.WAITING_FOR_PROFILE;
 }
 
 // =============================================================================

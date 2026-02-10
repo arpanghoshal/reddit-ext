@@ -8,6 +8,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadConfig();
     await checkAuthState();
     initEventListeners();
+
+    // Auto-update popup if auth changes via dashboard sync
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes.accessToken) {
+            if (changes.accessToken.newValue) {
+                checkAuthState();
+            } else {
+                showLoginSection();
+            }
+        }
+    });
 });
 
 async function loadConfig() {
@@ -142,6 +153,12 @@ function initEventListeners() {
     // Set OS-specific shortcut hint
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     document.getElementById('shortcut-hint').textContent = isMac ? '(Alt+R)' : '(Ctrl+Shift+R)';
+
+    // Login via Dashboard
+    document.getElementById('login-via-dashboard').addEventListener('click', () => {
+        chrome.tabs.create({ url: DEFAULT_DASHBOARD_URL + '/login' });
+        window.close();
+    });
 
     // Login form
     document.getElementById('login-form').addEventListener('submit', async (e) => {
