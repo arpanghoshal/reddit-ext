@@ -48,6 +48,14 @@ function ConversationList({ conversations, selected, onSelect }) {
               </span>
             )}
           </div>
+          {conv.sourceSubreddit && (
+            <p className="text-xs text-gray-500 mt-1 truncate">
+              r/{conv.sourceSubreddit}
+              {conv.sourcePostTitle && (
+                <span className="text-gray-400"> &middot; {conv.sourcePostTitle}</span>
+              )}
+            </p>
+          )}
           {conv.lastMessageAt && (
             <p className="text-xs text-gray-400 mt-1">
               Last: {new Date(conv.lastMessageAt).toLocaleDateString()}
@@ -230,6 +238,26 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
                 ))}
               </select>
             </div>
+            {conversation.sourceSubreddit && (
+              <div className="flex items-center gap-1.5 mt-1 text-sm text-gray-500">
+                <span className="font-medium text-orange-600">r/{conversation.sourceSubreddit}</span>
+                {conversation.sourcePostTitle && (
+                  conversation.sourcePostUrl ? (
+                    <a
+                      href={conversation.sourcePostUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline truncate max-w-md"
+                      title={conversation.sourcePostTitle}
+                    >
+                      {conversation.sourcePostTitle}
+                    </a>
+                  ) : (
+                    <span className="text-gray-400 truncate max-w-md">{conversation.sourcePostTitle}</span>
+                  )
+                )}
+              </div>
+            )}
           </div>
           <select
             value={conversation.status}

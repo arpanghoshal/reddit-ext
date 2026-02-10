@@ -1,13 +1,24 @@
-import { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
 const AuthContext = createContext({});
 
 export const useAuth = () => useContext(AuthContext);
 
+// Post auth events to window so the Chrome extension's content script
+// (dashboard_auth_bridge.js) can pick them up and sync to chrome.storage.
+function broadcastToExtension(action, payload = null) {
+  try {
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action, payload }, window.location.origin);
+  } catch (e) {
+    // Silently fail if postMessage is unavailable
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
+  const sessionRef = useRef(null);
   const [teams, setTeams] = useState([]);
   const [currentTeam, setCurrentTeam] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -30,13 +41,23 @@ export function AuthProvider({ children }) {
       if (!mounted) return;
 
       setSession(session);
+      sessionRef.current = session;
       setUser(session?.user ?? null);
+
+      if (event === 'TOKEN_REFRESHED' && session) {
+        broadcastToExtension('TOKEN_REFRESH', {
+          accessToken: session.access_token,
+          refreshToken: session.refresh_token,
+          expiresAt: session.expires_at,
+        });
+      }
 
       if (session?.user) {
         await fetchUserTeams(session.user.id);
       } else {
         setTeams([]);
         setCurrentTeam(null);
+        broadcastToExtension('LOGOUT');
         setLoading(false);
       }
     });
@@ -45,6 +66,7 @@ export function AuthProvider({ children }) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
       setSession(session);
+      sessionRef.current = session;
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchUserTeams(session.user.id);
@@ -61,6 +83,28 @@ export function AuthProvider({ children }) {
       subscription.unsubscribe();
     };
   }, []);
+
+  // When the extension content script loads (or reloads), it posts RDM_BRIDGE_READY.
+  // Respond by re-broadcasting the current auth state so the extension picks it up.
+  useEffect(() => {
+    const handleBridgeReady = (event) => {
+      if (event.data?.type !== 'RDM_BRIDGE_READY') return;
+      const s = sessionRef.current;
+      if (s && currentTeam) {
+        broadcastToExtension('SESSION_RESTORE', {
+          accessToken: s.access_token,
+          refreshToken: s.refresh_token,
+          expiresAt: s.expires_at,
+          teamId: currentTeam.id,
+          teams: teams.map(t => ({ id: t.id, name: t.name, is_personal: t.isPersonal })),
+          userEmail: s.user?.email || '',
+          userName: s.user?.user_metadata?.full_name || '',
+        });
+      }
+    };
+    window.addEventListener('message', handleBridgeReady);
+    return () => window.removeEventListener('message', handleBridgeReady);
+  }, [currentTeam, teams]);
 
   const fetchUserTeams = async (userId, preferredTeamId = null) => {
     try {
@@ -105,6 +149,20 @@ export function AuthProvider({ children }) {
       if (selectedTeam) {
         localStorage.setItem('currentTeamId', selectedTeam.id);
       }
+
+      // Broadcast auth state to Chrome extension
+      const s = sessionRef.current;
+      if (s) {
+        broadcastToExtension('SESSION_RESTORE', {
+          accessToken: s.access_token,
+          refreshToken: s.refresh_token,
+          expiresAt: s.expires_at,
+          teamId: selectedTeam?.id || null,
+          teams: teamList.map(t => ({ id: t.id, name: t.name, is_personal: t.isPersonal })),
+          userEmail: s.user?.email || '',
+          userName: s.user?.user_metadata?.full_name || '',
+        });
+      }
     } catch (error) {
       console.error('Error fetching teams:', error);
     } finally {
@@ -117,6 +175,7 @@ export function AuthProvider({ children }) {
     if (team) {
       setCurrentTeam(team);
       localStorage.setItem('currentTeamId', teamId);
+      broadcastToExtension('TEAM_SWITCH', { teamId });
     }
   }, [teams]);
 
@@ -145,6 +204,7 @@ export function AuthProvider({ children }) {
 
     // Set state directly to avoid race condition with onAuthStateChange
     setSession(data.session);
+    sessionRef.current = data.session;
     setUser(data.user);
     if (data.user) {
       await fetchUserTeams(data.user.id);
@@ -159,9 +219,11 @@ export function AuthProvider({ children }) {
 
     setUser(null);
     setSession(null);
+    sessionRef.current = null;
     setTeams([]);
     setCurrentTeam(null);
     localStorage.removeItem('currentTeamId');
+    broadcastToExtension('LOGOUT');
   }, []);
 
   const getAccessToken = useCallback(() => {

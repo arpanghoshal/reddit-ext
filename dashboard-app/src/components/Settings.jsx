@@ -118,7 +118,7 @@ export default function Settings({ isOpen, onClose, onAuthChange }) {
                                 {status.server && (
                                     <div className="text-xs text-[#818384] ml-6">
                                         Database: {status.server.supabaseConfigured ? '✓' : '✗'} |
-                                        LLM: {status.server.openrouterConfigured ? '✓' : '✗'}
+                                        LLM: {status.server.geminiConfigured ? '✓' : '✗'}
                                     </div>
                                 )}
                                 {status.user && (
@@ -148,7 +148,7 @@ export default function Settings({ isOpen, onClose, onAuthChange }) {
                             className="w-full px-3 py-2 bg-[#272729] border border-[#343536] rounded-lg text-[#d7dadc] placeholder-[#818384] focus:outline-none focus:border-[#ff4500]"
                         />
                         <p className="text-xs text-[#818384] mt-1">
-                            Available keys: rig-dev-local-testing-key, rig-demo-key-try-it-out-2024
+                            Enter your API key to connect
                         </p>
                     </div>
 

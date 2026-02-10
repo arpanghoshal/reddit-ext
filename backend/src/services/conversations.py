@@ -38,6 +38,12 @@ def transform_conversation(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
         return None
 
     account = row.get("reddit_accounts")
+
+    # Extract source post from whichever join returned data
+    dm_hist = row.get("dm_history")
+    dm_q = row.get("dm_queue")
+    source = dm_hist or dm_q
+
     return {
         "id": row.get("id"),
         "redditConversationId": row.get("reddit_conversation_id"),
@@ -55,7 +61,10 @@ def transform_conversation(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
         "notes": row.get("notes"),
         "tags": row.get("tags"),
         "createdAt": row.get("created_at"),
-        "updatedAt": row.get("updated_at")
+        "updatedAt": row.get("updated_at"),
+        "sourcePostUrl": source.get("post_url") if source else None,
+        "sourcePostTitle": source.get("post_title") if source else None,
+        "sourceSubreddit": source.get("subreddit") if source else None,
     }
 
 
@@ -78,11 +87,16 @@ def transform_message(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]
 def create_message_fingerprint(content: str, direction: str, sent_at: str = None) -> str:
     """
     Create unique fingerprint for message deduplication.
-    Uses content + direction only (no timestamp) since frontend timestamps are unreliable.
-    This means the same exact message can only appear once per conversation.
+    Uses content + direction + minute-level timestamp bucket (when available).
+    This allows the same message text to appear again if sent >1 minute apart,
+    while still deduplicating concurrent identical requests within the same minute.
     """
     normalized_content = " ".join((content or "").lower().strip().split())
     composite = f"{normalized_content}|{direction}"
+    if sent_at:
+        # Truncate to minute for dedup window (first 16 chars of ISO: "2026-02-10T14:30")
+        minute_bucket = sent_at[:16]
+        composite += f"|{minute_bucket}"
     return hashlib.sha256(composite.encode('utf-8')).hexdigest()[:16]
 
 
@@ -130,7 +144,11 @@ async def get_conversations(filters: Dict[str, Any] = None, team_id: Optional[st
     filters = filters or {}
 
     try:
-        query = client.table("conversations").select("*, reddit_accounts(id, username, status)").order("last_message_at", desc=True)
+        query = client.table("conversations").select(
+            "*, reddit_accounts(id, username, status), "
+            "dm_history!initial_dm_id(post_url, post_title, subreddit), "
+            "dm_queue!initial_queue_id(post_url, post_title, subreddit)"
+        ).order("last_message_at", desc=True)
 
         # Filter by team_id (required for multi-tenancy)
         if team_id:
@@ -175,7 +193,11 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
 
     try:
         # Get conversation
-        conv_query = client.table("conversations").select("*, reddit_accounts(id, username, status)").eq("id", conversation_id)
+        conv_query = client.table("conversations").select(
+            "*, reddit_accounts(id, username, status), "
+            "dm_history!initial_dm_id(post_url, post_title, subreddit), "
+            "dm_queue!initial_queue_id(post_url, post_title, subreddit)"
+        ).eq("id", conversation_id)
         if team_id:
             conv_query = conv_query.eq("team_id", team_id)
         conv_result = conv_query.execute()
@@ -188,7 +210,10 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
         # Fetch messages
         msg_query = client.table("messages").select("*").eq(
             "conversation_id", conversation_id
-        ).order("sent_at")
+        )
+        if team_id:
+            msg_query = msg_query.eq("team_id", team_id)
+        msg_query = msg_query.order("sent_at")
         msg_result = msg_query.execute()
 
         messages = [transform_message(row) for row in msg_result.data] if msg_result.data else []
@@ -276,8 +301,17 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
         content = message_data.get("content", "")
         sent_at = message_data.get("sentAt") or datetime.utcnow().isoformat()
 
+        # Verify conversation belongs to this team
+        if team_id and conversation_id:
+            ownership_check = client.table("conversations").select("id").eq(
+                "id", conversation_id
+            ).eq("team_id", team_id).limit(1).execute()
+            if not ownership_check.data:
+                print(f"Conversation {conversation_id} not found for team {team_id}")
+                return None
+
         # Compute fingerprint for deduplication
-        fingerprint = create_message_fingerprint(content, direction)
+        fingerprint = create_message_fingerprint(content, direction, sent_at)
 
         insert_data = {
             "conversation_id": conversation_id,
@@ -340,7 +374,10 @@ async def get_messages(conversation_id: str, options: Dict[str, Any] = None, tea
         ascending = options.get("ascending", True)
         query = client.table("messages").select("*").eq(
             "conversation_id", conversation_id
-        ).order("sent_at", desc=not ascending)
+        )
+        if team_id:
+            query = query.eq("team_id", team_id)
+        query = query.order("sent_at", desc=not ascending)
 
         if options.get("limit"):
             query = query.limit(options["limit"])
