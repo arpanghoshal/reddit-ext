@@ -588,7 +588,14 @@ Insight Types: {', '.join(settings.get('insightTypes', []))}"""
             last_error = e
             logger.warning(f"generate_search_strategy attempt {attempt}/{MAX_STRATEGY_RETRIES} failed: {e}")
             if attempt < MAX_STRATEGY_RETRIES:
-                await asyncio.sleep(1)
+                # Back off longer for rate limit errors (429)
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    delay = 8 * attempt  # 8s, 16s, 24s
+                    logger.info(f"Rate limited, waiting {delay}s before retry")
+                    await asyncio.sleep(delay)
+                else:
+                    await asyncio.sleep(1)
 
     logger.error(f"Failed to generate search strategy after {MAX_STRATEGY_RETRIES} attempts: {last_error}")
     raise ValueError("Failed to generate search strategy")

@@ -4,6 +4,7 @@ Shared async client for Google Gemini API calls
 """
 
 import os
+import asyncio
 import logging
 from typing import Optional
 from google import genai
@@ -11,7 +12,8 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3-flash-preview"
+MAX_RETRIES = 3
 
 _client: Optional[genai.Client] = None
 
@@ -37,6 +39,7 @@ async def generate_content(
 ) -> str:
     """
     Generate content using Gemini async API.
+    Automatically retries on 429 rate limit errors with exponential backoff.
 
     Args:
         system_instruction: System prompt/instructions
@@ -58,13 +61,25 @@ async def generate_content(
         response_mime_type=response_mime_type,
     )
 
-    response = await client.aio.models.generate_content(
-        model=model,
-        contents=user_prompt,
-        config=config,
-    )
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=config,
+            )
 
-    if not response.text:
-        raise ValueError("Empty response from Gemini API")
+            if not response.text:
+                raise ValueError("Empty response from Gemini API")
 
-    return response.text.strip()
+            return response.text.strip()
+
+        except Exception as e:
+            err_str = str(e)
+            is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            if is_rate_limit and attempt < MAX_RETRIES:
+                delay = 8 * attempt  # 8s, 16s
+                logger.warning(f"Gemini rate limited (attempt {attempt}), retrying in {delay}s")
+                await asyncio.sleep(delay)
+            else:
+                raise
