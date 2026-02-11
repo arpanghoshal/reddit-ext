@@ -16,16 +16,11 @@ from supabase import create_client, Client
 
 from . import reddit_search
 from . import classification as classification_service
-from . import qualification as qualification_service
-from . import lead_scoring
 from . import llm as llm_service
 from . import gemini_client
 
 logger = logging.getLogger(__name__)
 
-MAX_POSTS_PER_SUBREDDIT = 25
-MAX_SUBREDDITS = 15
-MAX_COMMENT_MINING_POSTS = 15
 MAX_LEADS = 50
 
 _supabase: Optional[Client] = None
@@ -427,25 +422,25 @@ async def bulk_queue_leads(
 # ============================================================================
 
 STRATEGY_SYSTEM_PROMPT = """You are an expert at finding potential customers on Reddit.
-Given a business description and target persona, generate search strategies to find
-people discussing problems this business solves.
+Given a business description and target persona, generate exactly 5 diverse Reddit search
+queries that would find posts from people who need this product/service.
 
 RESPOND IN VALID JSON FORMAT ONLY (no markdown, no explanation):
 {
-    "keywords": ["keyword1", "keyword2", ...],
-    "pain_phrases": ["struggling with X", "need help with Y", ...],
-    "intent_queries": ["best tool for X", "looking for alternative to Y", ...],
-    "suggested_subreddits": ["subreddit1", "subreddit2", ...]
+    "queries": ["query 1", "query 2", "query 3", "query 4", "query 5"]
 }
 
 GUIDELINES:
-- keywords: 5-10 specific search terms (product categories, problem names, tool names)
-- pain_phrases: 5-8 natural language phrases people use when describing the problem
-- intent_queries: 3-5 buying-intent search queries (comparing, looking for, best)
-- suggested_subreddits: 5-15 subreddits where the target audience hangs out (names only, no r/ prefix)
-- Think about adjacent/related problems, not just direct matches
-- Include both technical and non-technical language variants
-- Consider competitor names as keywords"""
+- Generate exactly 5 search queries optimized for Reddit's search engine
+- Each query should be 3-8 words — specific enough to find relevant posts
+- Query 1: core problem/need (e.g. "best electric scooter commute")
+- Query 2: pain points or frustrations (e.g. "frustrated with X alternative needed")
+- Query 3: buying intent or recommendations (e.g. "looking for alternative to X")
+- Query 4: competitor comparison or adjacent problem (e.g. "X vs Y recommendation")
+- Query 5: different angle — use case, industry term, or niche phrasing (e.g. "how to solve Y for small business")
+- Make each query distinct — cover different angles, synonyms, and phrasings
+- Think about what real people would actually type when looking for help
+- Do NOT include subreddit names in queries — the search covers all of Reddit"""
 
 MAX_STRATEGY_RETRIES = 2
 
@@ -512,11 +507,11 @@ Insight Types: {', '.join(settings.get('insightTypes', []))}"""
                 logger.warning(f"Strategy JSON parse failed (attempt {attempt}), trying repair")
                 strategy = json.loads(_repair_json(json_str))
 
-            # Validate structure
-            strategy.setdefault("keywords", [])
-            strategy.setdefault("pain_phrases", [])
-            strategy.setdefault("intent_queries", [])
-            strategy.setdefault("suggested_subreddits", [])
+            # Validate structure — new format has "queries" list
+            strategy.setdefault("queries", [])
+            # Backward compat: if old format returned, build queries from keywords
+            if not strategy["queries"] and strategy.get("keywords"):
+                strategy["queries"] = strategy["keywords"][:5]
 
             # Store strategy in session
             await update_session(session_id, {"search_strategy": strategy})
@@ -616,44 +611,19 @@ async def check_already_contacted(author_username: str, team_id: str) -> bool:
 
 
 # ============================================================================
-# Pre-filter Helpers
-# ============================================================================
-
-def _post_matches_keywords(post: Dict[str, Any], keywords: List[str], min_matches: int = 1) -> bool:
-    """
-    Lightweight keyword pre-filter. Returns True if the post title+body
-    contains at least `min_matches` keywords (case-insensitive).
-    Avoids sending obviously irrelevant posts to the expensive LLM classifier.
-    """
-    if not keywords:
-        return True
-
-    text = (post.get("title", "") + " " + post.get("body", "")).lower()
-    if not text.strip():
-        return False
-
-    match_count = 0
-    for kw in keywords:
-        if kw.lower() in text:
-            match_count += 1
-            if match_count >= min_matches:
-                return True
-    return False
-
-
-# ============================================================================
 # Main Discovery Pipeline
 # ============================================================================
 
 async def run_discovery_pipeline(session_id: str):
     """
     Main orchestrator. Runs as a background task.
-    1. Generate search strategy
-    2. Discover subreddits
-    3. Search posts in each subreddit
-    4. Score each post (classify + qualify + lead score)
-    5. Mine comments from top posts
-    6. Mark already-contacted leads
+    Optimized for minimal API calls:
+      - 1 Gemini call: search strategy (5 queries)
+      - 5 ScrapeCreators calls: global Reddit search
+      - 1-3 Gemini calls: batch classification
+      - 1-2 ScrapeCreators calls: comment mining on top posts
+      - 1 Gemini call: batch comment lead analysis
+    Total: ~7 ScrapeCreators + 3-5 Gemini calls
     """
     try:
         # Load session
@@ -680,241 +650,213 @@ async def run_discovery_pipeline(session_id: str):
         is_automation = session.get("mode") == "automation"
         target_subs = session.get("target_subreddits") or []
 
-        # ---- Phase 1: Generate search strategy ----
+        # ---- Phase 1: Generate search strategy (1 Gemini call) ----
         await update_session(session_id, {
             "status": "searching",
             "started_at": datetime.utcnow().isoformat(),
         })
 
-        if is_automation and target_subs:
-            # Automation mode: generate keywords for search, but use provided subreddits
-            strategy = await generate_search_strategy(session_id, settings)
-            keywords = strategy.get("keywords", [])
-            pain_phrases = strategy.get("pain_phrases", [])
-            intent_queries = strategy.get("intent_queries", [])
-            suggested_subreddits = []  # Skip AI subreddit suggestions
-        else:
-            strategy = await generate_search_strategy(session_id, settings)
-            keywords = strategy.get("keywords", [])
-            pain_phrases = strategy.get("pain_phrases", [])
-            intent_queries = strategy.get("intent_queries", [])
-            suggested_subreddits = strategy.get("suggested_subreddits", [])
+        strategy = await generate_search_strategy(session_id, settings)
+        search_queries = strategy.get("queries", [])[:5]
 
-        all_queries = keywords + pain_phrases[:3] + intent_queries[:2]
-        total_queries = len(all_queries) * max(len(suggested_subreddits), 1)
-        await update_session(session_id, {"total_queries_planned": total_queries})
+        if not search_queries:
+            logger.error(f"No search queries generated for session {session_id}")
+            await update_session(session_id, {"status": "failed"})
+            return
 
-        # ---- Phase 2: Discover subreddits ----
-        subreddit_names = set()
+        await update_session(session_id, {
+            "total_queries_planned": len(search_queries),
+        })
 
-        if is_automation and target_subs:
-            # Automation mode: use explicitly provided subreddits
-            for sr in target_subs[:MAX_SUBREDDITS]:
-                sr_name = sr.strip().replace("r/", "")
-                if sr_name:
-                    subreddit_names.add(sr_name)
-        else:
-            # Discovery mode: AI-suggested + keyword search
-            for sr in suggested_subreddits[:MAX_SUBREDDITS]:
-                sr_name = sr.strip().replace("r/", "")
-                if sr_name:
-                    subreddit_names.add(sr_name)
-
-            for keyword in keywords[:3]:
-                try:
-                    results = await reddit_search.search_subreddits(keyword, limit=5)
-                    for sr in results:
-                        name = sr.get("name", "")
-                        if name and not sr.get("over18", False):
-                            subreddit_names.add(name)
-                except Exception as e:
-                    logger.warning(f"Subreddit search failed for '{keyword}': {e}")
-
-        # Limit total subreddits
-        subreddit_names = list(subreddit_names)[:MAX_SUBREDDITS]
-
-        # Store subreddits with metadata (info fetch may fail due to Reddit 403)
-        subreddit_records = {}
-        for sr_name in subreddit_names:
-            info = await reddit_search.get_subreddit_info(sr_name)
-            # Store even if info is missing — the subreddit is still searchable via ScrapeCreators
-            record = await store_subreddit(
-                session_id, team_id, sr_name, info or {"subscribers": 0, "description": ""},
-                relevance_reason=f"Matches business context: {settings.get('businessDesc', '')[:100]}"
-            )
-            if record:
-                subreddit_records[sr_name] = record
-
-        # ---- Phase 3: Search posts ----
+        # ---- Phase 2+3: Search posts (2-3 ScrapeCreators calls) ----
         await update_session(session_id, {"status": "scoring"})
 
-        all_posts = []  # (normalized_post, subreddit_record_id)
+        all_posts = []  # list of normalized_post dicts
         seen_urls = set()
-        queries_done = 0
+        seen_authors = set()
 
-        # Only search subreddits that were validated (info fetch succeeded)
-        valid_subreddit_names = [sr for sr in subreddit_names if sr in subreddit_records]
-        if len(valid_subreddit_names) < len(subreddit_names):
-            skipped = len(subreddit_names) - len(valid_subreddit_names)
-            logger.info(f"Skipping {skipped} invalid subreddits (info fetch failed)")
-
-        for sr_name in valid_subreddit_names:
-            sr_record = subreddit_records[sr_name]
-            sr_record_id = sr_record["id"]
-
-            # Search with keywords and pain phrases
-            for query in all_queries:
+        if is_automation and target_subs:
+            # Automation mode: search within specific subreddits
+            for sr_name in target_subs[:2]:
+                sr_name = sr_name.strip().replace("r/", "")
+                if not sr_name:
+                    continue
+                for query in search_queries[:3]:
+                    try:
+                        posts = await reddit_search.search_subreddit_posts(
+                            subreddit=sr_name, query=query,
+                            sort="relevance", timeframe="week",
+                        )
+                        for post in posts:
+                            try:
+                                normalized = reddit_search.normalize_post(post)
+                                url = normalized["url"]
+                                author = normalized.get("author", "")
+                                if (url and url not in seen_urls
+                                        and author and author != "[deleted]"
+                                        and author.lower() not in seen_authors):
+                                    seen_urls.add(url)
+                                    seen_authors.add(author.lower())
+                                    all_posts.append(normalized)
+                            except Exception as e:
+                                logger.warning(f"Failed to normalize post: {e}")
+                    except Exception as e:
+                        logger.warning(f"Search failed for r/{sr_name} '{query}': {e}")
+        else:
+            # Discovery mode: global Reddit search with LLM-generated queries
+            for query in search_queries:
                 try:
-                    posts = await reddit_search.search_subreddit_posts(
-                        subreddit=sr_name,
-                        query=query,
-                        sort="relevance",
-                        timeframe="week",
-                    )
+                    posts = await reddit_search.search_posts(query, sort="relevance")
                     for post in posts:
                         try:
                             normalized = reddit_search.normalize_post(post)
                             url = normalized["url"]
-                            if url and url not in seen_urls and normalized["author"] and normalized["author"] != "[deleted]":
+                            author = normalized.get("author", "")
+                            if (url and url not in seen_urls
+                                    and author and author != "[deleted]"
+                                    and author.lower() not in seen_authors):
                                 seen_urls.add(url)
-                                all_posts.append((normalized, sr_record_id))
+                                seen_authors.add(author.lower())
+                                all_posts.append(normalized)
                         except Exception as e:
-                            logger.warning(f"Failed to normalize post in r/{sr_name}: {e}")
+                            logger.warning(f"Failed to normalize post: {e}")
                 except Exception as e:
-                    logger.warning(f"Post search failed for r/{sr_name} query '{query}': {e}")
+                    logger.warning(f"Global search failed for '{query}': {e}")
 
-                queries_done += 1
-                await update_session(session_id, {"queries_completed": queries_done})
+        logger.info(f"Found {len(all_posts)} unique posts from {len(search_queries)} queries")
+        await update_session(session_id, {
+            "total_posts_found": len(all_posts),
+            "queries_completed": len(search_queries),
+        })
 
-            # Also get hot posts — but only keep those with keyword overlap
-            try:
-                hot_posts = await reddit_search.get_subreddit_posts(sr_name, sort="hot")
-                for post in hot_posts:
-                    try:
-                        normalized = reddit_search.normalize_post(post)
-                        url = normalized["url"]
-                        if url and url not in seen_urls and normalized["author"] and normalized["author"] != "[deleted]":
-                            if _post_matches_keywords(normalized, keywords):
-                                seen_urls.add(url)
-                                all_posts.append((normalized, sr_record_id))
-                    except Exception as e:
-                        logger.warning(f"Failed to normalize hot post in r/{sr_name}: {e}")
-            except Exception as e:
-                logger.warning(f"Hot posts fetch failed for r/{sr_name}: {e}")
+        if not all_posts:
+            await update_session(session_id, {
+                "status": "completed",
+                "completed_at": datetime.utcnow().isoformat(),
+                "leads_qualified": 0,
+            })
+            logger.info(f"Discovery session {session_id} completed: 0 posts found")
+            return
 
-        await update_session(session_id, {"total_posts_found": len(all_posts)})
+        # Extract subreddits from post results (no API calls)
+        subreddit_records = {}
+        for post in all_posts:
+            sr_name = post.get("subreddit", "")
+            if sr_name and sr_name not in subreddit_records:
+                try:
+                    record = await store_subreddit(
+                        session_id, team_id, sr_name,
+                        {"subscribers": 0, "description": ""},
+                        relevance_reason=f"Found in search results"
+                    )
+                    if record:
+                        subreddit_records[sr_name] = record
+                except Exception as e:
+                    logger.warning(f"Failed to store subreddit {sr_name}: {e}")
 
-        # ---- Phase 4: Score each post ----
-        leads_scored = 0
+        # ---- Phase 4: Batch classify + score (1-3 Gemini calls) ----
+
+        # Filter out already-contacted authors (DB checks only, no API calls)
+        posts_to_classify = []
+        for post in all_posts:
+            author = post["author"]
+            already_contacted = await check_already_contacted(author, team_id)
+            if not already_contacted:
+                posts_to_classify.append(post)
+
+        logger.info(
+            f"Classifying {len(posts_to_classify)} posts "
+            f"(skipped {len(all_posts) - len(posts_to_classify)} already-contacted)"
+        )
+
+        if not posts_to_classify:
+            await update_session(session_id, {
+                "status": "completed",
+                "completed_at": datetime.utcnow().isoformat(),
+                "total_leads_scored": len(all_posts),
+                "leads_qualified": 0,
+            })
+            logger.info(f"Discovery session {session_id} completed: all authors already contacted")
+            return
+
+        # Batch classify all posts (1-3 Gemini calls instead of N)
+        classifications = await classification_service.batch_classify_posts(
+            posts_to_classify, settings
+        )
+
+        # Score and store leads
         leads_qualified = 0
-        scored_posts = []  # Track for comment mining
-        seen_authors = set()  # Deduplicate authors across posts
+        scored_posts = []  # For comment mining
+        subreddit_stats = {}
 
-        # Track per-subreddit stats
-        subreddit_stats = {}  # sr_name -> {posts: 0, leads: 0}
+        for i, post in enumerate(posts_to_classify):
+            if leads_qualified >= MAX_LEADS:
+                logger.info(f"Reached {MAX_LEADS} leads, stopping")
+                break
 
-        for normalized_post, sr_record_id in all_posts:
+            classification = classifications[i] if i < len(classifications) else {}
+            if not classification or classification.get("category") == "not_relevant":
+                continue
+
+            sr_name = post.get("subreddit", "")
+            if sr_name not in subreddit_stats:
+                subreddit_stats[sr_name] = {"posts": 0, "leads": 0}
+            subreddit_stats[sr_name]["posts"] += 1
+
+            # Calculate lead score from classification (no API call)
+            relevance = classification.get("relevanceScore", 0)
+            buyer_intent = classification.get("buyerIntent", 0)
+            product_fit = classification.get("productFit", 0)
+            confidence = classification.get("confidence", 0)
+            score = (relevance * 0.4) + (buyer_intent * 0.3) + (product_fit * 0.2) + (confidence * 0.1)
+            score = round(score)
+
+            if relevance >= 70 and buyer_intent >= 60:
+                tier = "hot"
+            elif relevance >= 50 or buyer_intent >= 40:
+                tier = "warm"
+            else:
+                tier = "cold"
+
+            sr_record = subreddit_records.get(sr_name, {})
+
+            lead_data = {
+                "discovered_subreddit_id": sr_record.get("id"),
+                "post_url": post["url"],
+                "post_title": post["title"],
+                "post_body": post["body"][:2000],
+                "subreddit": sr_name,
+                "post_created_utc": post.get("created_utc", 0),
+                "author_username": post["author"],
+                "source_type": "post",
+                "relevance_score": relevance,
+                "buyer_intent": buyer_intent,
+                "problem_awareness": classification.get("problemAwareness", 0),
+                "product_fit": product_fit,
+                "confidence": confidence,
+                "classification_category": classification.get("category"),
+                "classification_reasoning": classification.get("reasoning"),
+                "is_qualified": score >= 50,
+                "account_quality_score": None,
+                "engagement_score": None,
+                "lead_score": score,
+                "lead_tier": tier,
+                "lead_insights": [{"type": "classification", "message": classification.get("reasoning", "")}],
+                "status": "scored",
+            }
+
             try:
-                # Stop once we have enough qualified leads
-                if leads_qualified >= MAX_LEADS:
-                    logger.info(f"Reached {MAX_LEADS} leads, stopping scoring")
-                    break
-
-                # Check if session was cancelled
-                session_check = await get_session(session_id, team_id)
-                if session_check and session_check.get("status") == "cancelled":
-                    logger.info(f"Discovery session {session_id} cancelled")
-                    return
-
-                author = normalized_post["author"]
-                sr_name = normalized_post["subreddit"]
-
-                if sr_name not in subreddit_stats:
-                    subreddit_stats[sr_name] = {"posts": 0, "leads": 0}
-                subreddit_stats[sr_name]["posts"] += 1
-
-                # Skip duplicate authors — keep first (most relevant) post
-                if author.lower() in seen_authors:
-                    leads_scored += 1
-                    continue
-                seen_authors.add(author.lower())
-
-                # Skip already-contacted users — no need to classify/qualify
-                already_contacted = await check_already_contacted(author, team_id)
-                if already_contacted:
-                    leads_scored += 1
-                    continue
-
-                # Classify post
-                classification = await classification_service.classify_post(
-                    normalized_post, settings
-                )
-
-                if classification.get("category") == "not_relevant":
-                    leads_scored += 1
-                    continue
-
-                # Qualify user
-                qualification = await qualification_service.qualify_user(author)
-
-                # Calculate lead score
-                lead_score_result = await lead_scoring.calculate_lead_score(
-                    post=normalized_post,
-                    classification=classification,
-                    qualification=qualification,
-                )
-
-                score = lead_score_result.get("score", 0)
-                tier = lead_score_result.get("tier", "cold")
-
-                lead_data = {
-                    "discovered_subreddit_id": sr_record_id,
-                    "post_url": normalized_post["url"],
-                    "post_title": normalized_post["title"],
-                    "post_body": normalized_post["body"][:2000],
-                    "subreddit": sr_name,
-                    "post_created_utc": normalized_post.get("created_utc", 0),
-                    "author_username": author,
-                    "source_type": "post",
-                    "relevance_score": classification.get("relevanceScore"),
-                    "buyer_intent": classification.get("buyerIntent"),
-                    "problem_awareness": classification.get("problemAwareness"),
-                    "product_fit": classification.get("productFit"),
-                    "confidence": classification.get("confidence"),
-                    "classification_category": classification.get("category"),
-                    "classification_reasoning": classification.get("reasoning"),
-                    "is_qualified": qualification.get("isQualified", False),
-                    "account_quality_score": qualification.get("accountQualityScore"),
-                    "engagement_score": qualification.get("engagementScore"),
-                    "lead_score": score,
-                    "lead_tier": tier,
-                    "lead_insights": lead_score_result.get("insights", []),
-                    "status": "scored",
-                }
-
                 await store_lead(session_id, team_id, lead_data)
-                leads_scored += 1
                 leads_qualified += 1
                 subreddit_stats[sr_name]["leads"] += 1
 
-                # Track high-scoring posts for comment mining
                 if score >= 50:
-                    scored_posts.append((normalized_post, score, sr_record_id))
-
-                # Batch session updates every 10 posts
-                if leads_scored % 10 == 0:
-                    await update_session(session_id, {
-                        "total_leads_scored": leads_scored,
-                        "leads_qualified": leads_qualified,
-                    })
-
+                    scored_posts.append((post, score, sr_record.get("id")))
             except Exception as e:
-                logger.warning(f"Failed to score post by u/{normalized_post.get('author')}: {e}")
-                leads_scored += 1
+                logger.warning(f"Failed to store lead for u/{post['author']}: {e}")
 
-        # Final session update after loop
         await update_session(session_id, {
-            "total_leads_scored": leads_scored,
+            "total_leads_scored": len(posts_to_classify),
             "leads_qualified": leads_qualified,
         })
 
@@ -926,7 +868,7 @@ async def run_discovery_pipeline(session_id: str):
                     sr_record["id"], stats["posts"], stats["leads"]
                 )
 
-        # ---- Phase 4.5: Auto-queue qualified leads (automation mode) ----
+        # ---- Phase 4.5: Auto-queue (no message generation — deferred to on-demand) ----
         if session.get("auto_queue") and session.get("account_id"):
             await update_session(session_id, {"status": "queuing"})
             account_id = session["account_id"]
@@ -946,26 +888,17 @@ async def run_discovery_pipeline(session_id: str):
 
             for lead in qualified_leads:
                 try:
-                    # Check cancellation
-                    session_check = await get_session(session_id, team_id)
-                    if session_check and session_check.get("status") == "cancelled":
-                        logger.info(f"Discovery session {session_id} cancelled during auto-queue")
-                        return
-
-                    # Generate message and queue
                     queue_item = await queue_lead(lead["id"], team_id, account_id)
                     if not queue_item:
                         continue
                     leads_queued_count += 1
 
-                    # Auto-approve if requested
                     if should_auto_approve and queue_item.get("id"):
                         from . import queue as queue_service
                         await queue_service.approve_queue_item(
                             queue_item["id"], approved_by="automation", team_id=team_id
                         )
                         leads_approved_count += 1
-
                 except Exception as e:
                     logger.warning(f"Auto-queue failed for lead {lead.get('id')}: {e}")
 
@@ -973,78 +906,120 @@ async def run_discovery_pipeline(session_id: str):
                 "leads_queued": leads_queued_count,
                 "leads_auto_approved": leads_approved_count,
             })
-            logger.info(
-                f"Auto-queue complete for session {session_id}: "
-                f"{leads_queued_count} queued, {leads_approved_count} approved"
-            )
 
-        # ---- Phase 5: Comment mining on top posts ----
+        # ---- Phase 5: Comment mining on top 2 posts (1-2 SC + 1 Gemini) ----
+        MAX_COMMENT_MINING = 2
         scored_posts.sort(key=lambda x: x[1], reverse=True)
-        top_posts = scored_posts[:MAX_COMMENT_MINING_POSTS]
+        top_posts = scored_posts[:MAX_COMMENT_MINING]
 
-        for normalized_post, _, sr_record_id in top_posts:
+        # Collect comments from top posts, then analyze in batch
+        all_comment_data = []  # (normalized_comments, post, sr_record_id)
+        for post, _, sr_record_id in top_posts:
+            post_url = post.get("url", "")
+            if not post_url:
+                continue
             try:
-                session_check = await get_session(session_id, team_id)
-                if session_check and session_check.get("status") == "cancelled":
-                    return
-
-                post_url = normalized_post["url"]
-                if not post_url:
-                    continue
-
                 comments = await reddit_search.get_post_comments(post_url)
-                if not comments:
-                    continue
-
-                normalized_comments = [reddit_search.normalize_comment(c) for c in comments]
-                comment_leads = await identify_comment_leads(
-                    normalized_comments, normalized_post["title"], settings
-                )
-
-                for cl in comment_leads:
-                    comment_author = cl.get("author", "")
-                    if not comment_author or comment_author == "[deleted]":
-                        continue
-
-                    already_contacted = await check_already_contacted(comment_author, team_id)
-
-                    # Qualify the commenter
-                    try:
-                        qualification = await qualification_service.qualify_user(comment_author)
-                    except Exception:
-                        qualification = {}
-
-                    lead_data = {
-                        "discovered_subreddit_id": sr_record_id,
-                        "post_url": post_url,
-                        "post_title": normalized_post["title"],
-                        "post_body": normalized_post["body"][:2000],
-                        "subreddit": normalized_post["subreddit"],
-                        "post_created_utc": normalized_post.get("created_utc", 0),
-                        "author_username": comment_author,
-                        "source_type": "comment",
-                        "source_comment_body": cl.get("comment_excerpt", ""),
-                        "relevance_score": cl.get("relevance_score", 50),
-                        "buyer_intent": cl.get("buyer_intent", 50),
-                        "problem_awareness": 50,
-                        "product_fit": 50,
-                        "confidence": 60,
-                        "classification_category": "weak_match" if cl.get("relevance_score", 0) >= 50 else "not_relevant",
-                        "classification_reasoning": cl.get("reason", ""),
-                        "is_qualified": qualification.get("isQualified", False),
-                        "account_quality_score": qualification.get("accountQualityScore"),
-                        "engagement_score": qualification.get("engagementScore"),
-                        "lead_score": cl.get("relevance_score", 50),
-                        "lead_tier": "warm" if cl.get("relevance_score", 0) >= 60 else "cold",
-                        "lead_insights": [{"type": "comment_lead", "message": cl.get("reason", "")}],
-                        "status": "already_contacted" if already_contacted else "scored",
-                    }
-
-                    await store_lead(session_id, team_id, lead_data)
-                    leads_qualified += 1
-
+                if comments:
+                    normalized_comments = [reddit_search.normalize_comment(c) for c in comments]
+                    all_comment_data.append((normalized_comments, post, sr_record_id))
             except Exception as e:
-                logger.warning(f"Comment mining failed for {normalized_post.get('url')}: {e}")
+                logger.warning(f"Comment fetch failed for {post_url}: {e}")
+
+        # Batch analyze all comments in a single Gemini call
+        if all_comment_data:
+            # Build combined prompt for all posts' comments
+            combined_comments_text = ""
+            post_boundaries = []  # (start_line, post_title)
+            for normalized_comments, post, _ in all_comment_data:
+                post_title = post.get("title", "")
+                combined_comments_text += f"\n--- POST: {post_title} ---\n"
+                for c in normalized_comments[:15]:
+                    author = c.get("author", "unknown")
+                    body = (c.get("body") or "")[:300]
+                    if author and author != "[deleted]" and body:
+                        combined_comments_text += f"u/{author}: {body}\n"
+                post_boundaries.append(post_title)
+
+            if combined_comments_text.strip():
+                # Single Gemini call for all comment analysis
+                try:
+                    batch_comment_prompt = COMMENT_ANALYSIS_PROMPT.format(
+                        post_title=" | ".join(post_boundaries),
+                        business_desc=settings.get("businessDesc", ""),
+                        persona=settings.get("persona", ""),
+                    )
+                    content = await gemini_client.generate_content(
+                        system_instruction=batch_comment_prompt,
+                        user_prompt=f"COMMENTS:\n{combined_comments_text}",
+                        temperature=0.5,
+                        max_tokens=800,
+                        response_mime_type="application/json",
+                    )
+
+                    json_str = _strip_json_fences(content)
+                    try:
+                        parsed = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        parsed = json.loads(_repair_json(json_str))
+
+                    comment_leads = parsed.get("leads", [])
+
+                    # Use the first post's sr_record_id as default
+                    default_sr_id = all_comment_data[0][2] if all_comment_data else None
+
+                    for cl in comment_leads:
+                        comment_author = cl.get("author", "")
+                        if not comment_author or comment_author == "[deleted]":
+                            continue
+                        if comment_author.lower() in seen_authors:
+                            continue
+                        seen_authors.add(comment_author.lower())
+
+                        already_contacted = await check_already_contacted(comment_author, team_id)
+
+                        # Find which post this comment belongs to
+                        source_post = all_comment_data[0][1]  # default to first
+                        for nc, p, sr_id in all_comment_data:
+                            for c in nc:
+                                if c.get("author", "").lower() == comment_author.lower():
+                                    source_post = p
+                                    default_sr_id = sr_id
+                                    break
+
+                        rel_score = cl.get("relevance_score", 50)
+                        lead_data = {
+                            "discovered_subreddit_id": default_sr_id,
+                            "post_url": source_post.get("url", ""),
+                            "post_title": source_post.get("title", ""),
+                            "post_body": source_post.get("body", "")[:2000],
+                            "subreddit": source_post.get("subreddit", ""),
+                            "post_created_utc": source_post.get("created_utc", 0),
+                            "author_username": comment_author,
+                            "source_type": "comment",
+                            "source_comment_body": cl.get("comment_excerpt", ""),
+                            "relevance_score": rel_score,
+                            "buyer_intent": cl.get("buyer_intent", 50),
+                            "problem_awareness": 50,
+                            "product_fit": 50,
+                            "confidence": 60,
+                            "classification_category": "weak_match" if rel_score >= 50 else "not_relevant",
+                            "classification_reasoning": cl.get("reason", ""),
+                            "is_qualified": rel_score >= 50,
+                            "account_quality_score": None,
+                            "engagement_score": None,
+                            "lead_score": rel_score,
+                            "lead_tier": "warm" if rel_score >= 60 else "cold",
+                            "lead_insights": [{"type": "comment_lead", "message": cl.get("reason", "")}],
+                            "status": "already_contacted" if already_contacted else "scored",
+                        }
+
+                        await store_lead(session_id, team_id, lead_data)
+                        if not already_contacted:
+                            leads_qualified += 1
+
+                except Exception as e:
+                    logger.warning(f"Batch comment analysis failed: {e}")
 
         # ---- Phase 6: Complete ----
         await update_session(session_id, {

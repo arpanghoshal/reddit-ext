@@ -227,38 +227,179 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
     return {**classification, "cached": False}
 
 
-async def classify_batch(posts: List[Dict[str, Any]], settings: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+BATCH_POSTS_PER_CALL = 30  # Max posts per single Gemini call
+
+
+def _build_batch_prompt(posts: List[Dict[str, Any]], settings: Dict[str, Any]) -> str:
+    """Build a batch classification prompt for multiple posts."""
+    insight_types = settings.get("insightTypes", [])
+    posts_text = ""
+    for i, post in enumerate(posts):
+        body = (post.get("body") or "")[:500]
+        posts_text += (
+            f"{i+1}. [r/{post.get('subreddit', '?')}] "
+            f"Title: {post.get('title', 'No title')} | "
+            f"Body: {body} | "
+            f"Author: u/{post.get('author', '?')}\n"
+        )
+
+    return f"""TASK: Classify each Reddit post for outreach relevance.
+
+BUSINESS CONTEXT:
+- Business Description: {settings.get('businessDesc', 'Not specified')}
+- Target Persona: {settings.get('persona', 'Not specified')}
+- Insight Goals: {', '.join(insight_types) if insight_types else 'General insights'}
+
+POSTS:
+{posts_text}
+
+EVALUATE EACH POST (0-100):
+- relevanceScore: How relevant to the business/product?
+- buyerIntent: Signs of buying/decision mode?
+- problemAwareness: How aware of their problem?
+- productFit: How well does the need fit the business solution?
+- confidence: How confident in this assessment?
+
+CATEGORIZATION RULES:
+- strong_match: relevanceScore >= 70 AND (buyerIntent >= 50 OR problemAwareness >= 60)
+- weak_match: relevanceScore >= 40 AND confidence >= 50
+- not_relevant: All other cases
+
+RESPOND WITH A JSON ARRAY ONLY (no markdown, no explanation):
+[
+  {{"index": 1, "relevanceScore": N, "buyerIntent": N, "problemAwareness": N, "productFit": N, "confidence": N, "category": "...", "reasoning": "..."}},
+  ...
+]"""
+
+
+def _parse_batch_response(response_text: str, count: int) -> List[Dict[str, Any]]:
+    """Parse batch classification response into list of results."""
+    try:
+        json_str = response_text.strip()
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0].strip()
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1].split("```")[0].strip()
+
+        parsed = json.loads(json_str)
+        if not isinstance(parsed, list):
+            parsed = parsed.get("posts", parsed.get("results", []))
+
+        results = []
+        valid_categories = ["strong_match", "weak_match", "not_relevant"]
+
+        for item in parsed:
+            r = {
+                "relevanceScore": max(0, min(100, int(item.get("relevanceScore", 0)))),
+                "buyerIntent": max(0, min(100, int(item.get("buyerIntent", 0)))),
+                "problemAwareness": max(0, min(100, int(item.get("problemAwareness", 0)))),
+                "productFit": max(0, min(100, int(item.get("productFit", 0)))),
+                "confidence": max(0, min(100, int(item.get("confidence", 0)))),
+                "category": item.get("category", "not_relevant"),
+                "reasoning": item.get("reasoning", ""),
+            }
+            if r["category"] not in valid_categories:
+                if r["relevanceScore"] >= 70 and (r["buyerIntent"] >= 50 or r["problemAwareness"] >= 60):
+                    r["category"] = "strong_match"
+                elif r["relevanceScore"] >= 40 and r["confidence"] >= 50:
+                    r["category"] = "weak_match"
+                else:
+                    r["category"] = "not_relevant"
+            results.append(r)
+
+        return results
+
+    except Exception as e:
+        logger.warning(f"Batch classification parse failed: {e}, response: {response_text[:500]}")
+        return [_not_relevant_default() for _ in range(count)]
+
+
+def _not_relevant_default() -> Dict[str, Any]:
+    return {
+        "relevanceScore": 0, "buyerIntent": 0, "problemAwareness": 0,
+        "productFit": 0, "confidence": 0,
+        "category": "not_relevant",
+        "reasoning": "Parse failure, defaulting to not_relevant",
+    }
+
+
+async def batch_classify_posts(
+    posts: List[Dict[str, Any]], settings: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     """
-    Classify multiple posts in batch
+    Classify all posts in 1-3 Gemini calls (batch mode).
 
-    Args:
-        posts: Array of post objects
-        settings: User settings
+    Checks cache first for each post. Uncached posts are sent in batches
+    of BATCH_POSTS_PER_CALL to a single Gemini call.
 
-    Returns:
-        Array of classification results
+    Returns list of classification dicts aligned with input posts order.
     """
     settings = settings or {}
-    results = []
+    results: List[Optional[Dict[str, Any]]] = [None] * len(posts)
 
-    for post in posts:
+    # Check cache for each post
+    uncached_indices = []
+    for i, post in enumerate(posts):
+        cached = await get_cached_classification(post.get("url", ""))
+        if cached:
+            results[i] = cached
+        else:
+            uncached_indices.append(i)
+
+    if not uncached_indices:
+        return results
+
+    # Batch classify uncached posts
+    uncached_posts = [posts[i] for i in uncached_indices]
+
+    for batch_start in range(0, len(uncached_posts), BATCH_POSTS_PER_CALL):
+        batch = uncached_posts[batch_start:batch_start + BATCH_POSTS_PER_CALL]
+        batch_indices = uncached_indices[batch_start:batch_start + BATCH_POSTS_PER_CALL]
+
+        prompt = _build_batch_prompt(batch, settings)
+
         try:
-            classification = await classify_post(post, settings)
-            results.append({
-                "postUrl": post.get("url"),
-                **classification
-            })
+            response_text = await gemini_client.generate_content(
+                system_instruction="You are a lead qualification expert. Classify Reddit posts for sales outreach relevance. Respond only with a valid JSON array.",
+                user_prompt=prompt,
+                temperature=0.3,
+                max_tokens=4000,
+                response_mime_type="application/json",
+            )
 
-            # Add a small delay between API calls to avoid rate limiting
-            await asyncio.sleep(0.5)
+            if not response_text:
+                batch_results = [_not_relevant_default() for _ in batch]
+            else:
+                batch_results = _parse_batch_response(response_text, len(batch))
+
+            # Pad if LLM returned fewer results than expected
+            while len(batch_results) < len(batch):
+                batch_results.append(_not_relevant_default())
+
+            # Store results and save to cache
+            for j, idx in enumerate(batch_indices):
+                classification = batch_results[j] if j < len(batch_results) else _not_relevant_default()
+                results[idx] = {**classification, "cached": False}
+                await save_classification(posts[idx], classification)
+
         except Exception as e:
-            print(f"Error classifying post {post.get('url')}: {e}")
-            results.append({
-                "postUrl": post.get("url"),
-                "error": str(e),
-                "category": "not_relevant"
-            })
+            logger.warning(f"Batch classification call failed: {e}")
+            for idx in batch_indices:
+                results[idx] = {**_not_relevant_default(), "cached": False}
 
+    return results
+
+
+async def classify_batch(posts: List[Dict[str, Any]], settings: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    """
+    Classify multiple posts in batch (legacy wrapper, calls batch_classify_posts).
+    """
+    settings = settings or {}
+    classifications = await batch_classify_posts(posts, settings)
+    results = []
+    for i, post in enumerate(posts):
+        c = classifications[i] if i < len(classifications) else _not_relevant_default()
+        results.append({"postUrl": post.get("url"), **c})
     return results
 
 
