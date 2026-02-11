@@ -172,16 +172,16 @@ def parse_classification_response(response_text: str) -> Dict[str, Any]:
 
         return result
     except Exception as e:
-        print(f"Error parsing classification response: {e}, response: {response_text}")
-        # Return a default "fail open" classification
+        logger.warning(f"Error parsing classification response: {e}, response: {response_text[:500]}")
+        # Fail closed: unparseable responses should not become leads
         return {
-            "relevanceScore": 50,
-            "buyerIntent": 50,
-            "problemAwareness": 50,
-            "productFit": 50,
-            "confidence": 30,
-            "category": "weak_match",
-            "reasoning": "Failed to parse LLM response, defaulting to weak match"
+            "relevanceScore": 0,
+            "buyerIntent": 0,
+            "problemAwareness": 0,
+            "productFit": 0,
+            "confidence": 0,
+            "category": "not_relevant",
+            "reasoning": "Failed to parse LLM response, defaulting to not_relevant"
         }
 
 

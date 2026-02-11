@@ -615,6 +615,32 @@ async def check_already_contacted(author_username: str, team_id: str) -> bool:
 
 
 # ============================================================================
+# Pre-filter Helpers
+# ============================================================================
+
+def _post_matches_keywords(post: Dict[str, Any], keywords: List[str], min_matches: int = 1) -> bool:
+    """
+    Lightweight keyword pre-filter. Returns True if the post title+body
+    contains at least `min_matches` keywords (case-insensitive).
+    Avoids sending obviously irrelevant posts to the expensive LLM classifier.
+    """
+    if not keywords:
+        return True
+
+    text = (post.get("title", "") + " " + post.get("body", "")).lower()
+    if not text.strip():
+        return False
+
+    match_count = 0
+    for kw in keywords:
+        if kw.lower() in text:
+            match_count += 1
+            if match_count >= min_matches:
+                return True
+    return False
+
+
+# ============================================================================
 # Main Discovery Pipeline
 # ============================================================================
 
@@ -736,29 +762,36 @@ async def run_discovery_pipeline(session_id: str):
                         subreddit=sr_name,
                         query=query,
                         sort="relevance",
-                        timeframe="month",
+                        timeframe="week",
                     )
                     for post in posts:
-                        normalized = reddit_search.normalize_post(post)
-                        url = normalized["url"]
-                        if url and url not in seen_urls and normalized["author"] and normalized["author"] != "[deleted]":
-                            seen_urls.add(url)
-                            all_posts.append((normalized, sr_record_id))
+                        try:
+                            normalized = reddit_search.normalize_post(post)
+                            url = normalized["url"]
+                            if url and url not in seen_urls and normalized["author"] and normalized["author"] != "[deleted]":
+                                seen_urls.add(url)
+                                all_posts.append((normalized, sr_record_id))
+                        except Exception as e:
+                            logger.warning(f"Failed to normalize post in r/{sr_name}: {e}")
                 except Exception as e:
                     logger.warning(f"Post search failed for r/{sr_name} query '{query}': {e}")
 
                 queries_done += 1
                 await update_session(session_id, {"queries_completed": queries_done})
 
-            # Also get hot/new posts
+            # Also get hot posts — but only keep those with keyword overlap
             try:
                 hot_posts = await reddit_search.get_subreddit_posts(sr_name, sort="hot")
                 for post in hot_posts:
-                    normalized = reddit_search.normalize_post(post)
-                    url = normalized["url"]
-                    if url and url not in seen_urls and normalized["author"] and normalized["author"] != "[deleted]":
-                        seen_urls.add(url)
-                        all_posts.append((normalized, sr_record_id))
+                    try:
+                        normalized = reddit_search.normalize_post(post)
+                        url = normalized["url"]
+                        if url and url not in seen_urls and normalized["author"] and normalized["author"] != "[deleted]":
+                            if _post_matches_keywords(normalized, keywords):
+                                seen_urls.add(url)
+                                all_posts.append((normalized, sr_record_id))
+                    except Exception as e:
+                        logger.warning(f"Failed to normalize hot post in r/{sr_name}: {e}")
             except Exception as e:
                 logger.warning(f"Hot posts fetch failed for r/{sr_name}: {e}")
 
@@ -786,6 +819,16 @@ async def run_discovery_pipeline(session_id: str):
                 if sr_name not in subreddit_stats:
                     subreddit_stats[sr_name] = {"posts": 0, "leads": 0}
                 subreddit_stats[sr_name]["posts"] += 1
+
+                # Lightweight pre-filter: skip posts with zero keyword overlap
+                if not _post_matches_keywords(normalized_post, keywords):
+                    logger.debug(
+                        f"Pre-filter skipped post by u/{author} in r/{sr_name}: "
+                        f"no keyword match in '{normalized_post.get('title', '')[:80]}'"
+                    )
+                    leads_scored += 1
+                    await update_session(session_id, {"total_leads_scored": leads_scored})
+                    continue
 
                 # Check if already contacted
                 already_contacted = await check_already_contacted(author, team_id)

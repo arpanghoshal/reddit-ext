@@ -397,6 +397,23 @@ async def get_subreddit_info(subreddit: str) -> Optional[Dict[str, Any]]:
 # Helpers
 # ============================================================================
 
+def _str_field(value) -> str:
+    """Safely coerce a field to string. ScrapeCreators sometimes returns dicts/lists."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        # Try common nested patterns: {"text": "..."}, {"url": "..."}, {"link": "..."}
+        for key in ("text", "url", "link", "href", "value"):
+            if key in value and isinstance(value[key], str):
+                return value[key]
+        return ""
+    if isinstance(value, (int, float)):
+        return str(value)
+    return ""
+
+
 def normalize_post(post: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize post data from ScrapeCreators responses to a consistent format.
@@ -404,9 +421,9 @@ def normalize_post(post: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Try various field name patterns
     url = (
-        post.get("url")
-        or post.get("permalink")
-        or post.get("post_url")
+        _str_field(post.get("url"))
+        or _str_field(post.get("permalink"))
+        or _str_field(post.get("post_url"))
         or ""
     )
     # Ensure it's a full URL
@@ -414,25 +431,25 @@ def normalize_post(post: Dict[str, Any]) -> Dict[str, Any]:
         url = f"https://www.reddit.com{url}"
 
     author = (
-        post.get("author")
-        or post.get("author_name")
-        or post.get("user")
+        _str_field(post.get("author"))
+        or _str_field(post.get("author_name"))
+        or _str_field(post.get("user"))
         or ""
     )
 
-    title = post.get("title") or post.get("post_title") or ""
+    title = _str_field(post.get("title")) or _str_field(post.get("post_title")) or ""
 
     body = (
-        post.get("selftext")
-        or post.get("body")
-        or post.get("text")
-        or post.get("post_body")
+        _str_field(post.get("selftext"))
+        or _str_field(post.get("body"))
+        or _str_field(post.get("text"))
+        or _str_field(post.get("post_body"))
         or ""
     )
 
     subreddit = (
-        post.get("subreddit")
-        or post.get("subreddit_name")
+        _str_field(post.get("subreddit"))
+        or _str_field(post.get("subreddit_name"))
         or ""
     )
     # Strip r/ prefix if present
@@ -471,15 +488,15 @@ def normalize_post(post: Dict[str, Any]) -> Dict[str, Any]:
 def normalize_comment(comment: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize comment data from ScrapeCreators to a consistent format."""
     author = (
-        comment.get("author")
-        or comment.get("author_name")
-        or comment.get("user")
+        _str_field(comment.get("author"))
+        or _str_field(comment.get("author_name"))
+        or _str_field(comment.get("user"))
         or ""
     )
     body = (
-        comment.get("body")
-        or comment.get("text")
-        or comment.get("content")
+        _str_field(comment.get("body"))
+        or _str_field(comment.get("text"))
+        or _str_field(comment.get("content"))
         or ""
     )
     score = comment.get("score") or comment.get("ups") or comment.get("votes") or 0

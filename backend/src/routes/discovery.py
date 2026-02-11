@@ -56,20 +56,20 @@ async def start_discovery(
 
     input_data = body.dict(exclude_none=True)
 
-    # If no business desc provided, fetch from settings
-    if not input_data.get("businessDesc"):
-        from ..services.supabase_service import get_client
-        client = get_client()
-        if client:
-            settings_result = client.table("user_settings").select("*").eq(
-                "team_id", team_id
-            ).execute()
-            if settings_result.data:
-                s = settings_result.data[0]
-                input_data.setdefault("businessDesc", s.get("business_desc", ""))
-                input_data.setdefault("persona", s.get("persona", ""))
-                input_data.setdefault("tone", s.get("tone", "Curious"))
-                input_data.setdefault("insightTypes", s.get("insight_types", []))
+    # Always merge from saved settings so tone/insightTypes/persona are included
+    # even when the frontend only sends businessDesc + persona (discovery mode)
+    from ..services.supabase_service import get_client
+    client = get_client()
+    if client:
+        settings_result = client.table("user_settings").select("*").eq(
+            "team_id", team_id
+        ).execute()
+        if settings_result.data:
+            s = settings_result.data[0]
+            input_data.setdefault("businessDesc", s.get("business_desc", ""))
+            input_data.setdefault("persona", s.get("persona", ""))
+            input_data.setdefault("tone", s.get("tone", "Curious"))
+            input_data.setdefault("insightTypes", s.get("insight_types", []))
 
     if not input_data.get("businessDesc"):
         raise HTTPException(

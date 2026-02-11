@@ -152,17 +152,6 @@ function showToast(message, type = 'info') {
     setTimeout(() => toast.remove(), 3000);
 }
 
-function clearAuthMessages() {
-    const errorEl = document.getElementById('auth-error');
-    errorEl.style.display = 'none';
-}
-
-function showAuthError(message) {
-    const errorEl = document.getElementById('auth-error');
-    errorEl.textContent = message;
-    errorEl.style.display = 'block';
-}
-
 function initEventListeners() {
     // Set OS-specific shortcut hint
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -172,43 +161,6 @@ function initEventListeners() {
     document.getElementById('login-via-dashboard').addEventListener('click', () => {
         chrome.tabs.create({ url: DEFAULT_DASHBOARD_URL + '/login' });
         window.close();
-    });
-
-    // Login form
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = document.getElementById('login-email').value;
-        const password = document.getElementById('login-password').value;
-        const loginBtn = document.getElementById('login-btn');
-
-        clearAuthMessages();
-        loginBtn.disabled = true;
-        loginBtn.textContent = 'Signing in...';
-
-        try {
-            const response = await chrome.runtime.sendMessage({
-                action: 'LOGIN',
-                email,
-                password
-            });
-
-            if (response && response.error) {
-                throw new Error(response.error);
-            }
-
-            showMainSection(email);
-            if (response.teams) {
-                populateTeamSelector(response.teams, response.currentTeam?.id);
-            }
-            showToast('Signed in', 'success');
-            await loadStats();
-            await checkConnection();
-        } catch (err) {
-            showAuthError(err.message || 'Login failed');
-        } finally {
-            loginBtn.disabled = false;
-            loginBtn.textContent = 'Sign In';
-        }
     });
 
     // Logout
