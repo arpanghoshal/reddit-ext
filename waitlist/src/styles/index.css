@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.8s ease-out both;
+}
+
+.animate-fade-up-delay-1 {
+  animation: fade-up 0.8s ease-out 0.1s both;
+}
+
+.animate-fade-up-delay-2 {
+  animation: fade-up 0.8s ease-out 0.2s both;
+}
+
+.animate-fade-up-delay-3 {
+  animation: fade-up 0.8s ease-out 0.35s both;
+}
+
+.animate-fade-in {
+  animation: fade-in 1s ease-out 0.5s both;
+}
+
+.shimmer-text {
+  background: linear-gradient(
+    110deg,
+    #94a3b8 0%,
+    #94a3b8 40%,
+    #cbd5e1 50%,
+    #94a3b8 60%,
+    #94a3b8 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer 3s linear infinite;
+}
+
+@keyframes subtle-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.animate-subtle-pulse {
+  animation: subtle-pulse 3s ease-in-out infinite;
+}
