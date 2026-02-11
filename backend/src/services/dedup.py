@@ -107,11 +107,113 @@ async def has_been_contacted(recipient_username: str, team_id: str) -> Dict[str,
                 }
             }
 
+        # 5. Check discovered_leads (past discovery sessions)
+        result = client.table("discovered_leads").select(
+            "id, session_id, created_at"
+        ).eq("team_id", team_id).eq(
+            "author_username", username
+        ).neq("status", "dismissed").limit(1).execute()
+
+        if result.data:
+            row = result.data[0]
+            return {
+                "contacted": True,
+                "source": "discovered_leads",
+                "details": {
+                    "session_id": row.get("session_id"),
+                    "discovered_at": row.get("created_at"),
+                }
+            }
+
         return {"contacted": False}
 
     except Exception as e:
         logger.warning(f"Error checking if {username} was contacted: {e}")
         return {"contacted": False, "error": str(e)}
+
+
+async def batch_check_contacted(usernames: List[str], team_id: str) -> set:
+    """
+    Check which usernames have been contacted, using batch queries.
+    Returns a set of lowercase usernames that have been contacted.
+    Much faster than checking one by one (4 queries total instead of 4*N).
+    """
+    if not usernames or not team_id:
+        return set()
+
+    client = get_client()
+    if not client:
+        return set()
+
+    contacted = set()
+    # Normalize all usernames
+    normalized = [u.lower().strip() for u in usernames if u]
+
+    try:
+        # 1. Check contacted_recipients (fastest)
+        result = client.table("contacted_recipients").select(
+            "recipient_username"
+        ).eq("team_id", team_id).in_(
+            "recipient_username", normalized
+        ).execute()
+        for row in (result.data or []):
+            contacted.add(row["recipient_username"])
+
+        # Only check remaining tables for usernames not yet found
+        remaining = [u for u in normalized if u not in contacted]
+        if not remaining:
+            return contacted
+
+        # 2. Check dm_queue
+        result = client.table("dm_queue").select(
+            "recipient_username"
+        ).eq("team_id", team_id).in_(
+            "recipient_username", remaining
+        ).in_("status", ["pending", "approved", "sent"]).execute()
+        for row in (result.data or []):
+            contacted.add(row["recipient_username"])
+
+        remaining = [u for u in remaining if u not in contacted]
+        if not remaining:
+            return contacted
+
+        # 3. Check dm_history
+        result = client.table("dm_history").select(
+            "recipient_username"
+        ).eq("team_id", team_id).in_(
+            "recipient_username", remaining
+        ).execute()
+        for row in (result.data or []):
+            contacted.add(row["recipient_username"])
+
+        remaining = [u for u in remaining if u not in contacted]
+        if not remaining:
+            return contacted
+
+        # 4. Check conversations
+        result = client.table("conversations").select(
+            "participant_username"
+        ).eq("team_id", team_id).in_(
+            "participant_username", remaining
+        ).execute()
+        for row in (result.data or []):
+            contacted.add(row["participant_username"])
+
+        # 5. Check discovered_leads (past discovery sessions)
+        remaining = [u for u in remaining if u not in contacted]
+        if remaining:
+            result = client.table("discovered_leads").select(
+                "author_username"
+            ).eq("team_id", team_id).in_(
+                "author_username", remaining
+            ).neq("status", "dismissed").execute()
+            for row in (result.data or []):
+                contacted.add(row["author_username"].lower())
+
+    except Exception as e:
+        logger.warning(f"Batch dedup check failed: {e}")
+
+    return contacted
 
 
 async def record_contact(

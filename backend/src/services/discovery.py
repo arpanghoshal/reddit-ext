@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
+from . import serpapi_client
 from . import reddit_search
 from . import classification as classification_service
 from . import llm as llm_service
@@ -300,6 +301,55 @@ async def get_automation_stats(session_id: str, team_id: str) -> Dict[str, Any]:
     return stats
 
 
+async def get_past_lead_stats(team_id: str) -> Dict[str, Any]:
+    """
+    Get stats on how many leads from all past discovery sessions were messaged.
+    Returns total discovered, total messaged, total queued, conversion rate.
+    """
+    client = get_client()
+    if not client:
+        return {"total_discovered": 0, "total_messaged": 0, "total_queued": 0, "conversion_rate": 0}
+
+    try:
+        # Get all leads for this team
+        leads_result = client.table("discovered_leads").select(
+            "id, author_username, status, queue_item_id, session_id"
+        ).eq("team_id", team_id).execute()
+
+        leads = leads_result.data or []
+        total_discovered = len(leads)
+        total_queued = len([l for l in leads if l.get("status") == "queued"])
+
+        # Check which lead authors were actually messaged (in contacted_recipients)
+        authors = list(set(
+            l["author_username"].lower()
+            for l in leads
+            if l.get("author_username")
+        ))
+
+        messaged_count = 0
+        if authors:
+            # Check in batches of 100 to avoid query limits
+            for batch_start in range(0, len(authors), 100):
+                batch = authors[batch_start:batch_start + 100]
+                cr_result = client.table("contacted_recipients").select(
+                    "recipient_username"
+                ).eq("team_id", team_id).in_(
+                    "recipient_username", batch
+                ).execute()
+                messaged_count += len(cr_result.data or [])
+
+        return {
+            "total_discovered": total_discovered,
+            "total_messaged": messaged_count,
+            "total_queued": total_queued,
+            "conversion_rate": round(messaged_count / total_discovered * 100, 1) if total_discovered > 0 else 0,
+        }
+    except Exception as e:
+        logger.warning(f"Failed to get past lead stats for team {team_id}: {e}")
+        return {"total_discovered": 0, "total_messaged": 0, "total_queued": 0, "conversion_rate": 0}
+
+
 # ============================================================================
 # Message Generation & Queueing
 # ============================================================================
@@ -532,6 +582,21 @@ Insight Types: {', '.join(settings.get('insightTypes', []))}"""
 # Comment Lead Identification
 # ============================================================================
 
+PREFILTER_PROMPT = """You are evaluating Google search results for Reddit posts.
+Pick the {max_picks} most relevant posts for this business — posts whose authors
+are most likely potential customers or leads.
+
+BUSINESS: {business_desc}
+TARGET PERSONA: {persona}
+
+RESPOND IN VALID JSON ONLY (no markdown):
+{{"picks": [0, 3, 7]}}
+
+Where each number is the 0-based index of a result you're selecting.
+Only return the indices of the top {max_picks} most relevant posts.
+If fewer than {max_picks} look relevant, return fewer."""
+
+
 COMMENT_ANALYSIS_PROMPT = """Analyze these Reddit comments from a post about: {post_title}
 
 BUSINESS CONTEXT: {business_desc}
@@ -617,13 +682,14 @@ async def check_already_contacted(author_username: str, team_id: str) -> bool:
 async def run_discovery_pipeline(session_id: str):
     """
     Main orchestrator. Runs as a background task.
-    Optimized for minimal API calls:
-      - 1 Gemini call: search strategy (5 queries)
-      - 5 ScrapeCreators calls: global Reddit search
-      - 1-3 Gemini calls: batch classification
-      - 1-2 ScrapeCreators calls: comment mining on top posts
-      - 1 Gemini call: batch comment lead analysis
-    Total: ~7 ScrapeCreators + 3-5 Gemini calls
+    Minimal-call pipeline:
+      - 1 Gemini: search strategy (5 queries)
+      - 5 SerpAPI: Google search for Reddit posts
+      - 1 Gemini: pre-filter (rank by title/snippet, pick top 5)
+      - ≤5 ScrapeCreators: enrich top 5 posts (post content + comments)
+      - 1-3 Gemini: batch classification
+      - 1 Gemini: batch comment lead analysis
+    Total: 5 SerpAPI + ≤5 SC + 4-6 Gemini
     """
     try:
         # Load session
@@ -668,62 +734,136 @@ async def run_discovery_pipeline(session_id: str):
             "total_queries_planned": len(search_queries),
         })
 
-        # ---- Phase 2+3: Search posts (2-3 ScrapeCreators calls) ----
+        # ---- Phase 2: SerpAPI Search (5 SerpAPI calls) ----
         await update_session(session_id, {"status": "scoring"})
 
-        all_posts = []  # list of normalized_post dicts
+        serpapi_results = []  # list of SerpAPI result dicts
         seen_urls = set()
-        seen_authors = set()
 
         if is_automation and target_subs:
-            # Automation mode: search within specific subreddits
-            for sr_name in target_subs[:2]:
+            # Automation mode: search within specific subreddits via SerpAPI
+            for sr_name in target_subs[:3]:
                 sr_name = sr_name.strip().replace("r/", "")
                 if not sr_name:
                     continue
                 for query in search_queries[:3]:
                     try:
-                        posts = await reddit_search.search_subreddit_posts(
+                        results = await serpapi_client.search_subreddit_posts(
                             subreddit=sr_name, query=query,
-                            sort="relevance", timeframe="week",
+                            num_results=15, time_period="m",
                         )
-                        for post in posts:
-                            try:
-                                normalized = reddit_search.normalize_post(post)
-                                url = normalized["url"]
-                                author = normalized.get("author", "")
-                                if (url and url not in seen_urls
-                                        and author and author != "[deleted]"
-                                        and author.lower() not in seen_authors):
-                                    seen_urls.add(url)
-                                    seen_authors.add(author.lower())
-                                    all_posts.append(normalized)
-                            except Exception as e:
-                                logger.warning(f"Failed to normalize post: {e}")
+                        for r in results:
+                            url = r.get("link", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                serpapi_results.append(r)
                     except Exception as e:
-                        logger.warning(f"Search failed for r/{sr_name} '{query}': {e}")
+                        logger.warning(f"SerpAPI search failed for r/{sr_name} '{query}': {e}")
         else:
-            # Discovery mode: global Reddit search with LLM-generated queries
+            # Discovery mode: global Google search for Reddit posts
             for query in search_queries:
                 try:
-                    posts = await reddit_search.search_posts(query, sort="relevance")
-                    for post in posts:
-                        try:
-                            normalized = reddit_search.normalize_post(post)
-                            url = normalized["url"]
-                            author = normalized.get("author", "")
-                            if (url and url not in seen_urls
-                                    and author and author != "[deleted]"
-                                    and author.lower() not in seen_authors):
-                                seen_urls.add(url)
-                                seen_authors.add(author.lower())
-                                all_posts.append(normalized)
-                        except Exception as e:
-                            logger.warning(f"Failed to normalize post: {e}")
+                    results = await serpapi_client.search_reddit_posts(
+                        query, num_results=20, time_period="m",
+                    )
+                    for r in results:
+                        url = r.get("link", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            serpapi_results.append(r)
                 except Exception as e:
-                    logger.warning(f"Global search failed for '{query}': {e}")
+                    logger.warning(f"SerpAPI search failed for '{query}': {e}")
 
-        logger.info(f"Found {len(all_posts)} unique posts from {len(search_queries)} queries")
+        logger.info(f"SerpAPI found {len(serpapi_results)} unique post URLs from {len(search_queries)} queries")
+
+        if not serpapi_results:
+            await update_session(session_id, {
+                "status": "completed",
+                "completed_at": datetime.utcnow().isoformat(),
+                "total_posts_found": 0,
+                "leads_qualified": 0,
+            })
+            logger.info(f"Discovery session {session_id} completed: 0 posts found")
+            return
+
+        # ---- Phase 2.5a: Pre-filter SerpAPI results (1 Gemini call) ----
+        # Rank by title/snippet relevance so we only spend SC calls on the best posts
+        MAX_ENRICH = 5
+        picks = list(range(min(len(serpapi_results), MAX_ENRICH)))  # fallback: first N
+
+        if len(serpapi_results) > MAX_ENRICH:
+            try:
+                listing = "\n".join(
+                    f"[{i}] {r.get('title', '')} — {r.get('snippet', '')[:150]}"
+                    for i, r in enumerate(serpapi_results)
+                )
+                prefilter_response = await gemini_client.generate_content(
+                    system_instruction=PREFILTER_PROMPT.format(
+                        max_picks=MAX_ENRICH,
+                        business_desc=settings.get("businessDesc", ""),
+                        persona=settings.get("persona", ""),
+                    ),
+                    user_prompt=f"RESULTS:\n{listing}",
+                    temperature=0.3,
+                    max_tokens=200,
+                    response_mime_type="application/json",
+                )
+                json_str = _strip_json_fences(prefilter_response)
+                try:
+                    parsed_picks = json.loads(json_str)
+                except json.JSONDecodeError:
+                    parsed_picks = json.loads(_repair_json(json_str))
+
+                raw_picks = parsed_picks.get("picks", [])
+                # Validate indices
+                valid_picks = [
+                    int(p) for p in raw_picks
+                    if isinstance(p, (int, float)) and 0 <= int(p) < len(serpapi_results)
+                ][:MAX_ENRICH]
+                if valid_picks:
+                    picks = valid_picks
+                    logger.info(f"Pre-filter selected indices {picks} from {len(serpapi_results)} results")
+                else:
+                    logger.warning("Pre-filter returned no valid picks, using first N")
+            except Exception as e:
+                logger.warning(f"Pre-filter failed, using first {MAX_ENRICH} results: {e}")
+
+        # ---- Phase 2.5b: Enrich top picks via ScrapeCreators (≤5 calls) ----
+        all_posts = []  # Enriched post dicts
+        post_comments = {}  # {url: [comment_list]} for Phase 5
+        seen_authors = set()
+
+        for idx in picks:
+            serpapi_result = serpapi_results[idx]
+            post_url = serpapi_result.get("link", "")
+            if not post_url:
+                continue
+
+            try:
+                enriched = await reddit_search.get_post_with_comments(post_url)
+                if enriched and enriched["post"].get("author"):
+                    post = enriched["post"]
+                    author = post["author"]
+
+                    # Skip deleted authors and deduplicate
+                    if author == "[deleted]" or author.lower() in seen_authors:
+                        continue
+                    seen_authors.add(author.lower())
+
+                    all_posts.append(post)
+
+                    # Stash comments for Phase 5 comment mining
+                    if enriched.get("comments"):
+                        post_comments[post["url"]] = enriched["comments"]
+                else:
+                    logger.info(f"Skipping post (no author from enrichment): {post_url}")
+            except Exception as e:
+                logger.warning(f"Post enrichment failed for {post_url}: {e}")
+
+        logger.info(
+            f"Enriched {len(all_posts)} posts with full content + comments "
+            f"({len(post_comments)} posts have comments)"
+        )
         await update_session(session_id, {
             "total_posts_found": len(all_posts),
             "queries_completed": len(search_queries),
@@ -735,10 +875,10 @@ async def run_discovery_pipeline(session_id: str):
                 "completed_at": datetime.utcnow().isoformat(),
                 "leads_qualified": 0,
             })
-            logger.info(f"Discovery session {session_id} completed: 0 posts found")
+            logger.info(f"Discovery session {session_id} completed: 0 posts enriched")
             return
 
-        # Extract subreddits from post results (no API calls)
+        # Extract subreddits from enriched posts (no API calls)
         subreddit_records = {}
         for post in all_posts:
             sr_name = post.get("subreddit", "")
@@ -747,26 +887,27 @@ async def run_discovery_pipeline(session_id: str):
                     record = await store_subreddit(
                         session_id, team_id, sr_name,
                         {"subscribers": 0, "description": ""},
-                        relevance_reason=f"Found in search results"
+                        relevance_reason="Found in search results"
                     )
                     if record:
                         subreddit_records[sr_name] = record
                 except Exception as e:
                     logger.warning(f"Failed to store subreddit {sr_name}: {e}")
 
-        # ---- Phase 4: Batch classify + score (1-3 Gemini calls) ----
+        # ---- Phase 3: Dedup (DB queries only) ----
+        from . import dedup
+        all_authors = [post["author"] for post in all_posts]
+        contacted_set = await dedup.batch_check_contacted(all_authors, team_id)
+        logger.info(f"Batch dedup: {len(contacted_set)} of {len(all_authors)} authors already contacted/discovered")
 
-        # Filter out already-contacted authors (DB checks only, no API calls)
-        posts_to_classify = []
-        for post in all_posts:
-            author = post["author"]
-            already_contacted = await check_already_contacted(author, team_id)
-            if not already_contacted:
-                posts_to_classify.append(post)
+        posts_to_classify = [
+            post for post in all_posts
+            if post["author"].lower().strip() not in contacted_set
+        ]
 
         logger.info(
             f"Classifying {len(posts_to_classify)} posts "
-            f"(skipped {len(all_posts) - len(posts_to_classify)} already-contacted)"
+            f"(skipped {len(all_posts) - len(posts_to_classify)} already-contacted/discovered)"
         )
 
         if not posts_to_classify:
@@ -776,10 +917,10 @@ async def run_discovery_pipeline(session_id: str):
                 "total_leads_scored": len(all_posts),
                 "leads_qualified": 0,
             })
-            logger.info(f"Discovery session {session_id} completed: all authors already contacted")
+            logger.info(f"Discovery session {session_id} completed: all authors already contacted/discovered")
             return
 
-        # Batch classify all posts (1-3 Gemini calls instead of N)
+        # ---- Phase 4: Batch classify + score (1-3 Gemini calls) ----
         logger.info(f"Starting batch classification of {len(posts_to_classify)} posts")
         classifications = await classification_service.batch_classify_posts(
             posts_to_classify, settings
@@ -792,10 +933,15 @@ async def run_discovery_pipeline(session_id: str):
             cat_dist[cat] = cat_dist.get(cat, 0) + 1
         logger.info(f"Classification results: {cat_dist} (total: {len(classifications)})")
 
-        if all((c or {}).get("category") == "not_relevant" for c in classifications):
-            logger.warning(
-                f"ALL {len(classifications)} posts classified as not_relevant! "
-                f"Business: {settings.get('businessDesc', '')[:100]}"
+        # If classification completely failed (ALL not_relevant), fall back to
+        # storing all posts as weak leads so discovery isn't a total loss
+        classification_failed = all(
+            (c or {}).get("category") == "not_relevant" for c in classifications
+        )
+        if classification_failed and len(posts_to_classify) > 5:
+            logger.error(
+                f"Classification FAILED: ALL {len(classifications)} posts are not_relevant. "
+                f"Falling back to unscored leads. Business: {settings.get('businessDesc', '')[:100]}"
             )
 
         # Score and store leads
@@ -809,6 +955,16 @@ async def run_discovery_pipeline(session_id: str):
                 break
 
             classification = classifications[i] if i < len(classifications) else {}
+
+            # If classification completely failed, treat all posts as weak leads
+            if classification_failed:
+                classification = {
+                    "relevanceScore": 50, "buyerIntent": 30,
+                    "problemAwareness": 40, "productFit": 40,
+                    "confidence": 30, "category": "weak_match",
+                    "reasoning": "Classification unavailable - stored as unscored lead",
+                }
+
             if not classification or classification.get("category") == "not_relevant":
                 continue
 
@@ -838,7 +994,7 @@ async def run_discovery_pipeline(session_id: str):
                 "discovered_subreddit_id": sr_record.get("id"),
                 "post_url": post["url"],
                 "post_title": post["title"],
-                "post_body": post["body"][:2000],
+                "post_body": post.get("body", "")[:2000],
                 "subreddit": sr_name,
                 "post_created_utc": post.get("created_utc", 0),
                 "author_username": post["author"],
@@ -921,34 +1077,29 @@ async def run_discovery_pipeline(session_id: str):
                 "leads_auto_approved": leads_approved_count,
             })
 
-        # ---- Phase 5: Comment mining on top 2 posts (1-2 SC + 1 Gemini) ----
-        MAX_COMMENT_MINING = 2
+        # ---- Phase 5: Comment mining (0 API calls + 1 Gemini) ----
+        # Comments were already fetched in Phase 2.5 — reuse them
+        MAX_COMMENT_MINING = 3
         scored_posts.sort(key=lambda x: x[1], reverse=True)
         top_posts = scored_posts[:MAX_COMMENT_MINING]
 
-        # Collect comments from top posts, then analyze in batch
-        all_comment_data = []  # (normalized_comments, post, sr_record_id)
+        all_comment_data = []  # (comments_list, post, sr_record_id)
         for post, _, sr_record_id in top_posts:
             post_url = post.get("url", "")
-            if not post_url:
-                continue
-            try:
-                comments = await reddit_search.get_post_comments(post_url)
-                if comments:
-                    normalized_comments = [reddit_search.normalize_comment(c) for c in comments]
-                    all_comment_data.append((normalized_comments, post, sr_record_id))
-            except Exception as e:
-                logger.warning(f"Comment fetch failed for {post_url}: {e}")
+            comments = post_comments.get(post_url, [])
+            if comments:
+                all_comment_data.append((comments, post, sr_record_id))
+
+        logger.info(f"Comment mining: {len(all_comment_data)} posts have pre-fetched comments")
 
         # Batch analyze all comments in a single Gemini call
         if all_comment_data:
-            # Build combined prompt for all posts' comments
             combined_comments_text = ""
-            post_boundaries = []  # (start_line, post_title)
-            for normalized_comments, post, _ in all_comment_data:
+            post_boundaries = []
+            for comments, post, _ in all_comment_data:
                 post_title = post.get("title", "")
                 combined_comments_text += f"\n--- POST: {post_title} ---\n"
-                for c in normalized_comments[:15]:
+                for c in comments[:15]:
                     author = c.get("author", "unknown")
                     body = (c.get("body") or "")[:300]
                     if author and author != "[deleted]" and body:
@@ -956,7 +1107,6 @@ async def run_discovery_pipeline(session_id: str):
                 post_boundaries.append(post_title)
 
             if combined_comments_text.strip():
-                # Single Gemini call for all comment analysis
                 try:
                     batch_comment_prompt = COMMENT_ANALYSIS_PROMPT.format(
                         post_title=" | ".join(post_boundaries),
@@ -968,7 +1118,6 @@ async def run_discovery_pipeline(session_id: str):
                         user_prompt=f"COMMENTS:\n{combined_comments_text}",
                         temperature=0.5,
                         max_tokens=800,
-                        response_mime_type="application/json",
                     )
 
                     json_str = _strip_json_fences(content)
@@ -978,8 +1127,6 @@ async def run_discovery_pipeline(session_id: str):
                         parsed = json.loads(_repair_json(json_str))
 
                     comment_leads = parsed.get("leads", [])
-
-                    # Use the first post's sr_record_id as default
                     default_sr_id = all_comment_data[0][2] if all_comment_data else None
 
                     for cl in comment_leads:
@@ -990,12 +1137,12 @@ async def run_discovery_pipeline(session_id: str):
                             continue
                         seen_authors.add(comment_author.lower())
 
-                        already_contacted = await check_already_contacted(comment_author, team_id)
+                        already_contacted = comment_author.lower().strip() in contacted_set
 
                         # Find which post this comment belongs to
-                        source_post = all_comment_data[0][1]  # default to first
-                        for nc, p, sr_id in all_comment_data:
-                            for c in nc:
+                        source_post = all_comment_data[0][1]
+                        for clist, p, sr_id in all_comment_data:
+                            for c in clist:
                                 if c.get("author", "").lower() == comment_author.lower():
                                     source_post = p
                                     default_sr_id = sr_id
@@ -1044,7 +1191,7 @@ async def run_discovery_pipeline(session_id: str):
 
         logger.info(
             f"Discovery session {session_id} completed: "
-            f"{len(all_posts)} posts found, {leads_qualified} leads qualified"
+            f"{len(all_posts)} posts enriched, {leads_qualified} leads qualified"
         )
 
     except Exception as e:

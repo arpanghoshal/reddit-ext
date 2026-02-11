@@ -269,6 +269,95 @@ async def get_post_comments(post_url: str, trim: bool = True) -> List[Dict[str, 
         return []
 
 
+async def get_post_with_comments(post_url: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch full post content AND comments via ScrapeCreators.
+    Uses /v1/reddit/post/comments which returns the full response including
+    post data and comments. Returns normalized post + comments.
+
+    Returns:
+        {"post": {url, title, body, author, subreddit, ...}, "comments": [...]}
+        or None on failure
+    """
+    api_key = _get_scrapecreators_key()
+    if not api_key:
+        logger.error("SCRAPECREATORS_API_KEY not set")
+        return None
+
+    try:
+        await asyncio.sleep(SCRAPECREATORS_DELAY)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SCRAPECREATORS_BASE_URL}/post/comments",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                params={
+                    "url": post_url,
+                    "trim": "false",  # Get full content for enrichment
+                },
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if response.status_code != 200:
+                logger.warning(
+                    f"ScrapeCreators post+comments returned {response.status_code} for {post_url}"
+                )
+                return None
+
+            data = response.json()
+
+            # Extract post data from response
+            # ScrapeCreators may return post data in various fields
+            post_data = data.get("post", data.get("submission", {}))
+            if not post_data:
+                # If no dedicated post field, try to construct from top-level fields
+                post_data = {
+                    "title": data.get("title", ""),
+                    "selftext": data.get("selftext", data.get("body", data.get("text", ""))),
+                    "author": data.get("author", data.get("author_name", "")),
+                    "subreddit": data.get("subreddit", data.get("subreddit_name", "")),
+                    "url": data.get("url", data.get("permalink", post_url)),
+                    "score": data.get("score", data.get("ups", 0)),
+                    "num_comments": data.get("num_comments", data.get("comments_count", 0)),
+                    "created_utc": data.get("created_utc", data.get("created_at", 0)),
+                }
+
+            # Normalize the post data using the existing normalize_post function
+            normalized_post = normalize_post(post_data)
+
+            # Ensure we have a valid URL
+            if not normalized_post["url"] or not normalized_post["url"].startswith("http"):
+                normalized_post["url"] = post_url
+
+            # Extract and normalize comments
+            raw_comments = data.get("comments", data.get("data", []))
+            if not isinstance(raw_comments, list):
+                raw_comments = []
+
+            normalized_comments = []
+            for c in raw_comments:
+                nc = normalize_comment(c)
+                if nc["author"] and nc["author"] != "[deleted]" and nc["body"]:
+                    normalized_comments.append(nc)
+
+            logger.info(
+                f"ScrapeCreators post+comments: {post_url} → "
+                f"author=u/{normalized_post['author']}, "
+                f"{len(normalized_comments)} comments"
+            )
+
+            return {
+                "post": normalized_post,
+                "comments": normalized_comments,
+            }
+
+    except Exception as e:
+        logger.warning(f"ScrapeCreators post+comments failed for {post_url}: {e}")
+        return None
+
+
 # ============================================================================
 # Subreddit discovery & info (via ScrapeCreators)
 # ============================================================================

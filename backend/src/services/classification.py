@@ -369,11 +369,10 @@ async def batch_classify_posts(
         batch_failed = False
         try:
             response_text = await gemini_client.generate_content(
-                system_instruction="You are a lead qualification expert. Classify Reddit posts for sales outreach relevance. Respond only with a valid JSON array.",
+                system_instruction="You are a lead qualification expert. Classify Reddit posts for sales outreach relevance. Respond ONLY with a valid JSON array, no markdown fences, no explanation.",
                 user_prompt=prompt,
                 temperature=0.3,
                 max_tokens=8000,
-                response_mime_type="application/json",
             )
 
             if not response_text:

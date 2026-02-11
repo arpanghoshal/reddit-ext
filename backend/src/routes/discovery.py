@@ -266,8 +266,19 @@ async def bulk_queue(
 
 
 # ============================================================================
-# Automation Stats
+# Stats
 # ============================================================================
+
+@router.get("/stats/past-leads")
+async def get_past_lead_stats(request: Request):
+    """Get stats on how many leads from past discovery sessions were messaged."""
+    team_id = get_current_team_id(request)
+    if not team_id:
+        raise HTTPException(status_code=401, detail="Team context required")
+
+    stats = await discovery.get_past_lead_stats(team_id)
+    return {"success": True, "data": stats}
+
 
 @router.get("/sessions/{session_id}/automation-stats")
 async def get_automation_stats(request: Request, session_id: str):
