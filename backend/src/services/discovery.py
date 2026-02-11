@@ -414,12 +414,15 @@ async def queue_lead(
 
     lead = await get_lead(lead_id, team_id)
     if not lead:
+        logger.warning(f"queue_lead: lead {lead_id} not found for team {team_id}")
         return None
 
     message = edited_message or lead.get("generated_message")
     if not message:
+        logger.info(f"queue_lead: generating message for lead {lead_id} (u/{lead['author_username']})")
         gen_result = await generate_message_for_lead(lead_id, team_id)
         if not gen_result:
+            logger.error(f"queue_lead: message generation failed for lead {lead_id}")
             return None
         message = gen_result["message"] if isinstance(gen_result, dict) else gen_result
 
@@ -438,12 +441,20 @@ async def queue_lead(
         "messageType": "outreach",
     }, team_id=team_id)
 
-    if queue_item:
-        await update_lead(lead_id, {
-            "status": "queued",
-            "queue_item_id": queue_item.get("id"),
-            "generated_message": message,
-        })
+    if not queue_item:
+        logger.warning(f"queue_lead: add_to_queue returned None for lead {lead_id}")
+        return None
+
+    # Don't update lead status if dedup blocked the queue add
+    if queue_item.get("error"):
+        logger.info(f"queue_lead: blocked for lead {lead_id}: {queue_item.get('message')}")
+        return queue_item
+
+    await update_lead(lead_id, {
+        "status": "queued",
+        "queue_item_id": queue_item.get("id"),
+        "generated_message": message,
+    })
 
     return queue_item
 
@@ -624,7 +635,7 @@ RESPOND IN VALID JSON FORMAT ONLY (no markdown):
     ]
 }}
 
-Only include commenters scoring >= 50 on relevance. Max 5 leads.
+Only include commenters scoring >= 50 on relevance. Max 15 leads.
 Exclude [deleted] users and bot-like accounts."""
 
 
@@ -687,14 +698,14 @@ async def check_already_contacted(author_username: str, team_id: str) -> bool:
 async def run_discovery_pipeline(session_id: str):
     """
     Main orchestrator. Runs as a background task.
-    Minimal-call pipeline:
+    Pipeline:
       - 1 Gemini: search strategy (5 queries)
       - 5 SerpAPI: Google search for Reddit posts
-      - 1 Gemini: pre-filter (rank by title/snippet, pick top 5)
-      - ≤5 ScrapeCreators: enrich top 5 posts (post content + comments)
+      - 1 Gemini: pre-filter (rank by title/snippet, pick top 15)
+      - ≤15 ScrapeCreators: enrich top 15 posts (post content + comments)
       - 1-3 Gemini: batch classification
-      - 1 Gemini: batch comment lead analysis
-    Total: 5 SerpAPI + ≤5 SC + 4-6 Gemini
+      - 1-2 Gemini: batch comment lead analysis (5 posts per batch)
+    Total: 5 SerpAPI + ≤15 SC + 5-8 Gemini → ~40-50 leads
     """
     try:
         # Load session
@@ -793,7 +804,7 @@ async def run_discovery_pipeline(session_id: str):
 
         # ---- Phase 2.5a: Pre-filter SerpAPI results (1 Gemini call) ----
         # Rank by title/snippet relevance so we only spend SC calls on the best posts
-        MAX_ENRICH = 5
+        MAX_ENRICH = 15
         picks = list(range(min(len(serpapi_results), MAX_ENRICH)))  # fallback: first N
 
         if len(serpapi_results) > MAX_ENRICH:
@@ -814,9 +825,13 @@ async def run_discovery_pipeline(session_id: str):
                     response_mime_type="application/json",
                 )
                 json_str = _strip_json_fences(prefilter_response)
+                logger.debug(f"Pre-filter raw response: {prefilter_response[:200]}")
+                if not json_str.strip():
+                    raise ValueError("Pre-filter returned empty response")
                 try:
                     parsed_picks = json.loads(json_str)
                 except json.JSONDecodeError:
+                    logger.warning(f"Pre-filter JSON parse failed, trying repair. Raw: {json_str[:200]}")
                     parsed_picks = json.loads(_repair_json(json_str))
 
                 raw_picks = parsed_picks.get("picks", [])
@@ -1082,9 +1097,10 @@ async def run_discovery_pipeline(session_id: str):
                 "leads_auto_approved": leads_approved_count,
             })
 
-        # ---- Phase 5: Comment mining (0 API calls + 1 Gemini) ----
+        # ---- Phase 5: Comment mining (0 API calls + 1-2 Gemini calls) ----
         # Comments were already fetched in Phase 2.5 — reuse them
-        MAX_COMMENT_MINING = 3
+        MAX_COMMENT_MINING = 10
+        COMMENT_BATCH_SIZE = 5  # Posts per Gemini call
         scored_posts.sort(key=lambda x: x[1], reverse=True)
         top_posts = scored_posts[:MAX_COMMENT_MINING]
 
@@ -1097,11 +1113,15 @@ async def run_discovery_pipeline(session_id: str):
 
         logger.info(f"Comment mining: {len(all_comment_data)} posts have pre-fetched comments")
 
-        # Batch analyze all comments in a single Gemini call
-        if all_comment_data:
+        # Process comments in batches to avoid token limits
+        for batch_start in range(0, len(all_comment_data), COMMENT_BATCH_SIZE):
+            batch = all_comment_data[batch_start:batch_start + COMMENT_BATCH_SIZE]
+            if not batch:
+                continue
+
             combined_comments_text = ""
             post_boundaries = []
-            for comments, post, _ in all_comment_data:
+            for comments, post, _ in batch:
                 post_title = post.get("title", "")
                 combined_comments_text += f"\n--- POST: {post_title} ---\n"
                 for c in comments[:15]:
@@ -1111,81 +1131,90 @@ async def run_discovery_pipeline(session_id: str):
                         combined_comments_text += f"u/{author}: {body}\n"
                 post_boundaries.append(post_title)
 
-            if combined_comments_text.strip():
+            if not combined_comments_text.strip():
+                continue
+
+            try:
+                batch_comment_prompt = COMMENT_ANALYSIS_PROMPT.format(
+                    post_title=" | ".join(post_boundaries),
+                    business_desc=settings.get("businessDesc", ""),
+                    persona=settings.get("persona", ""),
+                )
+                content = await gemini_client.generate_content(
+                    system_instruction=batch_comment_prompt,
+                    user_prompt=f"COMMENTS:\n{combined_comments_text}",
+                    temperature=0.5,
+                    max_tokens=2000,
+                    response_mime_type="application/json",
+                )
+
+                json_str = _strip_json_fences(content)
                 try:
-                    batch_comment_prompt = COMMENT_ANALYSIS_PROMPT.format(
-                        post_title=" | ".join(post_boundaries),
-                        business_desc=settings.get("businessDesc", ""),
-                        persona=settings.get("persona", ""),
-                    )
-                    content = await gemini_client.generate_content(
-                        system_instruction=batch_comment_prompt,
-                        user_prompt=f"COMMENTS:\n{combined_comments_text}",
-                        temperature=0.5,
-                        max_tokens=800,
-                    )
+                    parsed = json.loads(json_str)
+                except json.JSONDecodeError:
+                    logger.warning(f"Comment analysis JSON parse failed, trying repair. Raw: {json_str[:300]}")
+                    parsed = json.loads(_repair_json(json_str))
 
-                    json_str = _strip_json_fences(content)
-                    try:
-                        parsed = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        parsed = json.loads(_repair_json(json_str))
+                comment_leads = parsed.get("leads", [])
+                logger.info(
+                    f"Comment batch {batch_start // COMMENT_BATCH_SIZE + 1}: "
+                    f"{len(comment_leads)} leads from {len(batch)} posts"
+                )
+                default_sr_id = batch[0][2]
 
-                    comment_leads = parsed.get("leads", [])
-                    default_sr_id = all_comment_data[0][2] if all_comment_data else None
+                for cl in comment_leads:
+                    comment_author = cl.get("author", "")
+                    if not comment_author or comment_author == "[deleted]":
+                        continue
+                    if comment_author.lower() in seen_authors:
+                        continue
+                    seen_authors.add(comment_author.lower())
 
-                    for cl in comment_leads:
-                        comment_author = cl.get("author", "")
-                        if not comment_author or comment_author == "[deleted]":
-                            continue
-                        if comment_author.lower() in seen_authors:
-                            continue
-                        seen_authors.add(comment_author.lower())
+                    already_contacted = comment_author.lower().strip() in contacted_set
 
-                        already_contacted = comment_author.lower().strip() in contacted_set
+                    # Find which post this comment belongs to
+                    source_post = batch[0][1]
+                    source_sr_id = default_sr_id
+                    for clist, p, sr_id in batch:
+                        for c in clist:
+                            if c.get("author", "").lower() == comment_author.lower():
+                                source_post = p
+                                source_sr_id = sr_id
+                                break
 
-                        # Find which post this comment belongs to
-                        source_post = all_comment_data[0][1]
-                        for clist, p, sr_id in all_comment_data:
-                            for c in clist:
-                                if c.get("author", "").lower() == comment_author.lower():
-                                    source_post = p
-                                    default_sr_id = sr_id
-                                    break
+                    rel_score = cl.get("relevance_score", 50)
+                    lead_data = {
+                        "discovered_subreddit_id": source_sr_id,
+                        "post_url": source_post.get("url", ""),
+                        "post_title": source_post.get("title", ""),
+                        "post_body": source_post.get("body", "")[:2000],
+                        "subreddit": source_post.get("subreddit", ""),
+                        "post_created_utc": source_post.get("created_utc", 0),
+                        "author_username": comment_author,
+                        "source_type": "comment",
+                        "source_comment_body": cl.get("comment_excerpt", ""),
+                        "relevance_score": rel_score,
+                        "buyer_intent": cl.get("buyer_intent", 50),
+                        "problem_awareness": 50,
+                        "product_fit": 50,
+                        "confidence": 60,
+                        "classification_category": "weak_match" if rel_score >= 50 else "not_relevant",
+                        "classification_reasoning": cl.get("reason", ""),
+                        "is_qualified": rel_score >= 50,
+                        "account_quality_score": None,
+                        "engagement_score": None,
+                        "lead_score": rel_score,
+                        "lead_tier": "warm" if rel_score >= 60 else "cold",
+                        "lead_insights": [{"type": "comment_lead", "message": cl.get("reason", "")}],
+                        "status": "already_contacted" if already_contacted else "scored",
+                    }
 
-                        rel_score = cl.get("relevance_score", 50)
-                        lead_data = {
-                            "discovered_subreddit_id": default_sr_id,
-                            "post_url": source_post.get("url", ""),
-                            "post_title": source_post.get("title", ""),
-                            "post_body": source_post.get("body", "")[:2000],
-                            "subreddit": source_post.get("subreddit", ""),
-                            "post_created_utc": source_post.get("created_utc", 0),
-                            "author_username": comment_author,
-                            "source_type": "comment",
-                            "source_comment_body": cl.get("comment_excerpt", ""),
-                            "relevance_score": rel_score,
-                            "buyer_intent": cl.get("buyer_intent", 50),
-                            "problem_awareness": 50,
-                            "product_fit": 50,
-                            "confidence": 60,
-                            "classification_category": "weak_match" if rel_score >= 50 else "not_relevant",
-                            "classification_reasoning": cl.get("reason", ""),
-                            "is_qualified": rel_score >= 50,
-                            "account_quality_score": None,
-                            "engagement_score": None,
-                            "lead_score": rel_score,
-                            "lead_tier": "warm" if rel_score >= 60 else "cold",
-                            "lead_insights": [{"type": "comment_lead", "message": cl.get("reason", "")}],
-                            "status": "already_contacted" if already_contacted else "scored",
-                        }
+                    await store_lead(session_id, team_id, lead_data)
+                    if not already_contacted:
+                        leads_qualified += 1
 
-                        await store_lead(session_id, team_id, lead_data)
-                        if not already_contacted:
-                            leads_qualified += 1
-
-                except Exception as e:
-                    logger.warning(f"Batch comment analysis failed: {e}")
+            except Exception as e:
+                logger.warning(f"Comment analysis batch {batch_start // COMMENT_BATCH_SIZE + 1} failed: {e}")
 
         # ---- Phase 6: Complete ----
         await update_session(session_id, {

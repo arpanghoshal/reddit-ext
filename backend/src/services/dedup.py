@@ -12,13 +12,16 @@ logger = logging.getLogger(__name__)
 
 async def has_been_contacted(recipient_username: str, team_id: str) -> Dict[str, Any]:
     """
-    Check if a recipient has EVER been contacted by ANY account in this team.
+    Check if a recipient has EVER been contacted/messaged by ANY account in this team.
 
-    Checks (in order):
+    Used by the DM queue to prevent double-sends. Checks:
     1. contacted_recipients table (fast, indexed)
     2. dm_queue (pending/approved/sent items)
     3. dm_history (confirmed sends)
     4. conversations (established contact)
+
+    Note: Does NOT check discovered_leads — that dedup is handled
+    separately in batch_check_contacted() for the discovery pipeline.
 
     Returns:
         {"contacted": bool, "source": str|None, "details": dict|None}
@@ -107,23 +110,10 @@ async def has_been_contacted(recipient_username: str, team_id: str) -> Dict[str,
                 }
             }
 
-        # 5. Check discovered_leads (past discovery sessions)
-        result = client.table("discovered_leads").select(
-            "id, session_id, created_at"
-        ).eq("team_id", team_id).eq(
-            "author_username", username
-        ).neq("status", "dismissed").limit(1).execute()
-
-        if result.data:
-            row = result.data[0]
-            return {
-                "contacted": True,
-                "source": "discovered_leads",
-                "details": {
-                    "session_id": row.get("session_id"),
-                    "discovered_at": row.get("created_at"),
-                }
-            }
+        # Note: discovered_leads is intentionally NOT checked here.
+        # This function guards the DM queue (preventing double-sends).
+        # discovered_leads dedup is only in batch_check_contacted() for the
+        # discovery pipeline (preventing re-discovery across sessions).
 
         return {"contacted": False}
 

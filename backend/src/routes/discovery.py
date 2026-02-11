@@ -230,11 +230,21 @@ async def queue_lead(
     if not team_id:
         raise HTTPException(status_code=401, detail="Team context required")
 
-    result = await discovery.queue_lead(
-        lead_id, team_id, body.accountId, body.editedMessage
-    )
+    try:
+        result = await discovery.queue_lead(
+            lead_id, team_id, body.accountId, body.editedMessage
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"queue_lead exception for lead {lead_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to queue lead: {e}")
+
     if not result:
-        raise HTTPException(status_code=500, detail="Failed to queue lead")
+        raise HTTPException(status_code=500, detail="Failed to queue lead (no result returned)")
+
+    # Check for dedup block from add_to_queue
+    if isinstance(result, dict) and result.get("error") == "duplicate_recipient":
+        raise HTTPException(status_code=409, detail=result.get("message", "Duplicate recipient"))
 
     return {"success": True, "data": result}
 
