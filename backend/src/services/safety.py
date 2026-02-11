@@ -28,105 +28,52 @@ def get_client() -> Optional[Client]:
 
 async def check_shadowban(username: str) -> Dict[str, Any]:
     """
-    Check if a Reddit account is shadowbanned
-    Uses public Reddit JSON API to verify profile visibility
+    Check if a Reddit account is shadowbanned via ScrapeCreators API.
+    If the user profile returns no data, likely shadowbanned or suspended.
     """
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    from . import reddit_search
 
-    async with httpx.AsyncClient() as client:
-        try:
-            # Method 1: Check if profile is accessible
-            profile_url = f"https://www.reddit.com/user/{username}/about.json"
-            profile_response = await client.get(
-                profile_url,
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
+    try:
+        # Check if profile is accessible via ScrapeCreators
+        user_data = await reddit_search.get_user_about(username)
 
-            if profile_response.status_code == 404:
-                return {
-                    "isShadowbanned": True,
-                    "method": "profile_404",
-                    "details": {"message": "Profile returns 404 - likely shadowbanned or suspended"}
-                }
-
-            if profile_response.status_code == 403:
-                return {
-                    "isShadowbanned": False,
-                    "method": "profile_private",
-                    "details": {"message": "Profile is private - cannot determine shadowban status"}
-                }
-
-            if profile_response.status_code != 200:
-                return {
-                    "isShadowbanned": False,
-                    "method": "api_error",
-                    "details": {"message": f"API error: {profile_response.status_code}"}
-                }
-
-            profile_data = profile_response.json()
-
-            # Check for suspended account
-            if profile_data.get("data", {}).get("is_suspended"):
-                return {
-                    "isShadowbanned": False,
-                    "method": "suspended",
-                    "details": {"message": "Account is suspended (not shadowbanned)"}
-                }
-
-            # Method 2: Check if recent posts are visible in subreddit
-            posts_url = f"https://www.reddit.com/user/{username}/submitted.json?limit=5"
-            posts_response = await client.get(
-                posts_url,
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
-
-            if posts_response.status_code == 200:
-                posts_data = posts_response.json()
-                posts = posts_data.get("data", {}).get("children", [])
-
-                # Check if any post is visible in its subreddit
-                for post in posts[:3]:
-                    post_data = post.get("data", {})
-                    permalink = post_data.get("permalink")
-                    if not permalink:
-                        continue
-
-                    # Try to access the post directly
-                    post_url = f"https://www.reddit.com{permalink}.json"
-                    post_response = await client.get(
-                        post_url,
-                        headers={"User-Agent": user_agent},
-                        timeout=30.0
-                    )
-
-                    if post_response.status_code == 404:
-                        return {
-                            "isShadowbanned": True,
-                            "method": "post_hidden",
-                            "details": {
-                                "message": "Posts exist on profile but are hidden from subreddit",
-                                "hiddenPost": permalink
-                            }
-                        }
-
-                    # Add small delay to avoid rate limiting
-                    await asyncio.sleep(0.5)
-
+        if not user_data:
             return {
-                "isShadowbanned": False,
-                "method": "verified_clean",
-                "details": {"message": "No shadowban indicators detected"}
+                "isShadowbanned": True,
+                "method": "profile_not_found",
+                "details": {"message": "Profile not accessible - likely shadowbanned or suspended"}
             }
 
-        except Exception as e:
-            print(f"Error checking shadowban: {e}")
+        # Check for suspended account
+        if user_data.get("is_suspended"):
             return {
                 "isShadowbanned": False,
-                "method": "error",
-                "details": {"message": str(e)}
+                "method": "suspended",
+                "details": {"message": "Account is suspended (not shadowbanned)"}
             }
+
+        # Check if user has visible posts
+        posts = await reddit_search.get_user_posts(username, limit=5)
+        if not posts:
+            # No posts could mean shadowbanned or just a lurker
+            return {
+                "isShadowbanned": False,
+                "method": "no_posts",
+                "details": {"message": "No visible posts found - could be lurker or shadowbanned"}
+            }
+
+        return {
+            "isShadowbanned": False,
+            "method": "verified_clean",
+            "details": {"message": "No shadowban indicators detected"}
+        }
+
+    except Exception as e:
+        return {
+            "isShadowbanned": False,
+            "method": "error",
+            "details": {"message": str(e)}
+        }
 
 
 async def log_safety_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -6,7 +6,6 @@ Wraps ScrapeCreators API (search/discovery) + Reddit public JSON (supplementary 
 import os
 import asyncio
 import logging
-import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import httpx
@@ -14,8 +13,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com/v1/reddit"
-REDDIT_BASE_URL = "https://www.reddit.com"
-USER_AGENT = "Reddit-Automated-DM/1.0"
 REQUEST_TIMEOUT = 20.0
 
 # In-memory caches with TTL
@@ -26,11 +23,6 @@ _subreddit_info_cache: Dict[str, Dict[str, Any]] = {}
 POST_SEARCH_CACHE_TTL = 15  # minutes
 SUBREDDIT_SEARCH_CACHE_TTL = 30  # minutes
 SUBREDDIT_INFO_CACHE_TTL = 60  # minutes
-
-# Rate limiter for Reddit public JSON (45 req/min)
-_reddit_tokens = 45.0
-_reddit_last_refill = time.monotonic()
-_reddit_lock = asyncio.Lock()
 
 # Delay between ScrapeCreators calls
 SCRAPECREATORS_DELAY = 0.5  # seconds
@@ -49,22 +41,6 @@ def _evict_cache(cache: Dict[str, Dict[str, Any]], ttl_minutes: int):
     ]
     for k in expired:
         del cache[k]
-
-
-async def _reddit_rate_limit():
-    """Token bucket rate limiter for Reddit public JSON."""
-    global _reddit_tokens, _reddit_last_refill
-    async with _reddit_lock:
-        now = time.monotonic()
-        elapsed = now - _reddit_last_refill
-        _reddit_tokens = min(45.0, _reddit_tokens + elapsed * (45.0 / 60.0))
-        _reddit_last_refill = now
-        if _reddit_tokens < 1:
-            wait_time = (1 - _reddit_tokens) * (60.0 / 45.0)
-            await asyncio.sleep(wait_time)
-            _reddit_tokens = 0
-        else:
-            _reddit_tokens -= 1
 
 
 # ============================================================================
@@ -294,48 +270,72 @@ async def get_post_comments(post_url: str, trim: bool = True) -> List[Dict[str, 
 
 
 # ============================================================================
-# Reddit public JSON endpoints (no auth)
+# Subreddit discovery & info (via ScrapeCreators)
 # ============================================================================
 
 async def search_subreddits(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     """
-    Search for subreddits by keyword via Reddit public JSON.
-    GET /search.json?q={query}&type=sr
+    Discover subreddits by searching posts via ScrapeCreators and extracting
+    unique subreddit names from results. Returns subreddits where the keyword
+    is actually being discussed.
     """
+    api_key = _get_scrapecreators_key()
+    if not api_key:
+        logger.error("SCRAPECREATORS_API_KEY not set")
+        return []
+
     cache_key = f"sr_search:{query}:{limit}"
     _evict_cache(_subreddit_search_cache, SUBREDDIT_SEARCH_CACHE_TTL)
     if cache_key in _subreddit_search_cache:
         return _subreddit_search_cache[cache_key]["data"]
 
     try:
-        await _reddit_rate_limit()
+        await asyncio.sleep(SCRAPECREATORS_DELAY)
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{REDDIT_BASE_URL}/search.json",
-                headers={"User-Agent": USER_AGENT},
-                params={"q": query, "type": "sr", "limit": limit},
+                f"{SCRAPECREATORS_BASE_URL}/search",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                params={"query": query, "sort": "relevance"},
                 timeout=REQUEST_TIMEOUT,
-                follow_redirects=True,
             )
 
             if response.status_code != 200:
-                logger.warning(f"Reddit subreddit search returned {response.status_code} for '{query}'")
+                logger.warning(f"ScrapeCreators search returned {response.status_code} for subreddit discovery '{query}'")
                 return []
 
             data = response.json()
-            children = data.get("data", {}).get("children", [])
+            posts = data.get("posts", data.get("data", []))
+            if not isinstance(posts, list):
+                posts = []
 
+            # Extract unique subreddit names from post results
+            seen = set()
             subreddits = []
-            for child in children:
-                sr = child.get("data", {})
-                subreddits.append({
-                    "name": sr.get("display_name", ""),
-                    "subscribers": sr.get("subscribers", 0),
-                    "description": sr.get("public_description", ""),
-                    "url": sr.get("url", ""),
-                    "over18": sr.get("over18", False),
-                    "created_utc": sr.get("created_utc", 0),
-                })
+            for post in posts:
+                sr_name = (
+                    post.get("subreddit")
+                    or post.get("subreddit_name")
+                    or ""
+                )
+                if isinstance(sr_name, dict):
+                    sr_name = sr_name.get("text", sr_name.get("name", ""))
+                if sr_name.startswith("r/"):
+                    sr_name = sr_name[2:]
+                if sr_name and sr_name.lower() not in seen:
+                    seen.add(sr_name.lower())
+                    subreddits.append({
+                        "name": sr_name,
+                        "subscribers": 0,
+                        "description": "",
+                        "url": f"/r/{sr_name}/",
+                        "over18": False,
+                        "created_utc": 0,
+                    })
+                    if len(subreddits) >= limit:
+                        break
 
             _subreddit_search_cache[cache_key] = {
                 "data": subreddits,
@@ -344,43 +344,65 @@ async def search_subreddits(query: str, limit: int = 10) -> List[Dict[str, Any]]
             return subreddits
 
     except Exception as e:
-        logger.warning(f"Reddit subreddit search failed for '{query}': {e}")
+        logger.warning(f"ScrapeCreators subreddit discovery failed for '{query}': {e}")
         return []
 
 
 async def get_subreddit_info(subreddit: str) -> Optional[Dict[str, Any]]:
     """
-    Get subreddit metadata via Reddit public JSON.
-    GET /r/{subreddit}/about.json
+    Validate a subreddit exists and get basic info via ScrapeCreators.
+    Fetches a small number of posts — if any return, the subreddit is valid.
     """
+    api_key = _get_scrapecreators_key()
+    if not api_key:
+        logger.error("SCRAPECREATORS_API_KEY not set")
+        return None
+
     cache_key = subreddit.lower()
     _evict_cache(_subreddit_info_cache, SUBREDDIT_INFO_CACHE_TTL)
     if cache_key in _subreddit_info_cache:
         return _subreddit_info_cache[cache_key]["data"]
 
     try:
-        await _reddit_rate_limit()
+        await asyncio.sleep(SCRAPECREATORS_DELAY)
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{REDDIT_BASE_URL}/r/{subreddit}/about.json",
-                headers={"User-Agent": USER_AGENT},
+                f"{SCRAPECREATORS_BASE_URL}/subreddit",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                params={
+                    "subreddit": subreddit,
+                    "sort": "hot",
+                    "trim": "true",
+                },
                 timeout=REQUEST_TIMEOUT,
-                follow_redirects=True,
             )
 
             if response.status_code != 200:
-                logger.warning(f"Reddit subreddit info returned {response.status_code} for r/{subreddit}")
+                logger.warning(f"ScrapeCreators subreddit info returned {response.status_code} for r/{subreddit}")
                 return None
 
-            data = response.json().get("data", {})
+            data = response.json()
+            posts = data.get("posts", data.get("data", []))
+
             info = {
-                "name": data.get("display_name", subreddit),
-                "subscribers": data.get("subscribers", 0),
-                "description": data.get("public_description", ""),
-                "title": data.get("title", ""),
-                "over18": data.get("over18", False),
-                "created_utc": data.get("created_utc", 0),
+                "name": subreddit,
+                "subscribers": 0,
+                "description": "",
+                "title": subreddit,
+                "over18": False,
+                "created_utc": 0,
             }
+
+            # Try to extract subscriber count from response metadata
+            if isinstance(data.get("subreddit"), dict):
+                sr_meta = data["subreddit"]
+                info["subscribers"] = sr_meta.get("subscribers", 0)
+                info["description"] = sr_meta.get("public_description", sr_meta.get("description", ""))
+                info["title"] = sr_meta.get("title", subreddit)
+                info["over18"] = sr_meta.get("over18", False)
 
             _subreddit_info_cache[cache_key] = {
                 "data": info,
@@ -389,8 +411,119 @@ async def get_subreddit_info(subreddit: str) -> Optional[Dict[str, Any]]:
             return info
 
     except Exception as e:
-        logger.warning(f"Reddit subreddit info failed for r/{subreddit}: {e}")
+        logger.warning(f"ScrapeCreators subreddit info failed for r/{subreddit}: {e}")
         return None
+
+
+# ============================================================================
+# User data (via ScrapeCreators)
+# ============================================================================
+
+async def get_user_about(username: str) -> Optional[Dict[str, Any]]:
+    """
+    Get Reddit user profile data via ScrapeCreators API.
+    GET /v1/reddit/user
+    """
+    api_key = _get_scrapecreators_key()
+    if not api_key:
+        logger.error("SCRAPECREATORS_API_KEY not set")
+        return None
+
+    try:
+        await asyncio.sleep(SCRAPECREATORS_DELAY)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SCRAPECREATORS_BASE_URL}/user",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                params={"username": username},
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if response.status_code != 200:
+                logger.warning(f"ScrapeCreators user about returned {response.status_code} for u/{username}")
+                return None
+
+            data = response.json()
+            return data.get("user", data.get("data", data))
+
+    except Exception as e:
+        logger.warning(f"ScrapeCreators user about failed for u/{username}: {e}")
+        return None
+
+
+async def get_user_posts(username: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """
+    Get a user's recent posts via ScrapeCreators API.
+    GET /v1/reddit/user/posts
+    """
+    api_key = _get_scrapecreators_key()
+    if not api_key:
+        logger.error("SCRAPECREATORS_API_KEY not set")
+        return []
+
+    try:
+        await asyncio.sleep(SCRAPECREATORS_DELAY)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SCRAPECREATORS_BASE_URL}/user/posts",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                params={"username": username},
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if response.status_code != 200:
+                logger.warning(f"ScrapeCreators user posts returned {response.status_code} for u/{username}")
+                return []
+
+            data = response.json()
+            posts = data.get("posts", data.get("data", []))
+            return posts[:limit] if isinstance(posts, list) else []
+
+    except Exception as e:
+        logger.warning(f"ScrapeCreators user posts failed for u/{username}: {e}")
+        return []
+
+
+async def get_user_comments(username: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """
+    Get a user's recent comments via ScrapeCreators API.
+    GET /v1/reddit/user/comments
+    """
+    api_key = _get_scrapecreators_key()
+    if not api_key:
+        logger.error("SCRAPECREATORS_API_KEY not set")
+        return []
+
+    try:
+        await asyncio.sleep(SCRAPECREATORS_DELAY)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SCRAPECREATORS_BASE_URL}/user/comments",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                params={"username": username},
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if response.status_code != 200:
+                logger.warning(f"ScrapeCreators user comments returned {response.status_code} for u/{username}")
+                return []
+
+            data = response.json()
+            comments = data.get("comments", data.get("data", []))
+            return comments[:limit] if isinstance(comments, list) else []
+
+    except Exception as e:
+        logger.warning(f"ScrapeCreators user comments failed for u/{username}: {e}")
+        return []
 
 
 # ============================================================================

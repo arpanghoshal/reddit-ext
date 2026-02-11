@@ -36,77 +36,39 @@ def get_client() -> Optional[Client]:
 
 
 async def fetch_reddit_user_data(username: str) -> Dict[str, Any]:
-    """Fetch user data from Reddit's public JSON API"""
-    user_agent = "Reddit-Automated-DM/1.0"
+    """Fetch user data via ScrapeCreators API"""
+    from . import reddit_search
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"https://www.reddit.com/user/{username}/about.json",
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
-
-            if response.status_code == 404:
-                return {"error": "not_found", "message": "User not found or suspended"}
-
-            if response.status_code == 403:
-                return {"error": "forbidden", "message": "Profile is private or blocked"}
-
-            if response.status_code != 200:
-                return {"error": "api_error", "message": f"Reddit API error: {response.status_code}"}
-
-            data = response.json()
-            return data.get("data", {})
-        except Exception as e:
-            print(f"Error fetching Reddit user data: {e}")
-            return {"error": "fetch_error", "message": str(e)}
+    try:
+        data = await reddit_search.get_user_about(username)
+        if not data:
+            return {"error": "not_found", "message": "User not found or API error"}
+        return data
+    except Exception as e:
+        logger.warning(f"Error fetching Reddit user data for u/{username}: {e}")
+        return {"error": "fetch_error", "message": str(e)}
 
 
 async def fetch_user_posts(username: str, limit: int = 25) -> List[Dict[str, Any]]:
-    """Fetch user's recent posts for analysis"""
-    user_agent = "Reddit-Automated-DM/1.0"
+    """Fetch user's recent posts via ScrapeCreators API"""
+    from . import reddit_search
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"https://www.reddit.com/user/{username}/submitted.json?limit={limit}",
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
-
-            if response.status_code != 200:
-                return []
-
-            data = response.json()
-            children = data.get("data", {}).get("children", [])
-            return [c.get("data", {}) for c in children]
-        except Exception as e:
-            print(f"Error fetching user posts: {e}")
-            return []
+    try:
+        return await reddit_search.get_user_posts(username, limit=limit)
+    except Exception as e:
+        logger.warning(f"Error fetching user posts for u/{username}: {e}")
+        return []
 
 
 async def fetch_user_comments(username: str, limit: int = 25) -> List[Dict[str, Any]]:
-    """Fetch user's recent comments for analysis"""
-    user_agent = "Reddit-Automated-DM/1.0"
+    """Fetch user's recent comments via ScrapeCreators API"""
+    from . import reddit_search
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"https://www.reddit.com/user/{username}/comments.json?limit={limit}",
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
-
-            if response.status_code != 200:
-                return []
-
-            data = response.json()
-            children = data.get("data", {}).get("children", [])
-            return [c.get("data", {}) for c in children]
-        except Exception as e:
-            print(f"Error fetching user comments: {e}")
-            return []
+    try:
+        return await reddit_search.get_user_comments(username, limit=limit)
+    except Exception as e:
+        logger.warning(f"Error fetching user comments for u/{username}: {e}")
+        return []
 
 
 async def get_cached_qualification(username: str) -> Optional[Dict[str, Any]]:

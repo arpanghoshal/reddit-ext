@@ -733,17 +733,17 @@ async def run_discovery_pipeline(session_id: str):
         # Limit total subreddits
         subreddit_names = list(subreddit_names)[:MAX_SUBREDDITS]
 
-        # Store subreddits with metadata
+        # Store subreddits with metadata (info fetch may fail due to Reddit 403)
         subreddit_records = {}
         for sr_name in subreddit_names:
             info = await reddit_search.get_subreddit_info(sr_name)
-            if info:
-                record = await store_subreddit(
-                    session_id, team_id, sr_name, info,
-                    relevance_reason=f"Matches business context: {settings.get('businessDesc', '')[:100]}"
-                )
-                if record:
-                    subreddit_records[sr_name] = record
+            # Store even if info is missing — the subreddit is still searchable via ScrapeCreators
+            record = await store_subreddit(
+                session_id, team_id, sr_name, info or {"subscribers": 0, "description": ""},
+                relevance_reason=f"Matches business context: {settings.get('businessDesc', '')[:100]}"
+            )
+            if record:
+                subreddit_records[sr_name] = record
 
         # ---- Phase 3: Search posts ----
         await update_session(session_id, {"status": "scoring"})

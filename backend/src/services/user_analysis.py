@@ -67,49 +67,25 @@ def get_client() -> Optional[Client]:
 
 
 async def fetch_user_posts(username: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """Fetch user's recent posts"""
-    user_agent = "Reddit-Automated-DM/1.0"
+    """Fetch user's recent posts via ScrapeCreators API"""
+    from . import reddit_search
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"https://www.reddit.com/user/{username}/submitted.json?limit={limit}",
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
-
-            if response.status_code != 200:
-                return []
-
-            data = response.json()
-            children = data.get("data", {}).get("children", [])
-            return [c.get("data", {}) for c in children]
-        except Exception as e:
-            print(f"Error fetching user posts: {e}")
-            return []
+    try:
+        return await reddit_search.get_user_posts(username, limit=limit)
+    except Exception as e:
+        logger.warning(f"Error fetching user posts for u/{username}: {e}")
+        return []
 
 
 async def fetch_user_comments(username: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """Fetch user's recent comments"""
-    user_agent = "Reddit-Automated-DM/1.0"
+    """Fetch user's recent comments via ScrapeCreators API"""
+    from . import reddit_search
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"https://www.reddit.com/user/{username}/comments.json?limit={limit}",
-                headers={"User-Agent": user_agent},
-                timeout=30.0
-            )
-
-            if response.status_code != 200:
-                return []
-
-            data = response.json()
-            children = data.get("data", {}).get("children", [])
-            return [c.get("data", {}) for c in children]
-        except Exception as e:
-            print(f"Error fetching user comments: {e}")
-            return []
+    try:
+        return await reddit_search.get_user_comments(username, limit=limit)
+    except Exception as e:
+        logger.warning(f"Error fetching user comments for u/{username}: {e}")
+        return []
 
 
 def extract_interests(posts: List[Dict], comments: List[Dict]) -> List[Dict[str, Any]]:

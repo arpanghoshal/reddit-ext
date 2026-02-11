@@ -1,33 +1,24 @@
 """
 Reddit Post Comments Fetcher
-Fetches and formats comments from Reddit's public JSON API for use in LLM prompts.
+Fetches and formats comments via ScrapeCreators API for use in LLM prompts.
 """
 
 import re
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-import httpx
+
+from . import reddit_search
 
 logger = logging.getLogger(__name__)
 
 MAX_TOP_LEVEL_COMMENTS = 10
 MAX_COMMENT_BODY_LENGTH = 300
 MAX_TOTAL_COMMENTS_CHARS = 2000
-USER_AGENT = "Reddit-Automated-DM/1.0"
-REQUEST_TIMEOUT = 15.0
 
-# In-memory cache: {post_id: {"data": [...], "fetched_at": datetime}}
+# In-memory cache: {post_url: {"data": [...], "fetched_at": datetime}}
 _comment_cache: Dict[str, Dict[str, Any]] = {}
 CACHE_TTL_MINUTES = 60
-
-
-def extract_post_id(url: str) -> Optional[str]:
-    """Extract the Reddit post ID from a post URL."""
-    if not url:
-        return None
-    match = re.search(r'/comments/([a-zA-Z0-9]+)', url)
-    return match.group(1) if match else None
 
 
 def _evict_expired_cache():
@@ -46,7 +37,7 @@ async def fetch_post_comments(
     max_comments: int = MAX_TOP_LEVEL_COMMENTS
 ) -> List[Dict[str, Any]]:
     """
-    Fetch top-level comments for a Reddit post.
+    Fetch top-level comments for a Reddit post via ScrapeCreators.
 
     Args:
         post_url: Full Reddit post URL
@@ -55,66 +46,49 @@ async def fetch_post_comments(
     Returns:
         List of comment dicts with {body, author, score}
     """
-    post_id = extract_post_id(post_url)
-    if not post_id:
+    if not post_url:
         return []
 
     # Check cache
     _evict_expired_cache()
-    if post_id in _comment_cache:
-        return _comment_cache[post_id]["data"]
+    cache_key = post_url
+    if cache_key in _comment_cache:
+        return _comment_cache[cache_key]["data"]
 
     try:
-        api_url = f"https://www.reddit.com/comments/{post_id}.json?sort=top&limit={max_comments}"
+        raw_comments = await reddit_search.get_post_comments(post_url)
+        if not raw_comments:
+            return []
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                api_url,
-                headers={"User-Agent": USER_AGENT},
-                timeout=REQUEST_TIMEOUT,
-                follow_redirects=True
-            )
+        comments = []
+        for c in raw_comments:
+            normalized = reddit_search.normalize_comment(c)
+            body = (normalized.get("body") or "").strip()
+            author = normalized.get("author", "")
+            if not body or body == "[deleted]" or body == "[removed]":
+                continue
+            if not author or author == "[deleted]":
+                continue
+            comments.append({
+                "body": body,
+                "author": author,
+                "score": normalized.get("score", 0),
+            })
 
-            if response.status_code != 200:
-                logger.warning(f"Reddit API returned {response.status_code} for post {post_id}")
-                return []
+        # Sort by score descending
+        comments.sort(key=lambda x: x["score"], reverse=True)
+        comments = comments[:max_comments]
 
-            data = response.json()
+        # Cache
+        _comment_cache[cache_key] = {
+            "data": comments,
+            "fetched_at": datetime.utcnow(),
+        }
 
-            # Reddit returns [post_listing, comments_listing]
-            if not isinstance(data, list) or len(data) < 2:
-                return []
-
-            comments_listing = data[1].get("data", {}).get("children", [])
-
-            comments = []
-            for child in comments_listing:
-                if child.get("kind") != "t1":
-                    continue
-                c = child.get("data", {})
-                body = (c.get("body") or "").strip()
-                if not body or body == "[deleted]" or body == "[removed]":
-                    continue
-                comments.append({
-                    "body": body,
-                    "author": c.get("author", "[deleted]"),
-                    "score": c.get("score", 0)
-                })
-
-            # Sort by score descending
-            comments.sort(key=lambda x: x["score"], reverse=True)
-            comments = comments[:max_comments]
-
-            # Cache
-            _comment_cache[post_id] = {
-                "data": comments,
-                "fetched_at": datetime.utcnow()
-            }
-
-            return comments
+        return comments
 
     except Exception as e:
-        logger.warning(f"Failed to fetch comments for post {post_id}: {e}")
+        logger.warning(f"Failed to fetch comments for {post_url}: {e}")
         return []
 
 
