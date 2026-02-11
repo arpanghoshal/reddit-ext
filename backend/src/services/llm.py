@@ -181,7 +181,6 @@ Write a DM to this person. Use everything you know about them. Make it impossibl
         system_instruction=system_prompt,
         user_prompt=user_prompt,
         temperature=0.85,
-        max_tokens=300,
     )
 
     return _parse_message_response(result)
@@ -344,7 +343,6 @@ Write your next reply:"""
         system_instruction=system_prompt,
         user_prompt=user_prompt,
         temperature=0.7,
-        max_tokens=200,
     )
 
     return _clean_message(result)
@@ -433,7 +431,6 @@ Output ONLY the message, nothing else."""
         system_instruction=system_prompt,
         user_prompt=user_prompt,
         temperature=0.7,
-        max_tokens=150,
     )
 
     return _clean_message(result)

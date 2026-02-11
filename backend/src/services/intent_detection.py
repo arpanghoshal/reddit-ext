@@ -226,7 +226,6 @@ Classify the intent:"""
             system_instruction=system_prompt,
             user_prompt=user_prompt,
             temperature=0.3,
-            max_tokens=200,
         )
 
         import json

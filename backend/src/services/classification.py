@@ -221,7 +221,6 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
         system_instruction=system_instruction,
         user_prompt=prompt,
         temperature=0.3,
-        max_tokens=500,
     )
 
     if not response_text:
@@ -372,7 +371,6 @@ async def batch_classify_posts(
                 system_instruction="You are a lead qualification expert. Classify Reddit posts for sales outreach relevance. Respond ONLY with a valid JSON array, no markdown fences, no explanation.",
                 user_prompt=prompt,
                 temperature=0.3,
-                max_tokens=8000,
             )
 
             if not response_text:

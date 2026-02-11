@@ -558,7 +558,6 @@ Insight Types: {', '.join(settings.get('insightTypes', []))}"""
                 system_instruction=STRATEGY_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 temperature=0.7,
-                max_tokens=1000,
                 response_mime_type="application/json",
             )
 
@@ -671,7 +670,6 @@ async def identify_comment_leads(
             system_instruction=prompt,
             user_prompt=f"COMMENTS:\n{comments_text}",
             temperature=0.5,
-            max_tokens=800,
             response_mime_type="application/json",
         )
 
@@ -828,7 +826,6 @@ async def run_discovery_pipeline(session_id: str):
                     ),
                     user_prompt=f"RESULTS:\n{listing}",
                     temperature=0.3,
-                    max_tokens=200,
                     response_mime_type="application/json",
                 )
                 json_str = _strip_json_fences(prefilter_response)
@@ -1151,7 +1148,6 @@ async def run_discovery_pipeline(session_id: str):
                     system_instruction=batch_comment_prompt,
                     user_prompt=f"COMMENTS:\n{combined_comments_text}",
                     temperature=0.5,
-                    max_tokens=2000,
                     response_mime_type="application/json",
                 )
 
