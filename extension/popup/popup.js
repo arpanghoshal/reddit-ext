@@ -36,21 +36,45 @@ async function checkAuthState() {
         await loadStats();
         await checkConnection();
     } else {
-        // No local auth — try to sync directly from an open dashboard tab.
-        // This bypasses the window.postMessage bridge entirely.
-        try {
-            const syncResult = await chrome.runtime.sendMessage({ action: 'SYNC_FROM_DASHBOARD' });
-            if (syncResult && syncResult.success) {
-                showMainSection(syncResult.email);
-                populateTeamSelector(syncResult.teams || [], syncResult.teamId);
-                await loadStats();
-                await checkConnection();
-                return;
+        // No local auth — try to sync from an open dashboard tab with retries
+        setSyncStatus('Checking for dashboard session...');
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const syncResult = await chrome.runtime.sendMessage({ action: 'SYNC_FROM_DASHBOARD' });
+                console.log(`[Popup] SYNC_FROM_DASHBOARD attempt ${attempt + 1}:`, syncResult);
+                if (syncResult && syncResult.success) {
+                    setSyncStatus('');
+                    showMainSection(syncResult.email);
+                    populateTeamSelector(syncResult.teams || [], syncResult.teamId);
+                    await loadStats();
+                    await checkConnection();
+                    return;
+                }
+                // Sync returned but wasn't successful — log the reason
+                console.warn(`[Popup] Sync attempt ${attempt + 1} failed:`, syncResult?.error || 'unknown');
+                setSyncStatus(syncResult?.error || 'Sync failed, retrying...');
+            } catch (err) {
+                console.warn(`[Popup] Sync attempt ${attempt + 1} error:`, err.message);
+                setSyncStatus('Connecting to extension...');
             }
-        } catch {
-            // Sync not available, fall through to login
+            // Wait before retrying
+            if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
         }
+
+        setSyncStatus('');
         showLoginSection();
+    }
+}
+
+function setSyncStatus(msg) {
+    const el = document.getElementById('sync-status');
+    if (!el) return;
+    if (msg) {
+        el.textContent = msg;
+        el.style.display = 'block';
+    } else {
+        el.style.display = 'none';
     }
 }
 

@@ -1232,6 +1232,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         'http://localhost:3000/*'
                     ]
                 });
+                console.log('[Sync] Found dashboard tabs:', dashTabs.length, dashTabs.map(t => t.url));
                 if (!dashTabs.length) {
                     sendResponse({ success: false, error: 'No dashboard tab open' });
                     return;
@@ -1239,30 +1240,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const tabId = dashTabs[0].id;
 
                 // Execute in the page's MAIN world to access its localStorage
+                console.log('[Sync] Executing script in tab', tabId);
                 const results = await chrome.scripting.executeScript({
                     target: { tabId },
                     world: 'MAIN',
                     func: () => {
                         try {
                             // Find the Supabase auth key (sb-<ref>-auth-token)
-                            const authKey = Object.keys(localStorage).find(
+                            const allKeys = Object.keys(localStorage);
+                            const authKey = allKeys.find(
                                 k => k.startsWith('sb-') && k.endsWith('-auth-token')
                             );
-                            if (!authKey) return null;
+                            if (!authKey) return { error: 'no_auth_key', keys: allKeys.filter(k => k.startsWith('sb-')).slice(0, 5) };
                             const raw = localStorage.getItem(authKey);
-                            if (!raw) return null;
+                            if (!raw) return { error: 'empty_value' };
                             const parsed = JSON.parse(raw);
                             const currentTeamId = localStorage.getItem('currentTeamId');
                             return { session: parsed, currentTeamId };
-                        } catch {
-                            return null;
+                        } catch (e) {
+                            return { error: 'parse_error', message: e.message };
                         }
                     }
                 });
 
                 const data = results?.[0]?.result;
-                if (!data || !data.session) {
-                    sendResponse({ success: false, error: 'No session in dashboard' });
+                console.log('[Sync] Script result:', data?.error || 'has session', data?.session ? 'token:' + !!data.session.access_token : '');
+                if (!data || data.error || !data.session) {
+                    sendResponse({ success: false, error: data?.error || 'No session in dashboard' });
                     return;
                 }
 
