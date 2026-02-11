@@ -1,11 +1,11 @@
 // API Client for Reddit Automated DM Backend
 // All API calls go through the backend server
 
-// Default timeout for API requests (5 seconds - fast fail when backend is down)
-const DEFAULT_TIMEOUT = 5000;
+// Default timeout for API requests (15 seconds - allows for Railway cold starts)
+const DEFAULT_TIMEOUT = 15000;
 
-// Maximum retries for failed requests (reduced for faster fail when backend is down)
-const MAX_RETRIES = 1;
+// Maximum retries for failed requests
+const MAX_RETRIES = 2;
 
 // Retry delay base (exponential backoff)
 const RETRY_DELAY_BASE = 1000;

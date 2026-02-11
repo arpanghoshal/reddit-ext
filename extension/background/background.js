@@ -1557,6 +1557,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 const REPLY_QUEUE_ALARM_NAME = 'reply-queue-poll';
 const REPLY_QUEUE_POLL_INTERVAL_MINUTES = 0.25; // 15 seconds (minimum chrome.alarms supports ~0.08 min in MV3 dev)
 let replyQueueProcessing = false;
+let replyQueueConsecutiveFailures = 0;
+let replyQueuePollSkips = 0;
 
 // Handle alarm events for reply queue polling
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -1564,6 +1566,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
     if (replyQueueProcessing) {
         console.log('Reply queue: already processing, skipping poll');
+        return;
+    }
+
+    // Backoff: skip polls when backend is repeatedly failing
+    if (replyQueuePollSkips > 0) {
+        replyQueuePollSkips--;
+        console.log(`Reply queue: backing off, skipping poll (${replyQueuePollSkips} skips remaining)`);
         return;
     }
 
@@ -1584,6 +1593,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
     try {
         const nextReply = await api.getNextReplyToSend();
+        replyQueueConsecutiveFailures = 0;
 
         if (nextReply) {
             console.log('Found approved reply to send:', nextReply.id);
@@ -1592,8 +1602,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             replyQueueProcessing = false;
         }
     } catch (err) {
-        console.error('Reply queue poll error:', err);
+        replyQueueConsecutiveFailures++;
         replyQueueProcessing = false;
+
+        // Exponential backoff: skip future polls based on consecutive failures
+        if (replyQueueConsecutiveFailures >= 6) {
+            replyQueuePollSkips = 3; // ~60s effective interval
+        } else if (replyQueueConsecutiveFailures >= 3) {
+            replyQueuePollSkips = 1; // ~30s effective interval
+        }
+
+        if (replyQueueConsecutiveFailures >= 5) {
+            console.error(`Reply queue poll error (${replyQueueConsecutiveFailures} consecutive failures):`, err.message);
+        } else {
+            console.warn(`Reply queue poll error (${replyQueueConsecutiveFailures}):`, err.message);
+        }
     }
 });
 
