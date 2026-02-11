@@ -3,11 +3,11 @@ import { Plus, RefreshCw, Shield, AlertTriangle, Trash2, Settings } from 'lucide
 import * as api from '../api/client';
 
 const STATUS_COLORS = {
-  active: 'bg-green-100 text-green-800',
-  warming_up: 'bg-yellow-100 text-yellow-800',
-  paused: 'bg-gray-100 text-gray-800',
-  shadowbanned: 'bg-red-100 text-red-800',
-  suspended: 'bg-red-200 text-red-900'
+  active: 'bg-green-500/15 text-green-400',
+  warming_up: 'bg-yellow-500/15 text-yellow-400',
+  paused: 'bg-gray-500/15 text-gray-400',
+  shadowbanned: 'bg-red-500/15 text-red-400',
+  suspended: 'bg-red-500/20 text-red-400'
 };
 
 function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
@@ -55,17 +55,17 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
     : 0;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm p-6">
+    <div className="bg-[#141416] rounded-xl p-6">
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <h3 className="font-semibold text-lg">u/{account.username}</h3>
+            <h3 className="font-semibold text-lg text-white">u/{account.username}</h3>
             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[account.status]}`}>
               {account.status}
             </span>
           </div>
           {account.displayName && account.displayName !== account.username && (
-            <p className="text-sm text-gray-500">{account.displayName}</p>
+            <p className="text-sm text-[#71717a]">{account.displayName}</p>
           )}
         </div>
 
@@ -73,7 +73,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
           <button
             onClick={handleCheckShadowban}
             disabled={checking}
-            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+            className="p-2 text-[#52525b] hover:text-[#a1a1aa] hover:bg-[#1e1e24] rounded-lg"
             title="Check shadowban"
           >
             {checking ? (
@@ -84,7 +84,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
           </button>
           <button
             onClick={() => onDelete(account.id)}
-            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+            className="p-2 text-red-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg"
             title="Delete account"
           >
             <Trash2 size={18} />
@@ -95,12 +95,12 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
       {/* Daily Progress */}
       <div className="mt-4">
         <div className="flex items-center justify-between text-sm mb-1">
-          <span className="text-gray-500">Daily DMs</span>
-          <span className="font-medium">
+          <span className="text-[#71717a]">Daily DMs</span>
+          <span className="font-medium text-white">
             {account.currentDailyCount} / {account.effectiveDailyLimit}
           </span>
         </div>
-        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-2 bg-[#1e1e24] rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${
               progressPercent >= 90 ? 'bg-red-500' :
@@ -116,11 +116,11 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
         <div className="flex items-center gap-2 text-sm">
           {account.warmupMode ? (
             <>
-              <AlertTriangle size={14} className="text-yellow-600" />
-              <span className="text-yellow-600">Warmup mode active</span>
+              <AlertTriangle size={14} className="text-yellow-400" />
+              <span className="text-yellow-400">Warmup mode active</span>
             </>
           ) : (
-            <span className="text-green-600 font-medium">Fully warmed up</span>
+            <span className="text-green-400 font-medium">Fully warmed up</span>
           )}
         </div>
         <button
@@ -128,8 +128,8 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
           disabled={saving}
           className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
             account.warmupMode
-              ? 'bg-green-100 text-green-700 hover:bg-green-200'
-              : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+              ? 'bg-green-500/15 text-green-400 hover:bg-green-500/25'
+              : 'bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25'
           }`}
         >
           {saving ? '...' : account.warmupMode ? 'Mark Warmed Up' : 'Set Warming Up'}
@@ -137,9 +137,9 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
       </div>
 
       {/* Stats */}
-      <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-4 text-sm">
+      <div className="mt-4 pt-4 border-t border-[#23232a] grid grid-cols-2 gap-4 text-sm">
         <div>
-          <span className="text-gray-500">Daily Limit</span>
+          <span className="text-[#71717a]">Daily Limit</span>
           {editing ? (
             <div className="flex items-center gap-1 mt-1">
               <input
@@ -148,7 +148,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
                 onChange={(e) => setEditDailyLimit(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
                 min="1"
                 max="50"
-                className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+                className="w-16 px-2 py-1 bg-[#1e1e24] border border-[#23232a] rounded text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
               />
               <button
                 onClick={handleSaveDailyLimit}
@@ -159,20 +159,20 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
               </button>
               <button
                 onClick={() => { setEditing(false); setEditDailyLimit(account.dailyLimit); }}
-                className="px-2 py-1 text-gray-400 text-xs hover:text-gray-600"
+                className="px-2 py-1 text-[#52525b] text-xs hover:text-[#a1a1aa]"
               >
                 Cancel
               </button>
             </div>
           ) : (
-            <p className="font-medium cursor-pointer hover:text-blue-500" onClick={() => setEditing(true)}>
-              {account.dailyLimit} <Settings size={12} className="inline text-gray-400" />
+            <p className="font-medium text-white cursor-pointer hover:text-[#ff4500]" onClick={() => setEditing(true)}>
+              {account.dailyLimit} <Settings size={12} className="inline text-[#52525b]" />
             </p>
           )}
         </div>
         <div>
-          <span className="text-gray-500">Last DM</span>
-          <p className="font-medium">
+          <span className="text-[#71717a]">Last DM</span>
+          <p className="font-medium text-white">
             {account.lastDmAt
               ? new Date(account.lastDmAt).toLocaleTimeString()
               : 'Never'}
@@ -182,7 +182,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
 
       {/* Shadowban Warning */}
       {account.isShadowbanned && (
-        <div className="mt-4 p-3 bg-red-50 rounded-lg flex items-center gap-2 text-red-700">
+        <div className="mt-4 p-3 bg-red-500/10 rounded-lg flex items-center gap-2 text-red-400">
           <AlertTriangle size={18} />
           <span className="text-sm font-medium">Shadowban detected!</span>
         </div>
@@ -264,13 +264,13 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4">Add Reddit Account</h2>
+      <div className="bg-[#141416] rounded-xl border border-[#23232a] p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold text-white mb-4">Add Reddit Account</h2>
 
         {/* Capture from Browser */}
-        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <p className="text-sm font-medium text-blue-800 mb-2">Quick Add (Recommended)</p>
-          <p className="text-xs text-blue-600 mb-3">
+        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+          <p className="text-sm font-medium text-blue-400 mb-2">Quick Add (Recommended)</p>
+          <p className="text-xs text-blue-400 mb-3">
             Log into the Reddit account you want to add, then click below. The extension will automatically capture the session cookies.
           </p>
           <button
@@ -281,22 +281,22 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
             {capturing ? 'Capturing...' : 'Capture from Browser'}
           </button>
           {captureStatus && (
-            <p className="text-xs text-blue-700 mt-2">{captureStatus}</p>
+            <p className="text-xs text-blue-400 mt-2">{captureStatus}</p>
           )}
         </div>
 
         <div className="relative mb-4">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-200" />
+            <div className="w-full border-t border-[#23232a]" />
           </div>
           <div className="relative flex justify-center text-xs">
-            <span className="px-2 bg-white text-gray-400">or add manually</span>
+            <span className="px-2 bg-[#141416] text-[#52525b]">or add manually</span>
           </div>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-[#d7dadc] mb-1">
               Reddit Username
             </label>
             <input
@@ -304,12 +304,12 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="username"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 bg-[#1e1e24] border border-[#23232a] rounded-lg text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
             />
           </div>
           {/* Warmup Status */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-[#d7dadc] mb-2">
               Warmup Status
             </label>
             <div className="flex gap-2">
@@ -318,8 +318,8 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
                 onClick={() => setWarmupMode(true)}
                 className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
                   warmupMode
-                    ? 'bg-yellow-50 border-yellow-300 text-yellow-800'
-                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                    ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-400'
+                    : 'bg-[#141416] border-[#23232a] text-[#71717a] hover:bg-[#1e1e24]'
                 }`}
               >
                 Warming Up
@@ -329,14 +329,14 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
                 onClick={() => setWarmupMode(false)}
                 className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
                   !warmupMode
-                    ? 'bg-green-50 border-green-300 text-green-800'
-                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                    ? 'bg-green-500/15 border-green-500/30 text-green-400'
+                    : 'bg-[#141416] border-[#23232a] text-[#71717a] hover:bg-[#1e1e24]'
                 }`}
               >
                 Already Warmed Up
               </button>
             </div>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-[#52525b] mt-1">
               {warmupMode
                 ? 'DM limits will increase gradually over 8 days.'
                 : 'Account will start at full daily limit immediately.'}
@@ -345,7 +345,7 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
 
           {/* Daily Limit */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-[#d7dadc] mb-1">
               Daily DM Limit
             </label>
             <input
@@ -354,26 +354,26 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
               onChange={(e) => setDailyLimit(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
               min="1"
               max="50"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 bg-[#1e1e24] border border-[#23232a] rounded-lg text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
             />
-            <p className="text-xs text-gray-400 mt-1">Max 50 DMs per day.</p>
+            <p className="text-xs text-[#52525b] mt-1">Max 50 DMs per day.</p>
           </div>
 
-          <p className="text-xs text-gray-400 mb-4">
+          <p className="text-xs text-[#52525b] mb-4">
             Manual accounts won't have cookies — you'll need to capture them later for automation to work.
           </p>
           <div className="flex justify-end gap-3">
             <button
               type="button"
               onClick={() => { onClose(); setCaptureStatus(null); }}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800"
+              className="px-4 py-2 text-[#a1a1aa] hover:text-white"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading || !username.trim()}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 disabled:opacity-50"
+              className="px-4 py-2 bg-[#23232a] text-[#d7dadc] rounded-lg hover:bg-[#2a2a31] disabled:opacity-50"
             >
               {loading ? 'Adding...' : 'Add Manually'}
             </button>
@@ -438,15 +438,15 @@ export default function Accounts() {
   return (
     <div className="p-6">
       {/* Multi-account notice */}
-      <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+      <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-sm text-blue-400">
         The extension detects which Reddit account is logged in and tags DMs accordingly. To send from a different account, log into it on Reddit first. Reply queue items assigned to another account will be skipped until you switch.
       </div>
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Accounts</h1>
-          <p className="text-gray-500">Manage your Reddit accounts</p>
+          <h1 className="text-2xl font-bold text-white">Accounts</h1>
+          <p className="text-[#71717a]">Manage your Reddit accounts</p>
         </div>
         <button
           onClick={() => setShowAddModal(true)}
@@ -459,28 +459,28 @@ export default function Accounts() {
 
       {/* Rotation Status */}
       {rotationStatus && (
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Rotation Status</h2>
+        <div className="bg-[#141416] rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-semibold text-white mb-4">Rotation Status</h2>
           <div className="grid grid-cols-5 gap-4 text-center">
             <div>
-              <p className="text-2xl font-bold text-gray-900">{rotationStatus.total}</p>
-              <p className="text-sm text-gray-500">Total</p>
+              <p className="text-2xl font-bold text-white">{rotationStatus.total}</p>
+              <p className="text-sm text-[#71717a]">Total</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-green-600">{rotationStatus.available}</p>
-              <p className="text-sm text-gray-500">Available</p>
+              <p className="text-2xl font-bold text-green-400">{rotationStatus.available}</p>
+              <p className="text-sm text-[#71717a]">Available</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-red-600">{rotationStatus.atLimit}</p>
-              <p className="text-sm text-gray-500">At Limit</p>
+              <p className="text-2xl font-bold text-red-400">{rotationStatus.atLimit}</p>
+              <p className="text-sm text-[#71717a]">At Limit</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-yellow-600">{rotationStatus.onCooldown}</p>
-              <p className="text-sm text-gray-500">Cooldown</p>
+              <p className="text-2xl font-bold text-yellow-400">{rotationStatus.onCooldown}</p>
+              <p className="text-sm text-[#71717a]">Cooldown</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-purple-600">{rotationStatus.warmingUp}</p>
-              <p className="text-sm text-gray-500">Warming Up</p>
+              <p className="text-2xl font-bold text-purple-400">{rotationStatus.warmingUp}</p>
+              <p className="text-sm text-[#71717a]">Warming Up</p>
             </div>
           </div>
         </div>
@@ -488,16 +488,16 @@ export default function Accounts() {
 
       {/* Accounts Grid */}
       {loading ? (
-        <div className="text-center py-12 text-gray-400">
+        <div className="text-center py-12 text-[#52525b]">
           <RefreshCw className="animate-spin mx-auto mb-4" size={32} />
           Loading...
         </div>
       ) : accounts.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-xl">
-          <p className="text-gray-400 mb-4">No accounts added yet</p>
+        <div className="text-center py-12 bg-[#141416] rounded-xl">
+          <p className="text-[#52525b] mb-4">No accounts added yet</p>
           <button
             onClick={() => setShowAddModal(true)}
-            className="text-blue-500 hover:text-blue-600"
+            className="text-[#ff4500] hover:text-[#ff5414]"
           >
             Add your first account
           </button>

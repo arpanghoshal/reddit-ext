@@ -7,9 +7,9 @@ import * as api from '../api/client';
 // ============================================================================
 function TierBadge({ tier }) {
   const config = {
-    hot: { bg: 'bg-red-100 text-red-800', icon: Flame, label: 'HOT' },
-    warm: { bg: 'bg-orange-100 text-orange-800', icon: Thermometer, label: 'WARM' },
-    cold: { bg: 'bg-blue-100 text-blue-800', icon: Snowflake, label: 'COLD' },
+    hot: { bg: 'bg-red-500/15 text-red-400', icon: Flame, label: 'HOT' },
+    warm: { bg: 'bg-orange-500/15 text-orange-400', icon: Thermometer, label: 'WARM' },
+    cold: { bg: 'bg-blue-500/15 text-blue-400', icon: Snowflake, label: 'COLD' },
   };
   const c = config[tier] || config.cold;
   const Icon = c.icon;
@@ -34,10 +34,10 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
   const [selectedAccount, setSelectedAccount] = useState(accounts[0]?.id || '');
 
   const scoreColor = lead.lead_score >= 70
-    ? 'text-green-600'
+    ? 'text-green-400'
     : lead.lead_score >= 45
-    ? 'text-yellow-600'
-    : 'text-red-600';
+    ? 'text-yellow-400'
+    : 'text-red-400';
 
   const timeAgo = lead.post_created_utc
     ? formatTimeAgo(lead.post_created_utc)
@@ -76,11 +76,11 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
   };
 
   return (
-    <div className={`bg-white rounded-lg shadow-sm border overflow-hidden ${
-      lead.status === 'queued' ? 'border-green-200 opacity-60' :
-      lead.status === 'dismissed' ? 'border-gray-200 opacity-40' :
-      lead.status === 'already_contacted' ? 'border-yellow-200 opacity-60' :
-      'border-gray-100'
+    <div className={`bg-[#141416] rounded-lg border overflow-hidden ${
+      lead.status === 'queued' ? 'border-green-500/30 opacity-60' :
+      lead.status === 'dismissed' ? 'border-[#23232a] opacity-40' :
+      lead.status === 'already_contacted' ? 'border-yellow-500/30 opacity-60' :
+      'border-[#23232a]'
     }`}>
       <div className="p-4">
         <div className="flex items-start gap-3">
@@ -99,35 +99,35 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                 href={`https://reddit.com/user/${lead.author_username}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-semibold text-blue-600 hover:underline"
+                className="font-semibold text-[#4d9fff] hover:underline"
               >
                 u/{lead.author_username}
               </a>
-              <span className="text-gray-400">in</span>
-              <span className="text-gray-600 text-sm">r/{lead.subreddit}</span>
-              {timeAgo && <span className="text-gray-400 text-xs">{timeAgo}</span>}
+              <span className="text-[#52525b]">in</span>
+              <span className="text-[#a1a1aa] text-sm">r/{lead.subreddit}</span>
+              {timeAgo && <span className="text-[#52525b] text-xs">{timeAgo}</span>}
               {lead.source_type === 'comment' && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/15 text-purple-400">
                   Comment
                 </span>
               )}
               {lead.status === 'queued' && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Queued</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/15 text-green-400">Queued</span>
               )}
               {lead.status === 'already_contacted' && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Already Contacted</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/15 text-yellow-400">Already Contacted</span>
               )}
               {lead.status === 'dismissed' && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Dismissed</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-500/15 text-gray-400">Dismissed</span>
               )}
             </div>
 
-            <p className="text-sm text-gray-700 mt-1 line-clamp-2">
+            <p className="text-sm text-[#d7dadc] mt-1 line-clamp-2">
               {lead.post_title}
             </p>
 
             {lead.source_type === 'comment' && lead.source_comment_body && (
-              <p className="text-xs text-gray-500 mt-1 italic line-clamp-2">
+              <p className="text-xs text-[#71717a] mt-1 italic line-clamp-2">
                 "{lead.source_comment_body}"
               </p>
             )}
@@ -135,17 +135,17 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
             {/* Score breakdown chips */}
             <div className="flex gap-2 mt-2 flex-wrap">
               {lead.relevance_score != null && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                <span className="text-xs px-1.5 py-0.5 rounded bg-[#1e1e24] text-[#a1a1aa]">
                   Relevance: {lead.relevance_score}
                 </span>
               )}
               {lead.buyer_intent != null && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                <span className="text-xs px-1.5 py-0.5 rounded bg-[#1e1e24] text-[#a1a1aa]">
                   Intent: {lead.buyer_intent}
                 </span>
               )}
               {lead.is_qualified && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-green-50 text-green-700">
+                <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">
                   Qualified
                 </span>
               )}
@@ -159,7 +159,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                 href={lead.post_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+                className="p-1.5 rounded hover:bg-[#1e1e24] text-[#52525b] hover:text-[#a1a1aa]"
                 title="View post"
               >
                 <ExternalLink className="w-4 h-4" />
@@ -167,7 +167,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
             )}
             <button
               onClick={() => setExpanded(!expanded)}
-              className="p-1.5 rounded hover:bg-gray-100 text-gray-400"
+              className="p-1.5 rounded hover:bg-[#1e1e24] text-[#52525b]"
             >
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
@@ -177,12 +177,12 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
 
       {/* Expanded detail */}
       {expanded && (
-        <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-4">
+        <div className="border-t border-[#23232a] bg-[#0a0a0b] p-4 space-y-4">
           {/* Post body */}
           {lead.post_body && (
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Post Content</h4>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap max-h-40 overflow-y-auto">
+              <h4 className="text-xs font-semibold text-[#71717a] uppercase mb-1">Post Content</h4>
+              <p className="text-sm text-[#d7dadc] whitespace-pre-wrap max-h-40 overflow-y-auto">
                 {lead.post_body.slice(0, 1000)}
                 {lead.post_body.length > 1000 && '...'}
               </p>
@@ -192,13 +192,13 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
           {/* Insights */}
           {lead.lead_insights && lead.lead_insights.length > 0 && (
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Insights</h4>
+              <h4 className="text-xs font-semibold text-[#71717a] uppercase mb-1">Insights</h4>
               <div className="space-y-1">
                 {lead.lead_insights.map((insight, i) => (
                   <div key={i} className={`text-xs px-2 py-1 rounded ${
-                    insight.type === 'strength' ? 'bg-green-50 text-green-700' :
-                    insight.type === 'concern' ? 'bg-red-50 text-red-700' :
-                    'bg-blue-50 text-blue-700'
+                    insight.type === 'strength' ? 'bg-green-500/15 text-green-400' :
+                    insight.type === 'concern' ? 'bg-red-500/10 text-red-400' :
+                    'bg-blue-500/10 text-blue-400'
                   }`}>
                     {insight.message}
                   </div>
@@ -208,21 +208,21 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
           )}
 
           {lead.classification_reasoning && (
-            <p className="text-xs text-gray-500 italic">
+            <p className="text-xs text-[#71717a] italic">
               {lead.classification_reasoning}
             </p>
           )}
 
           {/* Message generation & queue */}
           {lead.status === 'scored' && (
-            <div className="space-y-3 pt-2 border-t border-gray-200">
+            <div className="space-y-3 pt-2 border-t border-[#23232a]">
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <h4 className="text-xs font-semibold text-gray-500 uppercase">Outreach Message</h4>
+                  <h4 className="text-xs font-semibold text-[#71717a] uppercase">Outreach Message</h4>
                   <button
                     onClick={handleGenerate}
                     disabled={generating}
-                    className="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
                   >
                     {generating ? 'Generating...' : message ? 'Regenerate' : 'Generate'}
                   </button>
@@ -233,19 +233,19 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
                       rows={3}
-                      className="w-full text-sm border border-gray-200 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full text-sm bg-[#1e1e24] border border-[#23232a] rounded-lg p-2 text-white placeholder-[#52525b] focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
                     />
                     {reasoning && (
                       <div className="mt-1">
                         <button
                           onClick={() => setShowReasoning(!showReasoning)}
-                          className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
+                          className="text-xs text-[#52525b] hover:text-[#a1a1aa] flex items-center gap-1"
                         >
                           {showReasoning ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                           {showReasoning ? 'Hide reasoning' : 'Show reasoning'}
                         </button>
                         {showReasoning && (
-                          <p className="mt-1 text-xs text-gray-500 bg-gray-100 rounded p-2 italic">
+                          <p className="mt-1 text-xs text-[#71717a] bg-[#1e1e24] rounded p-2 italic">
                             {reasoning}
                           </p>
                         )}
@@ -253,7 +253,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                     )}
                   </>
                 ) : (
-                  <p className="text-xs text-gray-400">Click "Generate" to create an outreach message</p>
+                  <p className="text-xs text-[#52525b]">Click "Generate" to create an outreach message</p>
                 )}
               </div>
 
@@ -262,7 +262,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                   <select
                     value={selectedAccount}
                     onChange={(e) => setSelectedAccount(e.target.value)}
-                    className="text-sm border border-gray-200 rounded-lg px-2 py-1.5"
+                    className="text-sm bg-[#1e1e24] border border-[#23232a] rounded-lg px-2 py-1.5 text-white"
                   >
                     {accounts.map(acc => (
                       <option key={acc.id} value={acc.id}>{acc.username}</option>
@@ -279,7 +279,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                 </button>
                 <button
                   onClick={() => onDismiss(lead.id)}
-                  className="px-3 py-1.5 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                  className="px-3 py-1.5 text-sm text-[#71717a] hover:text-red-400 hover:bg-red-500/10 rounded-lg"
                 >
                   Dismiss
                 </button>
@@ -326,18 +326,18 @@ function DiscoveryInput({ onStart, loading }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-sm border border-gray-100 p-6 max-w-2xl mx-auto">
+    <form onSubmit={handleSubmit} className="bg-[#141416] rounded-lg border border-[#23232a] p-6 max-w-2xl mx-auto">
       <div className="space-y-5">
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-[#d7dadc]">
               Business Context
             </label>
             <button
               type="button"
               onClick={prefillFromSettings}
               disabled={prefilling}
-              className="text-xs text-blue-600 hover:text-blue-800"
+              className="text-xs text-blue-400 hover:text-blue-300"
             >
               {prefilling ? 'Loading...' : 'Load from Settings'}
             </button>
@@ -347,13 +347,13 @@ function DiscoveryInput({ onStart, loading }) {
             onChange={(e) => setBusinessDesc(e.target.value)}
             placeholder="Describe your business and the problem you solve. Be specific about your product, target market, and unique value..."
             rows={4}
-            className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-[#ff4500] focus:border-transparent"
+            className="w-full bg-[#1e1e24] border border-[#23232a] rounded-lg p-3 text-sm text-white placeholder-[#52525b] focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
             required
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-[#d7dadc] mb-1">
             Target Persona
           </label>
           <textarea
@@ -361,7 +361,7 @@ function DiscoveryInput({ onStart, loading }) {
             onChange={(e) => setPersona(e.target.value)}
             placeholder="Who are your ideal customers? What roles, industries, company sizes?"
             rows={2}
-            className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-[#ff4500] focus:border-transparent"
+            className="w-full bg-[#1e1e24] border border-[#23232a] rounded-lg p-3 text-sm text-white placeholder-[#52525b] focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
           />
         </div>
 
@@ -418,10 +418,10 @@ function AutomationInput({ onStart, loading }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-sm border border-gray-100 p-6 max-w-2xl mx-auto">
+    <form onSubmit={handleSubmit} className="bg-[#141416] rounded-lg border border-[#23232a] p-6 max-w-2xl mx-auto">
       <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-[#d7dadc] mb-1">
             Target Subreddits
           </label>
           <input
@@ -429,25 +429,25 @@ function AutomationInput({ onStart, loading }) {
             value={subreddits}
             onChange={(e) => setSubreddits(e.target.value)}
             placeholder="saas, startups, smallbusiness (comma-separated)"
-            className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-[#ff4500] focus:border-transparent"
+            className="w-full bg-[#1e1e24] border border-[#23232a] rounded-lg p-3 text-sm text-white placeholder-[#52525b] focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
             required
           />
-          <p className="text-xs text-gray-400 mt-1">Enter subreddit names without r/ prefix, separated by commas</p>
+          <p className="text-xs text-[#52525b] mt-1">Enter subreddit names without r/ prefix, separated by commas</p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-[#d7dadc] mb-1">
             Send From Account
           </label>
           {loadingAccounts ? (
-            <div className="text-sm text-gray-400">Loading accounts...</div>
+            <div className="text-sm text-[#52525b]">Loading accounts...</div>
           ) : accounts.length === 0 ? (
-            <div className="text-sm text-red-500">No active accounts. Add one in the Accounts page first.</div>
+            <div className="text-sm text-red-400">No active accounts. Add one in the Accounts page first.</div>
           ) : (
             <select
               value={selectedAccount}
               onChange={(e) => setSelectedAccount(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-[#ff4500] focus:border-transparent"
+              className="w-full bg-[#1e1e24] border border-[#23232a] rounded-lg p-3 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
             >
               {accounts.map(acc => (
                 <option key={acc.id} value={acc.id}>u/{acc.username}</option>
@@ -457,7 +457,7 @@ function AutomationInput({ onStart, loading }) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-[#d7dadc] mb-1">
             Min Lead Score: {minScore}
           </label>
           <input
@@ -468,25 +468,25 @@ function AutomationInput({ onStart, loading }) {
             onChange={(e) => setMinScore(Number(e.target.value))}
             className="w-full accent-[#ff4500]"
           />
-          <div className="flex justify-between text-xs text-gray-400">
+          <div className="flex justify-between text-xs text-[#52525b]">
             <span>More leads (lower quality)</span>
             <span>Fewer leads (higher quality)</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+        <div className="flex items-center gap-3 p-3 bg-[#0a0a0b] rounded-lg">
           <input
             type="checkbox"
             id="autoApprove"
             checked={autoApprove}
             onChange={(e) => setAutoApprove(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300 text-[#ff4500] focus:ring-[#ff4500]"
+            className="w-4 h-4 rounded border-[#23232a] text-[#ff4500] focus:ring-[#ff4500]"
           />
           <div>
-            <label htmlFor="autoApprove" className="text-sm font-medium text-gray-700 cursor-pointer">
+            <label htmlFor="autoApprove" className="text-sm font-medium text-[#d7dadc] cursor-pointer">
               Auto-approve messages
             </label>
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-[#52525b]">
               Skip manual review. Messages will be sent automatically by the extension.
             </p>
           </div>
@@ -560,17 +560,17 @@ function AutomationSendControls({ sessionId }) {
   const progress = total > 0 ? Math.round(((sent + failed) / total) * 100) : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-100 p-5 mt-4">
+    <div className="bg-[#141416] rounded-lg border border-[#23232a] p-5 mt-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Sending Progress</h3>
+        <h3 className="text-sm font-semibold text-[#d7dadc] uppercase tracking-wider">Sending Progress</h3>
         {extensionAvailable === false && (
-          <div className="flex items-center gap-1.5 text-xs text-red-500">
+          <div className="flex items-center gap-1.5 text-xs text-red-400">
             <WifiOff className="w-3.5 h-3.5" />
             Extension not detected
           </div>
         )}
         {extensionAvailable === true && (
-          <div className="flex items-center gap-1.5 text-xs text-green-600">
+          <div className="flex items-center gap-1.5 text-xs text-green-400">
             <Wifi className="w-3.5 h-3.5" />
             Extension connected
           </div>
@@ -579,7 +579,7 @@ function AutomationSendControls({ sessionId }) {
 
       {/* Progress bar */}
       {total > 0 && (
-        <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+        <div className="w-full bg-[#1e1e24] rounded-full h-2.5 mb-4">
           <div
             className="bg-green-500 h-2.5 rounded-full transition-all duration-500"
             style={{ width: `${progress}%` }}
@@ -589,31 +589,31 @@ function AutomationSendControls({ sessionId }) {
 
       {/* Stats grid */}
       <div className="grid grid-cols-5 gap-2 mb-4">
-        <div className="text-center p-2 bg-gray-50 rounded">
-          <div className="text-lg font-bold text-gray-800">{total}</div>
-          <div className="text-xs text-gray-500">Queued</div>
+        <div className="text-center p-2 bg-[#1e1e24] rounded">
+          <div className="text-lg font-bold text-white">{total}</div>
+          <div className="text-xs text-[#71717a]">Queued</div>
         </div>
-        <div className="text-center p-2 bg-yellow-50 rounded">
-          <div className="text-lg font-bold text-yellow-600">{pending}</div>
-          <div className="text-xs text-gray-500">Pending</div>
+        <div className="text-center p-2 bg-yellow-500/15 rounded">
+          <div className="text-lg font-bold text-yellow-400">{pending}</div>
+          <div className="text-xs text-[#71717a]">Pending</div>
         </div>
-        <div className="text-center p-2 bg-blue-50 rounded">
-          <div className="text-lg font-bold text-blue-600">{approved}</div>
-          <div className="text-xs text-gray-500">Approved</div>
+        <div className="text-center p-2 bg-blue-500/15 rounded">
+          <div className="text-lg font-bold text-blue-400">{approved}</div>
+          <div className="text-xs text-[#71717a]">Approved</div>
         </div>
-        <div className="text-center p-2 bg-green-50 rounded">
-          <div className="text-lg font-bold text-green-600">{sent}</div>
-          <div className="text-xs text-gray-500">Sent</div>
+        <div className="text-center p-2 bg-green-500/15 rounded">
+          <div className="text-lg font-bold text-green-400">{sent}</div>
+          <div className="text-xs text-[#71717a]">Sent</div>
         </div>
-        <div className="text-center p-2 bg-red-50 rounded">
-          <div className="text-lg font-bold text-red-600">{failed}</div>
-          <div className="text-xs text-gray-500">Failed</div>
+        <div className="text-center p-2 bg-red-500/15 rounded">
+          <div className="text-lg font-bold text-red-400">{failed}</div>
+          <div className="text-xs text-[#71717a]">Failed</div>
         </div>
       </div>
 
       {/* Send controls */}
       {extensionAvailable === false ? (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
           Install and enable the Chrome extension to send messages. Make sure you're logged into Reddit in the same browser.
         </div>
       ) : approved > 0 || queueStatus.isPolling ? (
@@ -640,11 +640,11 @@ function AutomationSendControls({ sessionId }) {
           )}
         </button>
       ) : pending > 0 ? (
-        <p className="text-sm text-gray-500 text-center">
-          {pending} items pending review. Go to the <a href="/queue" className="text-blue-600 hover:underline">Queue</a> to approve them.
+        <p className="text-sm text-[#71717a] text-center">
+          {pending} items pending review. Go to the <a href="/queue" className="text-[#4d9fff] hover:underline">Queue</a> to approve them.
         </p>
       ) : sent === total && total > 0 ? (
-        <p className="text-sm text-green-600 text-center font-medium">All messages sent!</p>
+        <p className="text-sm text-green-400 text-center font-medium">All messages sent!</p>
       ) : null}
     </div>
   );
@@ -666,21 +666,21 @@ function DiscoveryProgress({ session, onCancel }) {
   const pct = Math.min(100, Math.round((done / total) * 100));
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-100 p-6 max-w-2xl mx-auto">
+    <div className="bg-[#141416] rounded-lg border border-[#23232a] p-6 max-w-2xl mx-auto">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-gray-800">
+        <h3 className="text-lg font-semibold text-white">
           {statusLabels[session.status] || session.status}
         </h3>
         <button
           onClick={onCancel}
-          className="text-sm text-red-500 hover:text-red-700"
+          className="text-sm text-red-400 hover:text-red-300"
         >
           Cancel
         </button>
       </div>
 
       {/* Progress bar */}
-      <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
+      <div className="w-full bg-[#1e1e24] rounded-full h-3 mb-4">
         <div
           className="bg-[#ff4500] h-3 rounded-full transition-all duration-500"
           style={{ width: `${pct}%` }}
@@ -689,30 +689,30 @@ function DiscoveryProgress({ session, onCancel }) {
 
       {/* Stats */}
       <div className={`grid ${session.mode === 'automation' ? 'grid-cols-4' : 'grid-cols-3'} gap-4 text-center`}>
-        <div className="bg-gray-50 rounded-lg p-3">
-          <div className="text-xl font-bold text-gray-800">
+        <div className="bg-[#1e1e24] rounded-lg p-3">
+          <div className="text-xl font-bold text-white">
             {session.total_posts_found || 0}
           </div>
-          <div className="text-xs text-gray-500">Posts Found</div>
+          <div className="text-xs text-[#71717a]">Posts Found</div>
         </div>
-        <div className="bg-gray-50 rounded-lg p-3">
-          <div className="text-xl font-bold text-gray-800">
+        <div className="bg-[#1e1e24] rounded-lg p-3">
+          <div className="text-xl font-bold text-white">
             {session.total_leads_scored || 0}
           </div>
-          <div className="text-xs text-gray-500">Posts Scored</div>
+          <div className="text-xs text-[#71717a]">Posts Scored</div>
         </div>
-        <div className="bg-gray-50 rounded-lg p-3">
+        <div className="bg-[#1e1e24] rounded-lg p-3">
           <div className="text-xl font-bold text-[#ff4500]">
             {session.leads_qualified || 0}
           </div>
-          <div className="text-xs text-gray-500">Leads Found</div>
+          <div className="text-xs text-[#71717a]">Leads Found</div>
         </div>
         {session.mode === 'automation' && (
-          <div className="bg-gray-50 rounded-lg p-3">
-            <div className="text-xl font-bold text-green-600">
+          <div className="bg-[#1e1e24] rounded-lg p-3">
+            <div className="text-xl font-bold text-green-400">
               {session.leads_queued || 0}
             </div>
-            <div className="text-xs text-gray-500">Queued</div>
+            <div className="text-xs text-[#71717a]">Queued</div>
           </div>
         )}
       </div>
@@ -784,10 +784,10 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-800">
+          <h2 className="text-lg font-semibold text-white">
             Discovery Results
           </h2>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-[#71717a]">
             {session.leads_qualified || 0} leads found across {subreddits.length} subreddits
           </p>
         </div>
@@ -805,38 +805,38 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
         <button
           onClick={() => setTierFilter(tierFilter === 'hot' ? 'all' : 'hot')}
           className={`p-3 rounded-lg border text-center transition-colors ${
-            tierFilter === 'hot' ? 'border-red-300 bg-red-50' : 'border-gray-100 bg-white hover:border-red-200'
+            tierFilter === 'hot' ? 'border-red-500/50 bg-red-500/10' : 'border-[#23232a] bg-[#141416] hover:border-red-500/30'
           }`}
         >
           <div className="flex items-center justify-center gap-1 mb-1">
             <Flame className="w-4 h-4 text-red-500" />
-            <span className="text-sm font-medium text-gray-600">Hot</span>
+            <span className="text-sm font-medium text-[#a1a1aa]">Hot</span>
           </div>
-          <div className="text-2xl font-bold text-red-600">{tierCounts.hot}</div>
+          <div className="text-2xl font-bold text-red-400">{tierCounts.hot}</div>
         </button>
         <button
           onClick={() => setTierFilter(tierFilter === 'warm' ? 'all' : 'warm')}
           className={`p-3 rounded-lg border text-center transition-colors ${
-            tierFilter === 'warm' ? 'border-orange-300 bg-orange-50' : 'border-gray-100 bg-white hover:border-orange-200'
+            tierFilter === 'warm' ? 'border-orange-500/50 bg-orange-500/10' : 'border-[#23232a] bg-[#141416] hover:border-orange-500/30'
           }`}
         >
           <div className="flex items-center justify-center gap-1 mb-1">
             <Thermometer className="w-4 h-4 text-orange-500" />
-            <span className="text-sm font-medium text-gray-600">Warm</span>
+            <span className="text-sm font-medium text-[#a1a1aa]">Warm</span>
           </div>
-          <div className="text-2xl font-bold text-orange-600">{tierCounts.warm}</div>
+          <div className="text-2xl font-bold text-orange-400">{tierCounts.warm}</div>
         </button>
         <button
           onClick={() => setTierFilter(tierFilter === 'cold' ? 'all' : 'cold')}
           className={`p-3 rounded-lg border text-center transition-colors ${
-            tierFilter === 'cold' ? 'border-blue-300 bg-blue-50' : 'border-gray-100 bg-white hover:border-blue-200'
+            tierFilter === 'cold' ? 'border-blue-500/50 bg-blue-500/10' : 'border-[#23232a] bg-[#141416] hover:border-blue-500/30'
           }`}
         >
           <div className="flex items-center justify-center gap-1 mb-1">
             <Snowflake className="w-4 h-4 text-blue-500" />
-            <span className="text-sm font-medium text-gray-600">Cold</span>
+            <span className="text-sm font-medium text-[#a1a1aa]">Cold</span>
           </div>
-          <div className="text-2xl font-bold text-blue-600">{tierCounts.cold}</div>
+          <div className="text-2xl font-bold text-blue-400">{tierCounts.cold}</div>
         </button>
       </div>
 
@@ -846,7 +846,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
           <select
             value={subredditFilter}
             onChange={(e) => setSubredditFilter(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5"
+            className="text-sm bg-[#1e1e24] border border-[#23232a] rounded-lg px-3 py-1.5 text-white"
           >
             <option value="all">All subreddits</option>
             {subreddits.map(sr => (
@@ -864,7 +864,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
           <RefreshCw className="w-6 h-6 animate-spin text-[#ff4500]" />
         </div>
       ) : activeLeads.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
+        <div className="text-center py-12 text-[#52525b]">
           No leads found matching filters
         </div>
       ) : (
@@ -893,17 +893,17 @@ function SessionHistory({ sessions, onSelect, onBack }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-800">Past Sessions</h2>
+        <h2 className="text-lg font-semibold text-white">Past Sessions</h2>
         <button
           onClick={onBack}
-          className="text-sm text-blue-600 hover:text-blue-800"
+          className="text-sm text-blue-400 hover:text-blue-300"
         >
           Back
         </button>
       </div>
 
       {sessions.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
+        <div className="text-center py-12 text-[#52525b]">
           No previous discovery sessions
         </div>
       ) : (
@@ -912,16 +912,16 @@ function SessionHistory({ sessions, onSelect, onBack }) {
             <button
               key={session.id}
               onClick={() => onSelect(session)}
-              className="w-full text-left bg-white rounded-lg shadow-sm border border-gray-100 p-4 hover:border-[#ff4500] transition-colors"
+              className="w-full text-left bg-[#141416] rounded-lg border border-[#23232a] p-4 hover:border-[#ff4500] transition-colors"
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-medium text-gray-800">
+                  <div className="text-sm font-medium text-white">
                     {new Date(session.created_at).toLocaleDateString('en-US', {
                       month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit'
                     })}
                   </div>
-                  <div className="text-xs text-gray-500 mt-0.5">
+                  <div className="text-xs text-[#71717a] mt-0.5">
                     {session.business_desc?.slice(0, 80)}
                     {session.business_desc?.length > 80 ? '...' : ''}
                   </div>
@@ -929,20 +929,20 @@ function SessionHistory({ sessions, onSelect, onBack }) {
                 <div className="text-right">
                   <div className="flex items-center gap-1.5 justify-end">
                     {session.mode === 'automation' && (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/15 text-purple-400">
                         Auto
                       </span>
                     )}
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                      session.status === 'completed' ? 'bg-green-100 text-green-800' :
-                      session.status === 'failed' ? 'bg-red-100 text-red-800' :
-                      session.status === 'cancelled' ? 'bg-gray-100 text-gray-800' :
-                      'bg-yellow-100 text-yellow-800'
+                      session.status === 'completed' ? 'bg-green-500/15 text-green-400' :
+                      session.status === 'failed' ? 'bg-red-500/15 text-red-400' :
+                      session.status === 'cancelled' ? 'bg-gray-500/15 text-gray-400' :
+                      'bg-yellow-500/15 text-yellow-400'
                     }`}>
                       {session.status}
                     </span>
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">
+                  <div className="text-xs text-[#71717a] mt-1">
                     {session.leads_qualified || 0} leads
                     {session.leads_queued > 0 && ` / ${session.leads_queued} queued`}
                   </div>
@@ -1093,12 +1093,12 @@ export default function Discovery() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <Search className="w-6 h-6 text-[#ff4500]" />
-          <h1 className="text-2xl font-bold text-gray-800">Discovery</h1>
+          <h1 className="text-2xl font-bold text-white">Discovery</h1>
         </div>
         {view !== 'history' && (
           <button
             onClick={() => setView('history')}
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
+            className="flex items-center gap-1.5 text-sm text-[#71717a] hover:text-[#a1a1aa]"
           >
             <History className="w-4 h-4" />
             Past Sessions
@@ -1108,7 +1108,7 @@ export default function Discovery() {
 
       {/* Error banner */}
       {error && (
-        <div className="mb-4 flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+        <div className="mb-4 flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           {error}
           <button onClick={() => setError(null)} className="ml-auto">
@@ -1125,7 +1125,7 @@ export default function Discovery() {
             className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               inputMode === 'discovery'
                 ? 'bg-[#ff4500] text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                : 'bg-[#1e1e24] text-[#a1a1aa] hover:bg-[#23232a]'
             }`}
           >
             <Search className="w-4 h-4" />
@@ -1136,7 +1136,7 @@ export default function Discovery() {
             className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               inputMode === 'automation'
                 ? 'bg-[#ff4500] text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                : 'bg-[#1e1e24] text-[#a1a1aa] hover:bg-[#23232a]'
             }`}
           >
             <Zap className="w-4 h-4" />

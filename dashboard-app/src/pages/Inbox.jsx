@@ -5,59 +5,59 @@ import * as api from '../api/client';
 const STATUS_OPTIONS = ['active', 'interested', 'cold', 'closed', 'converted'];
 
 const STATUS_COLORS = {
-  active: 'bg-blue-100 text-blue-800',
-  interested: 'bg-green-100 text-green-800',
-  cold: 'bg-gray-100 text-gray-800',
-  closed: 'bg-gray-200 text-gray-600',
-  converted: 'bg-purple-100 text-purple-800'
+  active: 'bg-blue-500/15 text-blue-400',
+  interested: 'bg-green-500/15 text-green-400',
+  cold: 'bg-[#1e1e24] text-[#a1a1aa]',
+  closed: 'bg-[#23232a] text-[#71717a]',
+  converted: 'bg-purple-500/15 text-purple-400'
 };
 
 function ConversationList({ conversations, selected, onSelect }) {
   return (
-    <div className="divide-y divide-gray-100">
+    <div className="divide-y divide-[#23232a]">
       {conversations.map(conv => (
         <button
           key={conv.id}
           onClick={() => onSelect(conv)}
-          className={`w-full p-4 text-left hover:bg-gray-50 transition-colors ${
-            selected?.id === conv.id ? 'bg-blue-50' : ''
+          className={`w-full p-4 text-left hover:bg-[#1e1e24] transition-colors ${
+            selected?.id === conv.id ? 'bg-[#1e1e24]' : ''
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-gray-900">
+            <span className="font-semibold text-white">
               u/{conv.participantUsername}
             </span>
             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[conv.status]}`}>
               {conv.status}
             </span>
           </div>
-          <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
+          <div className="flex items-center gap-2 mt-1 text-sm text-[#71717a]">
             <span>{conv.totalMessages} messages</span>
             {conv.hasReply && (
-              <span className="text-green-600">Has reply</span>
+              <span className="text-green-400">Has reply</span>
             )}
           </div>
           <div className="mt-1">
             {conv.accountUsername ? (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600 border border-indigo-100">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">
                 u/{conv.accountUsername}
               </span>
             ) : (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-500 border border-red-100">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-500/15 text-red-400 border border-red-500/20">
                 No account
               </span>
             )}
           </div>
           {conv.sourceSubreddit && (
-            <p className="text-xs text-gray-500 mt-1 truncate">
+            <p className="text-xs text-[#71717a] mt-1 truncate">
               r/{conv.sourceSubreddit}
               {conv.sourcePostTitle && (
-                <span className="text-gray-400"> &middot; {conv.sourcePostTitle}</span>
+                <span className="text-[#52525b]"> &middot; {conv.sourcePostTitle}</span>
               )}
             </p>
           )}
           {conv.lastMessageAt && (
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-[#52525b] mt-1">
               Last: {new Date(conv.lastMessageAt).toLocaleDateString()}
             </p>
           )}
@@ -199,7 +199,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
 
   if (!conversation) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-[#52525b]">
         <p>Select a conversation to view</p>
       </div>
     );
@@ -210,26 +210,26 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
       {/* Toast */}
       {toast && (
         <div className={`absolute top-4 right-4 px-4 py-2 rounded-lg text-sm font-medium z-50 ${
-          toast.type === 'error' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+          toast.type === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-green-500/15 text-green-400'
         }`}>
           {toast.message}
         </div>
       )}
 
       {/* Header */}
-      <div className="p-4 border-b border-gray-200">
+      <div className="p-4 border-b border-[#23232a]">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold">u/{conversation.participantUsername}</h2>
+            <h2 className="text-lg font-semibold text-white">u/{conversation.participantUsername}</h2>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-sm text-gray-500">{conversation.totalMessages} messages</span>
+              <span className="text-sm text-[#71717a]">{conversation.totalMessages} messages</span>
               <select
                 value={conversation.accountId || ''}
                 onChange={(e) => assignAccount(e.target.value)}
                 className={`px-2 py-0.5 rounded text-xs font-medium border ${
                   conversation.accountId
-                    ? 'bg-indigo-50 text-indigo-600 border-indigo-100'
-                    : 'bg-red-50 text-red-500 border-red-200'
+                    ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20'
+                    : 'bg-red-500/15 text-red-400 border-red-500/20'
                 }`}
               >
                 <option value="">No account</option>
@@ -239,21 +239,21 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
               </select>
             </div>
             {conversation.sourceSubreddit && (
-              <div className="flex items-center gap-1.5 mt-1 text-sm text-gray-500">
-                <span className="font-medium text-orange-600">r/{conversation.sourceSubreddit}</span>
+              <div className="flex items-center gap-1.5 mt-1 text-sm text-[#71717a]">
+                <span className="font-medium text-[#ff4500]">r/{conversation.sourceSubreddit}</span>
                 {conversation.sourcePostTitle && (
                   conversation.sourcePostUrl ? (
                     <a
                       href={conversation.sourcePostUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline truncate max-w-md"
+                      className="text-[#4d9fff] hover:underline truncate max-w-md"
                       title={conversation.sourcePostTitle}
                     >
                       {conversation.sourcePostTitle}
                     </a>
                   ) : (
-                    <span className="text-gray-400 truncate max-w-md">{conversation.sourcePostTitle}</span>
+                    <span className="text-[#52525b] truncate max-w-md">{conversation.sourcePostTitle}</span>
                   )
                 )}
               </div>
@@ -262,7 +262,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
           <select
             value={conversation.status}
             onChange={(e) => updateStatus(e.target.value)}
-            className="px-3 py-1 border border-gray-200 rounded-lg text-sm"
+            className="px-3 py-1 bg-[#1e1e24] border border-[#23232a] text-white rounded-lg text-sm"
           >
             {STATUS_OPTIONS.map(status => (
               <option key={status} value={status}>
@@ -276,11 +276,11 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
       {/* Messages */}
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {loading ? (
-          <div className="text-center text-gray-400">
+          <div className="text-center text-[#52525b]">
             <RefreshCw className="animate-spin mx-auto" />
           </div>
         ) : messages.length === 0 ? (
-          <p className="text-center text-gray-400">No messages yet</p>
+          <p className="text-center text-[#52525b]">No messages yet</p>
         ) : (
           messages.map(msg => (
             <div
@@ -288,12 +288,12 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
               className={`max-w-[80%] p-3 rounded-lg ${
                 msg.direction === 'outbound'
                   ? 'ml-auto bg-blue-500 text-white'
-                  : 'bg-gray-100 text-gray-900'
+                  : 'bg-[#1e1e24] text-[#d7dadc]'
               }`}
             >
               <p className="text-sm">{msg.content}</p>
               <p className={`text-xs mt-1 ${
-                msg.direction === 'outbound' ? 'text-blue-100' : 'text-gray-400'
+                msg.direction === 'outbound' ? 'text-blue-100' : 'text-[#52525b]'
               }`}>
                 {new Date(msg.sentAt).toLocaleString()}
               </p>
@@ -304,14 +304,14 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
 
       {/* Queued Reply Indicator */}
       {queuedReply && (
-        <div className="mx-4 mb-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <div className="flex items-center gap-2 text-yellow-800">
+        <div className="mx-4 mb-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+          <div className="flex items-center gap-2 text-yellow-400">
             <Clock size={16} />
             <span className="text-sm font-medium">
               Reply {queuedReply.status === 'approved' ? 'approved & ready to send' : 'pending approval'}
             </span>
           </div>
-          <p className="text-xs text-yellow-700 mt-1 truncate">
+          <p className="text-xs text-yellow-400 mt-1 truncate">
             {queuedReply.finalMessage}
           </p>
         </div>
@@ -319,19 +319,19 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
 
       {/* Account notice for reply */}
       {conversation.accountUsername && (
-        <div className="mx-4 mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+        <div className="mx-4 mb-2 px-3 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs text-blue-400">
           This reply will be sent from <span className="font-semibold">u/{conversation.accountUsername}</span>. Make sure that account is logged in on Reddit before sending.
         </div>
       )}
 
       {/* Reply Composer */}
-      <div className="p-4 border-t border-gray-200 space-y-3">
+      <div className="p-4 border-t border-[#23232a] space-y-3">
         {/* AI Suggestion Section */}
         <div className="flex items-center gap-2">
           <button
             onClick={generateSuggestion}
             disabled={generatingSuggestion}
-            className="flex items-center gap-2 px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 disabled:opacity-50 text-sm"
+            className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/15 text-purple-400 rounded-lg hover:bg-purple-500/25 disabled:opacity-50 text-sm"
           >
             {generatingSuggestion ? (
               <RefreshCw size={14} className="animate-spin" />
@@ -343,7 +343,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
           {suggestion && (
             <button
               onClick={useSuggestion}
-              className="flex items-center gap-1 px-3 py-1.5 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 text-sm"
+              className="flex items-center gap-1 px-3 py-1.5 bg-purple-500/10 text-purple-400 rounded-lg hover:bg-purple-500/15 text-sm"
             >
               <Edit3 size={14} />
               Use Suggestion
@@ -353,18 +353,18 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
 
         {/* AI Suggestion Preview */}
         {suggestion && !replyText && (
-          <div className="p-3 bg-purple-50 rounded-lg">
-            <p className="text-sm text-purple-900">{suggestion}</p>
+          <div className="p-3 bg-purple-500/10 rounded-lg">
+            <p className="text-sm text-purple-300">{suggestion}</p>
             <div className="flex gap-2 mt-2">
               <button
                 onClick={useSuggestion}
-                className="text-xs text-purple-600 hover:text-purple-800 font-medium"
+                className="text-xs text-purple-400 hover:text-purple-300 font-medium"
               >
                 Edit & Use
               </button>
               <button
                 onClick={generateSuggestion}
-                className="text-xs text-purple-600 hover:text-purple-800"
+                className="text-xs text-purple-400 hover:text-purple-300"
               >
                 Regenerate
               </button>
@@ -377,7 +377,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
           value={replyText}
           onChange={(e) => setReplyText(e.target.value)}
           placeholder="Write your reply or use AI suggestion..."
-          className="w-full p-3 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full p-3 bg-[#1e1e24] border border-[#23232a] text-white placeholder-[#52525b] rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[#ff4500]/50"
           rows={3}
         />
 
@@ -386,7 +386,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
           <button
             onClick={() => handleAddToQueue(false)}
             disabled={isQueueing || !replyText.trim()}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
+            className="flex items-center gap-2 px-4 py-2 bg-[#1e1e24] text-[#d7dadc] rounded-lg hover:bg-[#23232a] disabled:opacity-50 text-sm"
           >
             {isQueueing ? (
               <RefreshCw size={14} className="animate-spin" />
@@ -410,7 +410,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
           {replyText && (
             <button
               onClick={() => { setReplyText(''); setSuggestion(''); }}
-              className="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm"
+              className="px-3 py-2 text-[#71717a] hover:text-white text-sm"
             >
               Clear
             </button>
@@ -480,24 +480,24 @@ export default function Inbox() {
   return (
     <div className="flex h-full">
       {/* Left Panel - List */}
-      <div className="w-80 border-r border-gray-200 flex flex-col bg-white">
-        <div className="p-4 border-b border-gray-200">
-          <h1 className="text-xl font-bold text-gray-900">Inbox</h1>
-          <p className="text-sm text-gray-500">
+      <div className="w-80 border-r border-[#23232a] flex flex-col bg-[#141416]">
+        <div className="p-4 border-b border-[#23232a]">
+          <h1 className="text-xl font-bold text-white">Inbox</h1>
+          <p className="text-sm text-[#71717a]">
             {stats?.total || 0} conversations, {stats?.withReplies || 0} with replies
           </p>
         </div>
 
         {/* Filters */}
-        <div className="p-2 border-b border-gray-100 flex gap-1 overflow-x-auto">
+        <div className="p-2 border-b border-[#23232a] flex gap-1 overflow-x-auto">
           {filters.map(f => (
             <button
               key={f.value}
               onClick={() => setFilter(f.value)}
               className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${
                 filter === f.value
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  ? 'bg-white/10 text-white'
+                  : 'bg-[#1e1e24] text-[#a1a1aa] hover:bg-[#23232a]'
               }`}
             >
               {f.label}
@@ -510,11 +510,11 @@ export default function Inbox() {
 
         {/* Account Filter */}
         {accounts.length > 1 && (
-          <div className="px-3 py-2 border-b border-gray-100">
+          <div className="px-3 py-2 border-b border-[#23232a]">
             <select
               value={accountFilter}
               onChange={(e) => setAccountFilter(e.target.value)}
-              className="w-full px-2 py-1 border border-gray-200 rounded text-xs text-gray-600"
+              className="w-full px-2 py-1 bg-[#1e1e24] border border-[#23232a] text-white rounded text-xs"
             >
               <option value="all">All accounts</option>
               {accounts.map(a => (
@@ -527,11 +527,11 @@ export default function Inbox() {
         {/* Conversation List */}
         <div className="flex-1 overflow-auto">
           {loading ? (
-            <div className="p-4 text-center text-gray-400">
+            <div className="p-4 text-center text-[#52525b]">
               <RefreshCw className="animate-spin mx-auto" />
             </div>
           ) : conversations.length === 0 ? (
-            <p className="p-4 text-center text-gray-400">No conversations</p>
+            <p className="p-4 text-center text-[#52525b]">No conversations</p>
           ) : (
             <ConversationList
               conversations={conversations}
@@ -543,7 +543,7 @@ export default function Inbox() {
       </div>
 
       {/* Right Panel - Detail */}
-      <div className="flex-1 bg-gray-50">
+      <div className="flex-1 bg-[#0a0a0b]">
         <ConversationDetail
           conversation={selected}
           onUpdate={loadData}

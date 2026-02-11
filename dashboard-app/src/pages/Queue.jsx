@@ -7,21 +7,21 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
   const [expanded, setExpanded] = useState(false);
 
   const statusColors = {
-    pending: 'bg-yellow-100 text-yellow-800',
-    approved: 'bg-blue-100 text-blue-800',
-    sent: 'bg-green-100 text-green-800',
-    failed: 'bg-red-100 text-red-800',
-    rejected: 'bg-gray-100 text-gray-800'
+    pending: 'bg-yellow-500/15 text-yellow-400',
+    approved: 'bg-blue-500/15 text-blue-400',
+    sent: 'bg-green-500/15 text-green-400',
+    failed: 'bg-red-500/15 text-red-400',
+    rejected: 'bg-gray-500/15 text-gray-400'
   };
 
   const scoreColor = item.classificationScore >= 70
-    ? 'text-green-600'
+    ? 'text-green-400'
     : item.classificationScore >= 40
     ? 'text-yellow-600'
-    : 'text-red-600';
+    : 'text-red-400';
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
+    <div className="bg-[#141416] rounded-lg border border-[#23232a] overflow-hidden">
       <div className="p-4">
         <div className="flex items-start gap-4">
           {/* Checkbox */}
@@ -41,18 +41,18 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
                 href={`https://reddit.com/user/${item.recipientUsername}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-semibold text-blue-600 hover:underline"
+                className="font-semibold text-[#4d9fff] hover:underline"
               >
                 u/{item.recipientUsername}
               </a>
               {!isReplyQueue && item.subreddit && (
                 <>
-                  <span className="text-gray-400">in</span>
-                  <span className="text-gray-600">r/{item.subreddit}</span>
+                  <span className="text-[#52525b]">in</span>
+                  <span className="text-[#a1a1aa]">r/{item.subreddit}</span>
                 </>
               )}
               {isReplyQueue && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/15 text-purple-400">
                   Reply
                 </span>
               )}
@@ -60,11 +60,11 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
                 {item.status}
               </span>
               {item.accountUsername ? (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600 border border-indigo-100">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">
                   u/{item.accountUsername}
                 </span>
               ) : (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-600 border border-amber-100">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20">
                   No account
                 </span>
               )}
@@ -76,7 +76,7 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
             </div>
 
             {!isReplyQueue && item.postTitle && (
-              <p className="text-sm text-gray-500 mt-1 truncate">
+              <p className="text-sm text-[#71717a] mt-1 truncate">
                 Post: {item.postTitle}
               </p>
             )}
@@ -84,7 +84,7 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
             {isReplyQueue && item.conversationId && (
               <Link
                 to={`/inbox?conversation=${item.conversationId}`}
-                className="flex items-center gap-1 text-sm text-purple-600 mt-1 hover:text-purple-800"
+                className="flex items-center gap-1 text-sm text-purple-400 mt-1 hover:text-purple-800"
               >
                 <Inbox size={14} />
                 View Conversation
@@ -93,15 +93,15 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
 
             <button
               onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-1 text-sm text-gray-400 mt-2 hover:text-gray-600"
+              className="flex items-center gap-1 text-sm text-[#52525b] mt-2 hover:text-[#a1a1aa]"
             >
               {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               {expanded ? 'Hide message' : 'Show message'}
             </button>
 
             {expanded && (
-              <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">
+              <div className="mt-3 p-3 bg-[#1e1e24] rounded-lg">
+                <p className="text-sm text-[#d7dadc] whitespace-pre-wrap">
                   {item.editedMessage || item.generatedMessage}
                 </p>
               </div>
@@ -113,14 +113,14 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
             <div className="flex gap-2">
               <button
                 onClick={() => onApprove(item.id)}
-                className="p-2 bg-green-100 text-green-600 rounded-lg hover:bg-green-200"
+                className="p-2 bg-green-500/15 text-green-400 rounded-lg hover:bg-green-500/25"
                 title="Approve"
               >
                 <Check size={18} />
               </button>
               <button
                 onClick={() => onReject(item.id)}
-                className="p-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200"
+                className="p-2 bg-red-500/15 text-red-400 rounded-lg hover:bg-red-500/25"
                 title="Reject"
               >
                 <X size={18} />
@@ -280,12 +280,12 @@ export default function Queue() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">DM Queue</h1>
-          <p className="text-gray-500">Review and manage pending messages</p>
+          <h1 className="text-2xl font-bold text-white">DM Queue</h1>
+          <p className="text-[#71717a]">Review and manage pending messages</p>
         </div>
         <button
           onClick={loadData}
-          className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow-sm hover:bg-gray-50"
+          className="flex items-center gap-2 px-4 py-2 bg-[#141416] rounded-lg hover:bg-[#1e1e24]"
         >
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           Refresh
@@ -293,22 +293,22 @@ export default function Queue() {
       </div>
 
       {error && (
-        <div className="mb-4 bg-red-50 text-red-700 px-4 py-3 rounded-lg flex items-center justify-between">
+        <div className="mb-4 bg-red-500/10 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
             <X size={16} />
           </button>
         </div>
       )}
 
       {/* Message Type Toggle */}
-      <div className="flex items-center gap-2 mb-4 p-1 bg-gray-100 rounded-lg w-fit">
+      <div className="flex items-center gap-2 mb-4 p-1 bg-[#1e1e24] rounded-lg w-fit">
         <button
           onClick={() => setMessageType('outreach')}
           className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
             messageType === 'outreach'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-[#1e1e24] text-white'
+              : 'text-[#71717a] hover:text-white'
           }`}
         >
           <Send size={16} />
@@ -318,8 +318,8 @@ export default function Queue() {
           onClick={() => setMessageType('reply')}
           className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
             messageType === 'reply'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
+              ? 'bg-[#1e1e24] text-white'
+              : 'text-[#71717a] hover:text-white'
           }`}
         >
           <MessageSquare size={16} />
@@ -335,13 +335,13 @@ export default function Queue() {
             onClick={() => setFilter(f.value)}
             className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${
               filter === f.value
-                ? 'bg-gray-900 text-white'
-                : 'bg-white text-gray-600 hover:bg-gray-50'
+                ? 'bg-white/10 text-white'
+                : 'bg-[#141416] text-[#a1a1aa] hover:bg-[#1e1e24]'
             }`}
           >
             {f.label}
             {f.count !== undefined && (
-              <span className="ml-2 px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 text-xs">
+              <span className="ml-2 px-2 py-0.5 rounded-full bg-[#23232a] text-[#a1a1aa] text-xs">
                 {f.count}
               </span>
             )}
@@ -351,7 +351,7 @@ export default function Queue() {
           <select
             value={accountFilter}
             onChange={(e) => setAccountFilter(e.target.value)}
-            className="ml-2 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 bg-white"
+            className="ml-2 px-3 py-2 border border-[#23232a] rounded-lg text-sm text-white bg-[#1e1e24]"
           >
             <option value="all">All accounts</option>
             {accounts.map(a => (
@@ -363,8 +363,8 @@ export default function Queue() {
 
       {/* Bulk Actions */}
       {filter === 'pending' && selectedIds.size > 0 && (
-        <div className="flex items-center gap-4 mb-4 p-3 bg-blue-50 rounded-lg">
-          <span className="text-sm text-blue-700">
+        <div className="flex items-center gap-4 mb-4 p-3 bg-blue-500/10 rounded-lg">
+          <span className="text-sm text-blue-400">
             {selectedIds.size} selected
           </span>
           <button
@@ -381,7 +381,7 @@ export default function Queue() {
           </button>
           <button
             onClick={() => setSelectedIds(new Set())}
-            className="text-sm text-gray-600 hover:text-gray-800"
+            className="text-sm text-[#71717a] hover:text-white"
           >
             Clear Selection
           </button>
@@ -391,7 +391,7 @@ export default function Queue() {
       {filter === 'pending' && items.some(i => i.status === 'pending') && (
         <button
           onClick={selectAll}
-          className="text-sm text-blue-600 hover:text-blue-800 mb-4"
+          className="text-sm text-[#ff4500] hover:text-[#ff5414] mb-4"
         >
           Select all pending
         </button>
@@ -399,13 +399,13 @@ export default function Queue() {
 
       {/* Queue Items */}
       {loading && items.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
+        <div className="text-center py-12 text-[#52525b]">
           <RefreshCw className="animate-spin mx-auto mb-4" size={32} />
           Loading...
         </div>
       ) : items.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-xl">
-          <p className="text-gray-400">No items in queue</p>
+        <div className="text-center py-12 bg-[#141416] rounded-xl">
+          <p className="text-[#52525b]">No items in queue</p>
         </div>
       ) : (
         <div className="space-y-3">
