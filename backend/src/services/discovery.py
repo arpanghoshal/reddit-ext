@@ -22,7 +22,7 @@ from . import gemini_client
 
 logger = logging.getLogger(__name__)
 
-MAX_LEADS = 50
+MAX_LEADS = 75
 
 _supabase: Optional[Client] = None
 
@@ -354,14 +354,17 @@ async def get_past_lead_stats(team_id: str) -> Dict[str, Any]:
 # Message Generation & Queueing
 # ============================================================================
 
-async def generate_message_for_lead(lead_id: str, team_id: str) -> Optional[str]:
+async def generate_message_for_lead(lead_id: str, team_id: str) -> Optional[Dict[str, Any]]:
     """Generate an outreach message for a discovered lead."""
     lead = await get_lead(lead_id, team_id)
     if not lead:
-        return None
+        raise ValueError(f"Lead {lead_id} not found")
 
     # Get team settings
     client = get_client()
+    if not client:
+        raise ValueError("Database client not available")
+
     settings_result = client.table("user_settings").select("*").eq(
         "team_id", team_id
     ).execute()
@@ -377,32 +380,42 @@ async def generate_message_for_lead(lead_id: str, team_id: str) -> Optional[str]
         }
 
     post_data = {
-        "url": lead["post_url"],
+        "url": lead.get("post_url", ""),
         "title": lead.get("post_title", ""),
         "body": lead.get("post_body", ""),
-        "subreddit": lead["subreddit"],
-        "author": lead["author_username"],
+        "subreddit": lead.get("subreddit", ""),
+        "author": lead.get("author_username", ""),
     }
 
     # Include source comment for comment-sourced leads
     if lead.get("source_type") == "comment" and lead.get("source_comment_body"):
         post_data["source_comment_body"] = lead["source_comment_body"]
 
-    try:
-        result = await llm_service.generate_question({
-            "post": post_data,
-            "settings": settings,
-        })
-        message = result["message"]
-        reasoning = result.get("reasoning", "")
-        await update_lead(lead_id, {
-            "generated_message": message,
-            "message_reasoning": reasoning,
-        })
-        return {"message": message, "reasoning": reasoning}
-    except Exception as e:
-        logger.error(f"Failed to generate message for lead {lead_id}: {e}")
-        return None
+    # Retry up to 2 times on transient LLM failures
+    last_error = None
+    for attempt in range(1, 3):
+        try:
+            result = await llm_service.generate_question({
+                "post": post_data,
+                "settings": settings,
+            })
+            message = result.get("message", "").strip()
+            if not message:
+                raise ValueError("LLM returned empty message")
+            reasoning = result.get("reasoning", "")
+            await update_lead(lead_id, {
+                "generated_message": message,
+                "message_reasoning": reasoning,
+            })
+            return {"message": message, "reasoning": reasoning}
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Message generation attempt {attempt} failed for lead {lead_id}: {e}")
+            if attempt < 2:
+                await asyncio.sleep(3)
+
+    logger.error(f"Failed to generate message for lead {lead_id} after 2 attempts: {last_error}")
+    raise ValueError(f"Message generation failed: {last_error}")
 
 
 async def queue_lead(
@@ -483,25 +496,29 @@ async def bulk_queue_leads(
 # ============================================================================
 
 STRATEGY_SYSTEM_PROMPT = """You are an expert at finding potential customers on Reddit.
-Given a business description and target persona, generate exactly 5 diverse Reddit search
+Given a business description and target persona, generate exactly 8 diverse Reddit search
 queries that would find posts from people who need this product/service.
 
 RESPOND IN VALID JSON FORMAT ONLY (no markdown, no explanation):
 {
-    "queries": ["query 1", "query 2", "query 3", "query 4", "query 5"]
+    "queries": ["query 1", "query 2", "query 3", "query 4", "query 5", "query 6", "query 7", "query 8"]
 }
 
 GUIDELINES:
-- Generate exactly 5 search queries optimized for Reddit's search engine
+- Generate exactly 8 search queries optimized for Google (site:reddit.com is added automatically)
 - Each query should be 3-8 words — specific enough to find relevant posts
 - Query 1: core problem/need (e.g. "best electric scooter commute")
 - Query 2: pain points or frustrations (e.g. "frustrated with X alternative needed")
 - Query 3: buying intent or recommendations (e.g. "looking for alternative to X")
 - Query 4: competitor comparison or adjacent problem (e.g. "X vs Y recommendation")
 - Query 5: different angle — use case, industry term, or niche phrasing (e.g. "how to solve Y for small business")
-- Make each query distinct — cover different angles, synonyms, and phrasings
+- Query 6: specific feature or requirement (e.g. "need X with long battery life")
+- Query 7: budget or value question (e.g. "worth upgrading to X from Y")
+- Query 8: newbie or first-time buyer (e.g. "first time buying X what should I know")
+- Make each query VERY distinct — cover different angles, synonyms, phrasings, and user intents
 - Think about what real people would actually type when looking for help
-- Do NOT include subreddit names in queries — the search covers all of Reddit"""
+- Do NOT include subreddit names in queries — the search covers all of Reddit
+- Do NOT repeat similar queries — maximize coverage across different intents"""
 
 MAX_STRATEGY_RETRIES = 3
 
@@ -641,7 +658,7 @@ RESPOND IN VALID JSON FORMAT ONLY (no markdown):
     ]
 }}
 
-Only include commenters scoring >= 50 on relevance. Max 15 leads.
+Only include commenters scoring >= 50 on relevance. Max 20 leads.
 Exclude [deleted] users and bot-like accounts."""
 
 
@@ -704,13 +721,13 @@ async def run_discovery_pipeline(session_id: str):
     """
     Main orchestrator. Runs as a background task.
     Pipeline:
-      - 1 Gemini: search strategy (5 queries)
-      - 5 SerpAPI: Google search for Reddit posts
-      - 1 Gemini: pre-filter (rank by title/snippet, pick top 15)
-      - ≤15 ScrapeCreators: enrich top 15 posts (post content + comments)
+      - 1 Gemini: search strategy (8 queries)
+      - 8 SerpAPI: Google search for Reddit posts (30 results each)
+      - 1 Gemini: pre-filter (rank by title/snippet, pick top 25)
+      - ≤25 ScrapeCreators: enrich top 25 posts (post content + comments)
       - 1-3 Gemini: batch classification
-      - 1-2 Gemini: batch comment lead analysis (5 posts per batch)
-    Total: 5 SerpAPI + ≤15 SC + 5-8 Gemini → ~40-50 leads
+      - 1-4 Gemini: batch comment lead analysis (5 posts per batch, 20 posts max)
+    Total: 8 SerpAPI + ≤25 SC + 6-10 Gemini → ~50-75 leads
     """
     try:
         # Load session
@@ -737,6 +754,21 @@ async def run_discovery_pipeline(session_id: str):
         is_automation = session.get("mode") == "automation"
         target_subs = session.get("target_subreddits") or []
 
+        # ---- Pre-load: Fetch own account usernames to exclude from leads ----
+        own_account_usernames = set()
+        try:
+            accounts_result = client.table("reddit_accounts").select(
+                "username"
+            ).eq("team_id", team_id).execute()
+            for row in (accounts_result.data or []):
+                username = (row.get("username") or "").lower().strip()
+                if username:
+                    own_account_usernames.add(username)
+            if own_account_usernames:
+                logger.info(f"Excluding own accounts from leads: {own_account_usernames}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch own accounts: {e}")
+
         # ---- Phase 1: Generate search strategy (1 Gemini call) ----
         await update_session(session_id, {
             "status": "searching",
@@ -744,7 +776,7 @@ async def run_discovery_pipeline(session_id: str):
         })
 
         strategy = await generate_search_strategy(session_id, settings)
-        search_queries = strategy.get("queries", [])[:5]
+        search_queries = strategy.get("queries", [])[:8]
 
         if not search_queries:
             logger.error(f"No search queries generated for session {session_id}")
@@ -785,7 +817,7 @@ async def run_discovery_pipeline(session_id: str):
             for query in search_queries:
                 try:
                     results = await serpapi_client.search_reddit_posts(
-                        query, num_results=20, time_period="m",
+                        query, num_results=30, time_period="m",
                     )
                     for r in results:
                         url = r.get("link", "")
@@ -809,7 +841,7 @@ async def run_discovery_pipeline(session_id: str):
 
         # ---- Phase 2.5a: Pre-filter SerpAPI results (1 Gemini call) ----
         # Rank by title/snippet relevance so we only spend SC calls on the best posts
-        MAX_ENRICH = 15
+        MAX_ENRICH = 25
         picks = list(range(min(len(serpapi_results), MAX_ENRICH)))  # fallback: first N
 
         if len(serpapi_results) > MAX_ENRICH:
@@ -852,10 +884,10 @@ async def run_discovery_pipeline(session_id: str):
             except Exception as e:
                 logger.warning(f"Pre-filter failed, using first {MAX_ENRICH} results: {e}")
 
-        # ---- Phase 2.5b: Enrich top picks via ScrapeCreators (≤5 calls) ----
+        # ---- Phase 2.5b: Enrich top picks via ScrapeCreators ----
         all_posts = []  # Enriched post dicts
         post_comments = {}  # {url: [comment_list]} for Phase 5
-        seen_authors = set()
+        seen_authors = set(own_account_usernames)  # Pre-seed with own accounts to skip them
 
         for idx in picks:
             serpapi_result = serpapi_results[idx]
@@ -922,7 +954,9 @@ async def run_discovery_pipeline(session_id: str):
         from . import dedup
         all_authors = [post["author"] for post in all_posts]
         contacted_set = await dedup.batch_check_contacted(all_authors, team_id)
-        logger.info(f"Batch dedup: {len(contacted_set)} of {len(all_authors)} authors already contacted/discovered")
+        # Also exclude own accounts from leads
+        contacted_set.update(own_account_usernames)
+        logger.info(f"Batch dedup: {len(contacted_set)} of {len(all_authors)} authors already contacted/discovered/own-accounts")
 
         posts_to_classify = [
             post for post in all_posts
@@ -1103,7 +1137,7 @@ async def run_discovery_pipeline(session_id: str):
 
         # ---- Phase 5: Comment mining (0 API calls + 1-2 Gemini calls) ----
         # Comments were already fetched in Phase 2.5 — reuse them
-        MAX_COMMENT_MINING = 10
+        MAX_COMMENT_MINING = 20
         COMMENT_BATCH_SIZE = 5  # Posts per Gemini call
         scored_posts.sort(key=lambda x: x[1], reverse=True)
         top_posts = scored_posts[:MAX_COMMENT_MINING]

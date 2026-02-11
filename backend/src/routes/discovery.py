@@ -208,9 +208,14 @@ async def generate_message(request: Request, session_id: str, lead_id: str):
     if not team_id:
         raise HTTPException(status_code=401, detail="Team context required")
 
-    result = await discovery.generate_message_for_lead(lead_id, team_id)
-    if not result:
-        raise HTTPException(status_code=500, detail="Failed to generate message")
+    try:
+        result = await discovery.generate_message_for_lead(lead_id, team_id)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"generate_message exception for lead {lead_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate message: {e}")
 
     return {"success": True, "data": {
         "message": result["message"],

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff } from 'lucide-react';
+import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff, ListChecks } from 'lucide-react';
 import * as api from '../api/client';
 
 // ============================================================================
@@ -730,6 +730,9 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
   const [tierFilter, setTierFilter] = useState('all');
   const [subredditFilter, setSubredditFilter] = useState('all');
   const [subreddits, setSubreddits] = useState([]);
+  const [bulkAccount, setBulkAccount] = useState('');
+  const [bulkQueueing, setBulkQueueing] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(null); // {queued, failed, total}
 
   useEffect(() => {
     loadData();
@@ -752,6 +755,9 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
       setLeads(leadsData || []);
       setAccounts(accountsData || []);
       setSubreddits(subredditsData || []);
+      if (accountsData?.length && !bulkAccount) {
+        setBulkAccount(accountsData[0].id);
+      }
     } catch (err) {
       console.error('Failed to load discovery results:', err);
     }
@@ -769,6 +775,29 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
     } catch (err) {
       console.error('Failed to dismiss lead:', err);
     }
+  };
+
+  const eligibleLeads = leads.filter(l => l.status === 'scored');
+
+  const handleBulkQueue = async () => {
+    if (!bulkAccount || eligibleLeads.length === 0) return;
+    setBulkQueueing(true);
+    setBulkProgress({ queued: 0, failed: 0, total: eligibleLeads.length });
+    try {
+      const leadIds = eligibleLeads.map(l => l.id);
+      const result = await api.bulkQueueLeads(sessionId, { leadIds, accountId: bulkAccount });
+      setBulkProgress({
+        queued: result?.queued || 0,
+        failed: result?.failed || 0,
+        total: eligibleLeads.length,
+      });
+      // Refresh leads to update statuses
+      await loadData();
+    } catch (err) {
+      console.error('Bulk queue failed:', err);
+      setBulkProgress(prev => prev ? { ...prev, failed: prev.total } : null);
+    }
+    setBulkQueueing(false);
   };
 
   const tierCounts = {
@@ -799,6 +828,52 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
           New Search
         </button>
       </div>
+
+      {/* Bulk Queue All */}
+      {eligibleLeads.length > 0 && accounts.length > 0 && (
+        <div className="flex items-center gap-3 mb-4 p-3 bg-[#141416] rounded-lg border border-[#23232a]">
+          <select
+            value={bulkAccount}
+            onChange={(e) => setBulkAccount(e.target.value)}
+            className="text-sm bg-[#1e1e24] border border-[#23232a] rounded-lg px-2 py-1.5 text-white"
+            disabled={bulkQueueing}
+          >
+            {accounts.map(acc => (
+              <option key={acc.id} value={acc.id}>u/{acc.username}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleBulkQueue}
+            disabled={bulkQueueing || !bulkAccount}
+            className="flex items-center gap-2 px-4 py-2 bg-[#ff4500] text-white text-sm font-semibold rounded-lg hover:bg-[#e63e00] disabled:opacity-50 transition-colors"
+          >
+            {bulkQueueing ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Generating & Queueing...
+              </>
+            ) : (
+              <>
+                <ListChecks className="w-4 h-4" />
+                Queue All ({eligibleLeads.length})
+              </>
+            )}
+          </button>
+          {bulkProgress && !bulkQueueing && (
+            <span className="text-sm text-[#a1a1aa]">
+              {bulkProgress.queued} queued
+              {bulkProgress.failed > 0 && (
+                <span className="text-red-400 ml-1">({bulkProgress.failed} failed)</span>
+              )}
+            </span>
+          )}
+          {bulkQueueing && (
+            <span className="text-xs text-[#71717a]">
+              Messages are being generated and queued — this may take a minute...
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Tier summary */}
       <div className="grid grid-cols-3 gap-3 mb-4">
