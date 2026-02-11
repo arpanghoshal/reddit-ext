@@ -33,6 +33,7 @@ async def generate_content(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
     max_tokens: int = 1000,
+    response_mime_type: Optional[str] = None,
 ) -> str:
     """
     Generate content using Gemini async API.
@@ -43,6 +44,7 @@ async def generate_content(
         model: Gemini model ID
         temperature: Sampling temperature (0-2)
         max_tokens: Maximum output tokens
+        response_mime_type: Optional MIME type to constrain output (e.g. "application/json")
 
     Returns:
         Generated text content
@@ -53,6 +55,7 @@ async def generate_content(
         system_instruction=system_instruction,
         temperature=temperature,
         max_output_tokens=max_tokens,
+        response_mime_type=response_mime_type,
     )
 
     response = await client.aio.models.generate_content(

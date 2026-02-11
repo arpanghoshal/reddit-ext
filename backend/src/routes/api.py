@@ -159,7 +159,7 @@ class AccountAddRequest(BaseModel):
     displayName: Optional[str] = None
     cookies: Optional[List[Dict[str, Any]]] = None
     warmupMode: Optional[bool] = True
-    dailyLimit: Optional[int] = 20
+    dailyLimit: Optional[int] = 50
 
 
 class AccountUpdateRequest(BaseModel):

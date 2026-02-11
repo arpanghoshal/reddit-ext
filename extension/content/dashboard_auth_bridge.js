@@ -10,6 +10,21 @@ const ALLOWED_ORIGINS = [
 
 const MESSAGE_TYPE = 'RDM_AUTH_EVENT';
 
+// Retry sending a message to the background service worker.
+// MV3 service workers can be suspended; this ensures they wake up.
+async function sendToBackground(message, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const response = await chrome.runtime.sendMessage(message);
+      return response;
+    } catch (err) {
+      if (i === retries) throw err;
+      // Brief pause before retry to let service worker wake up
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+}
+
 window.addEventListener('message', async (event) => {
   if (!ALLOWED_ORIGINS.includes(event.origin)) return;
   if (!event.data || event.data.type !== MESSAGE_TYPE) return;
@@ -52,7 +67,7 @@ window.addEventListener('message', async (event) => {
         return;
     }
 
-    const response = await chrome.runtime.sendMessage({ action: bgAction, payload });
+    const response = await sendToBackground({ action: bgAction, payload });
 
     window.postMessage({
       type: 'RDM_AUTH_RESPONSE',
@@ -70,5 +85,14 @@ window.addEventListener('message', async (event) => {
   }
 });
 
-// Notify the dashboard that the bridge is ready so it can re-broadcast existing session
-window.postMessage({ type: 'RDM_BRIDGE_READY' }, '*');
+// Notify the dashboard that the bridge is ready so it can re-broadcast
+// existing session. Retry several times because React may not have mounted
+// its listener yet when the content script first runs at document_idle.
+function announceReady() {
+  window.postMessage({ type: 'RDM_BRIDGE_READY' }, '*');
+}
+
+announceReady();
+setTimeout(announceReady, 500);
+setTimeout(announceReady, 1500);
+setTimeout(announceReady, 3500);

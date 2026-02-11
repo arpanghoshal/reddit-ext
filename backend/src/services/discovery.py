@@ -6,6 +6,7 @@ into a multi-stage discovery pipeline.
 """
 
 import os
+import re
 import json
 import asyncio
 import logging
@@ -445,6 +446,43 @@ GUIDELINES:
 - Include both technical and non-technical language variants
 - Consider competitor names as keywords"""
 
+MAX_STRATEGY_RETRIES = 2
+
+
+def _strip_json_fences(text: str) -> str:
+    """Remove markdown code fences from LLM output."""
+    text = text.strip()
+    if "```json" in text:
+        text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in text:
+        text = text.split("```", 1)[1].split("```", 1)[0].strip()
+    return text
+
+
+def _repair_json(text: str) -> str:
+    """Best-effort repair of common JSON issues from LLM output."""
+    # Remove trailing commas before ] or }
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    # If the string is truncated, try to close open structures
+    open_braces = text.count('{') - text.count('}')
+    open_brackets = text.count('[') - text.count(']')
+    # Check for unterminated string (odd number of unescaped quotes)
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and in_string:
+            i += 2
+            continue
+        if ch == '"':
+            in_string = not in_string
+        i += 1
+    if in_string:
+        text += '"'
+    text += ']' * max(open_brackets, 0)
+    text += '}' * max(open_braces, 0)
+    return text
+
 
 async def generate_search_strategy(session_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
     """Use LLM to generate search keywords, pain phrases, and subreddit suggestions."""
@@ -453,37 +491,45 @@ Target Persona: {settings.get('persona', 'Not specified')}
 Tone: {settings.get('tone', 'Curious')}
 Insight Types: {', '.join(settings.get('insightTypes', []))}"""
 
-    try:
-        content = await gemini_client.generate_content(
-            system_instruction=STRATEGY_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            temperature=0.7,
-            max_tokens=1000,
-        )
+    last_error = None
+    for attempt in range(1, MAX_STRATEGY_RETRIES + 1):
+        try:
+            content = await gemini_client.generate_content(
+                system_instruction=STRATEGY_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0.7,
+                max_tokens=1000,
+                response_mime_type="application/json",
+            )
 
-        # Parse JSON from response
-        json_str = content.strip()
-        if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0].strip()
+            json_str = _strip_json_fences(content)
 
-        strategy = json.loads(json_str)
+            # Try parsing directly first, then with repair
+            try:
+                strategy = json.loads(json_str)
+            except json.JSONDecodeError:
+                logger.warning(f"Strategy JSON parse failed (attempt {attempt}), trying repair")
+                strategy = json.loads(_repair_json(json_str))
 
-        # Validate structure
-        strategy.setdefault("keywords", [])
-        strategy.setdefault("pain_phrases", [])
-        strategy.setdefault("intent_queries", [])
-        strategy.setdefault("suggested_subreddits", [])
+            # Validate structure
+            strategy.setdefault("keywords", [])
+            strategy.setdefault("pain_phrases", [])
+            strategy.setdefault("intent_queries", [])
+            strategy.setdefault("suggested_subreddits", [])
 
-        # Store strategy in session
-        await update_session(session_id, {"search_strategy": strategy})
+            # Store strategy in session
+            await update_session(session_id, {"search_strategy": strategy})
 
-        return strategy
+            return strategy
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse search strategy JSON: {e}")
-        raise ValueError("Failed to generate search strategy")
+        except Exception as e:
+            last_error = e
+            logger.warning(f"generate_search_strategy attempt {attempt}/{MAX_STRATEGY_RETRIES} failed: {e}")
+            if attempt < MAX_STRATEGY_RETRIES:
+                await asyncio.sleep(1)
+
+    logger.error(f"Failed to generate search strategy after {MAX_STRATEGY_RETRIES} attempts: {last_error}")
+    raise ValueError("Failed to generate search strategy")
 
 
 # ============================================================================
@@ -542,15 +588,14 @@ async def identify_comment_leads(
             user_prompt=f"COMMENTS:\n{comments_text}",
             temperature=0.5,
             max_tokens=800,
+            response_mime_type="application/json",
         )
 
-        json_str = content.strip()
-        if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0].strip()
-
-        parsed = json.loads(json_str)
+        json_str = _strip_json_fences(content)
+        try:
+            parsed = json.loads(json_str)
+        except json.JSONDecodeError:
+            parsed = json.loads(_repair_json(json_str))
         return parsed.get("leads", [])
 
     except Exception as e:

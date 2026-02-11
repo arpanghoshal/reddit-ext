@@ -12,6 +12,9 @@ const STATUS_COLORS = {
 
 function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
   const [checking, setChecking] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editDailyLimit, setEditDailyLimit] = useState(account.dailyLimit);
+  const [saving, setSaving] = useState(false);
 
   const handleCheckShadowban = async () => {
     setChecking(true);
@@ -19,6 +22,31 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
       await onCheckShadowban(account.id);
     } finally {
       setChecking(false);
+    }
+  };
+
+  const handleToggleWarmup = async () => {
+    setSaving(true);
+    try {
+      await api.updateAccount(account.id, { warmupMode: !account.warmupMode });
+      onUpdate();
+    } catch (err) {
+      console.error('Failed to update warmup mode:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveDailyLimit = async () => {
+    setSaving(true);
+    try {
+      await api.updateAccount(account.id, { dailyLimit: editDailyLimit });
+      setEditing(false);
+      onUpdate();
+    } catch (err) {
+      console.error('Failed to update daily limit:', err);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -83,19 +111,64 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
         </div>
       </div>
 
-      {/* Warmup Status */}
-      {account.warmupMode && (
-        <div className="mt-3 flex items-center gap-2 text-sm text-yellow-600">
-          <AlertTriangle size={14} />
-          <span>Warmup mode active</span>
+      {/* Warmup Status Toggle */}
+      <div className="mt-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm">
+          {account.warmupMode ? (
+            <>
+              <AlertTriangle size={14} className="text-yellow-600" />
+              <span className="text-yellow-600">Warmup mode active</span>
+            </>
+          ) : (
+            <span className="text-green-600 font-medium">Fully warmed up</span>
+          )}
         </div>
-      )}
+        <button
+          onClick={handleToggleWarmup}
+          disabled={saving}
+          className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+            account.warmupMode
+              ? 'bg-green-100 text-green-700 hover:bg-green-200'
+              : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+          }`}
+        >
+          {saving ? '...' : account.warmupMode ? 'Mark Warmed Up' : 'Set Warming Up'}
+        </button>
+      </div>
 
       {/* Stats */}
       <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-4 text-sm">
         <div>
           <span className="text-gray-500">Daily Limit</span>
-          <p className="font-medium">{account.dailyLimit}</p>
+          {editing ? (
+            <div className="flex items-center gap-1 mt-1">
+              <input
+                type="number"
+                value={editDailyLimit}
+                onChange={(e) => setEditDailyLimit(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
+                min="1"
+                max="50"
+                className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+              />
+              <button
+                onClick={handleSaveDailyLimit}
+                disabled={saving}
+                className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => { setEditing(false); setEditDailyLimit(account.dailyLimit); }}
+                className="px-2 py-1 text-gray-400 text-xs hover:text-gray-600"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <p className="font-medium cursor-pointer hover:text-blue-500" onClick={() => setEditing(true)}>
+              {account.dailyLimit} <Settings size={12} className="inline text-gray-400" />
+            </p>
+          )}
         </div>
         <div>
           <span className="text-gray-500">Last DM</span>
@@ -120,6 +193,8 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
 
 function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
   const [username, setUsername] = useState('');
+  const [warmupMode, setWarmupMode] = useState(true);
+  const [dailyLimit, setDailyLimit] = useState(50);
   const [loading, setLoading] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [captureStatus, setCaptureStatus] = useState(null);
@@ -130,8 +205,10 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
 
     setLoading(true);
     try {
-      await onAdd({ username: username.trim() });
+      await onAdd({ username: username.trim(), warmupMode, dailyLimit });
       setUsername('');
+      setWarmupMode(true);
+      setDailyLimit(50);
       onClose();
     } catch (err) {
       console.error('Failed to add account:', err);
@@ -230,6 +307,58 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
+          {/* Warmup Status */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Warmup Status
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setWarmupMode(true)}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  warmupMode
+                    ? 'bg-yellow-50 border-yellow-300 text-yellow-800'
+                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                }`}
+              >
+                Warming Up
+              </button>
+              <button
+                type="button"
+                onClick={() => setWarmupMode(false)}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  !warmupMode
+                    ? 'bg-green-50 border-green-300 text-green-800'
+                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                }`}
+              >
+                Already Warmed Up
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              {warmupMode
+                ? 'DM limits will increase gradually over 8 days.'
+                : 'Account will start at full daily limit immediately.'}
+            </p>
+          </div>
+
+          {/* Daily Limit */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Daily DM Limit
+            </label>
+            <input
+              type="number"
+              value={dailyLimit}
+              onChange={(e) => setDailyLimit(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
+              min="1"
+              max="50"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">Max 50 DMs per day.</p>
+          </div>
+
           <p className="text-xs text-gray-400 mb-4">
             Manual accounts won't have cookies — you'll need to capture them later for automation to work.
           </p>

@@ -40,11 +40,11 @@ def get_client() -> Optional[Client]:
 def get_effective_daily_limit(account: Dict[str, Any]) -> int:
     """Get effective daily limit considering warmup mode"""
     if not account.get("warmupMode"):
-        return account.get("dailyLimit", 20)
+        return account.get("dailyLimit", 50)
 
     warmup_start = account.get("warmupStartDate")
     if not warmup_start:
-        return account.get("dailyLimit", 20)
+        return account.get("dailyLimit", 50)
 
     if isinstance(warmup_start, str):
         warmup_start = datetime.fromisoformat(warmup_start.replace("Z", "+00:00"))
@@ -52,7 +52,7 @@ def get_effective_daily_limit(account: Dict[str, Any]) -> int:
     warmup_days = (datetime.now(warmup_start.tzinfo) - warmup_start).days
 
     warmup_limit = WARMUP_SCHEDULE[min(warmup_days, len(WARMUP_SCHEDULE) - 1)]
-    return min(warmup_limit, account.get("dailyLimit", 20))
+    return min(warmup_limit, account.get("dailyLimit", 50))
 
 
 def transform_account(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -102,7 +102,7 @@ async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = Non
             "encrypted_cookie": encrypted_cookie,
             "warmup_mode": warmup_mode,
             "warmup_start_date": datetime.utcnow().isoformat(),
-            "daily_limit": account_data.get("dailyLimit", 20),
+            "daily_limit": account_data.get("dailyLimit", 50),
             "current_daily_count": 0,
             "status": "warming_up" if warmup_mode else "active"
         }
@@ -208,6 +208,8 @@ async def update_account(account_id: str, updates: Dict[str, Any], team_id: Opti
             if updates["warmupMode"]:
                 update_data["warmup_start_date"] = datetime.utcnow().isoformat()
                 update_data["status"] = "warming_up"
+            else:
+                update_data["status"] = "active"
         if "dailyLimit" in updates:
             update_data["daily_limit"] = updates["dailyLimit"]
         if "status" in updates:
