@@ -1219,25 +1219,62 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // Open dashboard tab and save its ID for later sync
+    if (request.action === 'OPEN_DASHBOARD') {
+        (async () => {
+            const tab = await chrome.tabs.create({ url: 'https://reddit-ext-dashboard.vercel.app' });
+            await chrome.storage.local.set({ dashboardTabId: tab.id });
+            console.log('[Sync] Opened dashboard tab and saved ID:', tab.id);
+            sendResponse({ success: true, tabId: tab.id });
+        })();
+        return true;
+    }
+
     // --- Direct Dashboard Sync (bypasses window.postMessage bridge) ---
     // Reads Supabase session directly from the dashboard tab's localStorage
     if (request.action === 'SYNC_FROM_DASHBOARD') {
         (async () => {
             try {
-                // Find an open dashboard tab
-                const dashTabs = await chrome.tabs.query({
-                    url: [
-                        'https://reddit-ext-dashboard.vercel.app/*',
-                        'http://localhost:5173/*',
-                        'http://localhost:3000/*'
-                    ]
-                });
-                console.log('[Sync] Found dashboard tabs:', dashTabs.length, dashTabs.map(t => t.url));
-                if (!dashTabs.length) {
-                    sendResponse({ success: false, error: 'No dashboard tab open' });
+                // Find the dashboard tab
+                let tabId = null;
+
+                // Method 1: Use saved tab ID from when popup opened the dashboard
+                const stored = await chrome.storage.local.get(['dashboardTabId']);
+                console.log('[Sync] Stored dashboardTabId:', stored.dashboardTabId || 'NONE');
+                if (stored.dashboardTabId) {
+                    try {
+                        const tab = await chrome.tabs.get(stored.dashboardTabId);
+                        console.log('[Sync] Tab get result:', tab.id, 'discarded:', tab.discarded, 'status:', tab.status);
+                        if (tab && !tab.discarded) {
+                            tabId = tab.id;
+                            console.log('[Sync] Using saved dashboard tab:', tabId);
+                        }
+                    } catch (e) {
+                        console.log('[Sync] Saved tab not found:', e.message);
+                        await chrome.storage.local.remove('dashboardTabId');
+                    }
+                }
+
+                // Method 2: Query tabs by URL (works when tabs permission is granted)
+                if (!tabId) {
+                    const allTabs = await chrome.tabs.query({});
+                    const dashTabs = allTabs.filter(t =>
+                        t.url && (
+                            t.url.startsWith('https://reddit-ext-dashboard.vercel.app') ||
+                            t.url.startsWith('http://localhost:5173') ||
+                            t.url.startsWith('http://localhost:3000')
+                        )
+                    );
+                    if (dashTabs.length) {
+                        tabId = dashTabs[0].id;
+                        console.log('[Sync] Found dashboard tab by URL:', tabId);
+                    }
+                }
+
+                if (!tabId) {
+                    sendResponse({ success: false, error: 'No dashboard tab found. Open the dashboard from the extension popup first.' });
                     return;
                 }
-                const tabId = dashTabs[0].id;
 
                 // Execute in the page's MAIN world to access its localStorage
                 console.log('[Sync] Executing script in tab', tabId);
