@@ -1219,7 +1219,110 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    // --- Dashboard Auth Sync Handlers ---
+    // --- Direct Dashboard Sync (bypasses window.postMessage bridge) ---
+    // Reads Supabase session directly from the dashboard tab's localStorage
+    if (request.action === 'SYNC_FROM_DASHBOARD') {
+        (async () => {
+            try {
+                // Find an open dashboard tab
+                const dashTabs = await chrome.tabs.query({
+                    url: [
+                        'https://reddit-ext-dashboard.vercel.app/*',
+                        'http://localhost:5173/*',
+                        'http://localhost:3000/*'
+                    ]
+                });
+                if (!dashTabs.length) {
+                    sendResponse({ success: false, error: 'No dashboard tab open' });
+                    return;
+                }
+                const tabId = dashTabs[0].id;
+
+                // Execute in the page's MAIN world to access its localStorage
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId },
+                    world: 'MAIN',
+                    func: () => {
+                        try {
+                            // Find the Supabase auth key (sb-<ref>-auth-token)
+                            const authKey = Object.keys(localStorage).find(
+                                k => k.startsWith('sb-') && k.endsWith('-auth-token')
+                            );
+                            if (!authKey) return null;
+                            const raw = localStorage.getItem(authKey);
+                            if (!raw) return null;
+                            const parsed = JSON.parse(raw);
+                            const currentTeamId = localStorage.getItem('currentTeamId');
+                            return { session: parsed, currentTeamId };
+                        } catch {
+                            return null;
+                        }
+                    }
+                });
+
+                const data = results?.[0]?.result;
+                if (!data || !data.session) {
+                    sendResponse({ success: false, error: 'No session in dashboard' });
+                    return;
+                }
+
+                const sess = data.session;
+                // Supabase JS v2 stores: { access_token, refresh_token, expires_at, user, ... }
+                const accessToken = sess.access_token;
+                const refreshToken = sess.refresh_token;
+                const expiresAt = sess.expires_at;
+                const user = sess.user;
+
+                if (!accessToken) {
+                    sendResponse({ success: false, error: 'No access token in session' });
+                    return;
+                }
+
+                // Fetch teams from backend using the token
+                let teams = [];
+                let teamId = data.currentTeamId || null;
+                try {
+                    const baseUrl = 'https://backend-production-423ef.up.railway.app';
+                    const resp = await fetch(`${baseUrl}/api/auth/me`, {
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    if (resp.ok) {
+                        const meData = await resp.json();
+                        teams = meData.teams || [];
+                        if (!teamId && teams.length) {
+                            const personal = teams.find(t => t.is_personal);
+                            teamId = personal?.id || teams[0]?.id || null;
+                        }
+                    }
+                } catch {
+                    // Teams fetch failed, proceed with token-only sync
+                }
+
+                const authData = {
+                    accessToken,
+                    refreshToken,
+                    expiresAt,
+                    teamId,
+                    teams,
+                    userEmail: user?.email || '',
+                    userName: user?.user_metadata?.full_name || ''
+                };
+
+                await chrome.storage.local.set(authData);
+                api.resetApiConfig();
+                startReplyQueuePolling();
+                sendResponse({ success: true, email: authData.userEmail, teams, teamId });
+            } catch (err) {
+                sendResponse({ success: false, error: err.message });
+            }
+        })();
+        return true;
+    }
+
+    // --- Dashboard Auth Sync Handlers (bridge-based) ---
 
     if (request.action === 'DASHBOARD_AUTH_SYNC') {
         const p = request.payload;

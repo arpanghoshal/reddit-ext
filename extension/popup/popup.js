@@ -36,6 +36,20 @@ async function checkAuthState() {
         await loadStats();
         await checkConnection();
     } else {
+        // No local auth — try to sync directly from an open dashboard tab.
+        // This bypasses the window.postMessage bridge entirely.
+        try {
+            const syncResult = await chrome.runtime.sendMessage({ action: 'SYNC_FROM_DASHBOARD' });
+            if (syncResult && syncResult.success) {
+                showMainSection(syncResult.email);
+                populateTeamSelector(syncResult.teams || [], syncResult.teamId);
+                await loadStats();
+                await checkConnection();
+                return;
+            }
+        } catch {
+            // Sync not available, fall through to login
+        }
         showLoginSection();
     }
 }
