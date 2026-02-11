@@ -123,7 +123,7 @@ function AppLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-[#dae0e6]" key={`${authKey}-${currentTeam?.id}`}>
+      <main className="flex-1 overflow-auto bg-[#0a0a0b]" key={`${authKey}-${currentTeam?.id}`}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/discovery" element={<Discovery />} />

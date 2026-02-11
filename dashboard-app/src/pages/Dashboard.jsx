@@ -1,29 +1,31 @@
 import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { MessageCircle, Users, CheckCircle, TrendingUp, AlertTriangle, RefreshCw } from 'lucide-react';
+import { MessageCircle, TrendingUp, CheckCircle, Users, RefreshCw, AlertTriangle, ChevronRight, Activity } from 'lucide-react';
 import * as api from '../api/client';
 
-function StatCard({ title, value, subtitle, icon: Icon, color = 'blue' }) {
-  const colors = {
-    blue: 'bg-blue-500',
-    green: 'bg-green-500',
-    orange: 'bg-orange-500',
-    red: 'bg-red-500',
-    purple: 'bg-purple-500'
-  };
-
+function StatCard({ title, value, subtitle, icon: Icon, accent }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm p-6">
+    <div className="group relative bg-[#141416] border border-[#23232a] rounded-2xl p-5 hover:border-[#333] transition-all duration-200">
       <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className="text-3xl font-bold mt-1">{value}</p>
-          {subtitle && <p className="text-sm text-gray-400 mt-1">{subtitle}</p>}
+        <div className="space-y-1">
+          <p className="text-[13px] font-medium text-[#71717a] uppercase tracking-wide">{title}</p>
+          <p className="text-3xl font-semibold text-white tracking-tight">{value}</p>
+          {subtitle && <p className="text-[13px] text-[#52525b]">{subtitle}</p>}
         </div>
-        <div className={`${colors[color]} p-3 rounded-lg`}>
-          <Icon className="text-white" size={24} />
+        <div className={`p-2.5 rounded-xl ${accent}`}>
+          <Icon className="text-white/90" size={20} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function QueuePill({ label, count, color }) {
+  if (!count) return null;
+  return (
+    <div className="flex items-center gap-2.5 px-4 py-2.5 bg-[#141416] border border-[#23232a] rounded-xl">
+      <span className={`w-2 h-2 rounded-full ${color}`} />
+      <span className="text-sm text-[#a1a1aa]">{label}</span>
+      <span className="text-sm font-semibold text-white ml-auto">{count}</span>
     </div>
   );
 }
@@ -31,38 +33,93 @@ function StatCard({ title, value, subtitle, icon: Icon, color = 'blue' }) {
 function FunnelChart({ data }) {
   const stages = [
     { name: 'Scanned', key: 'scanned', color: '#6366f1' },
-    { name: 'Qualified', key: 'qualified', color: '#8b5cf6' },
-    { name: 'Messaged', key: 'messaged', color: '#a855f7' },
-    { name: 'Replied', key: 'replied', color: '#d946ef' },
-    { name: 'Converted', key: 'converted', color: '#ec4899' }
+    { name: 'Qualified', key: 'qualified', color: '#818cf8' },
+    { name: 'Messaged', key: 'messaged', color: '#a78bfa' },
+    { name: 'Replied', key: 'replied', color: '#c084fc' },
+    { name: 'Converted', key: 'converted', color: '#e879f9' },
   ];
 
   const maxValue = Math.max(...stages.map(s => data[s.key] || 0)) || 1;
+  const hasData = stages.some(s => data[s.key] > 0);
+
+  if (!hasData) {
+    return (
+      <div className="flex items-center justify-center h-40 text-[#52525b] text-sm">
+        No funnel data yet
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
       {stages.map((stage, index) => {
         const value = data[stage.key] || 0;
-        const width = (value / maxValue) * 100;
+        const width = Math.max((value / maxValue) * 100, value > 0 ? 4 : 0);
         const prevValue = index > 0 ? data[stages[index - 1].key] || 0 : null;
-        const rate = prevValue ? ((value / prevValue) * 100).toFixed(1) : null;
+        const rate = prevValue > 0 ? ((value / prevValue) * 100).toFixed(0) : null;
 
         return (
-          <div key={stage.key} className="flex items-center gap-4">
-            <div className="w-24 text-sm text-gray-600">{stage.name}</div>
-            <div className="flex-1 h-8 bg-gray-100 rounded-full overflow-hidden">
+          <div key={stage.key} className="flex items-center gap-3">
+            <div className="w-20 text-[13px] text-[#71717a] text-right">{stage.name}</div>
+            <div className="flex-1 h-7 bg-[#1e1e24] rounded-lg overflow-hidden">
               <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${width}%`, backgroundColor: stage.color }}
+                className="h-full rounded-lg transition-all duration-700 ease-out"
+                style={{
+                  width: `${width}%`,
+                  background: `linear-gradient(90deg, ${stage.color}, ${stage.color}dd)`,
+                }}
               />
             </div>
-            <div className="w-20 text-right">
-              <span className="font-semibold">{value}</span>
-              {rate && <span className="text-xs text-gray-400 ml-1">({rate}%)</span>}
+            <div className="w-20 flex items-center gap-1.5">
+              <span className="text-sm font-medium text-white">{value}</span>
+              {rate && (
+                <span className="text-[11px] text-[#52525b]">{rate}%</span>
+              )}
             </div>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function AccountCard({ account }) {
+  const used = account.currentDailyCount || 0;
+  const limit = account.effectiveDailyLimit || account.dailyLimit || 20;
+  const pct = Math.min((used / limit) * 100, 100);
+
+  const statusConfig = {
+    active: { label: 'Active', dot: 'bg-emerald-400', text: 'text-emerald-400' },
+    warming_up: { label: 'Warming', dot: 'bg-amber-400', text: 'text-amber-400' },
+    paused: { label: 'Paused', dot: 'bg-zinc-500', text: 'text-zinc-400' },
+    shadowbanned: { label: 'Banned', dot: 'bg-red-400', text: 'text-red-400' },
+    suspended: { label: 'Suspended', dot: 'bg-red-500', text: 'text-red-400' },
+  };
+
+  const status = statusConfig[account.status] || statusConfig.paused;
+  const barColor = pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-amber-500' : 'bg-emerald-500';
+
+  return (
+    <div className="bg-[#141416] border border-[#23232a] rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-white">u/{account.username}</span>
+        <div className="flex items-center gap-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+          <span className={`text-xs ${status.text}`}>{status.label}</span>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <div className="h-1.5 bg-[#1e1e24] rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[11px] text-[#52525b]">
+          <span>{used} sent</span>
+          <span>{limit} limit</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -85,7 +142,7 @@ export default function Dashboard() {
         api.getQueueStats().catch(() => null),
         api.getClassificationStats().catch(() => null),
         api.getConversationStats().catch(() => null),
-        api.getRotationStatus().catch(() => null)
+        api.getRotationStatus().catch(() => null),
       ]);
 
       setAnalytics(analyticsData);
@@ -103,7 +160,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 15000);
+    const interval = setInterval(loadData, 30000);
     const onVisible = () => {
       if (document.visibilityState === 'visible') loadData();
     };
@@ -116,8 +173,8 @@ export default function Dashboard() {
 
   if (loading && !analytics) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <RefreshCw className="animate-spin text-gray-400" size={32} />
+      <div className="flex items-center justify-center h-full bg-[#0a0a0b]">
+        <div className="animate-spin h-8 w-8 border-2 border-[#ff4500] border-t-transparent rounded-full" />
       </div>
     );
   }
@@ -127,222 +184,119 @@ export default function Dashboard() {
     qualified: (classificationStats?.strongMatch || 0) + (classificationStats?.weakMatch || 0),
     messaged: analytics?.totalDMs || 0,
     replied: conversationStats?.withReplies || 0,
-    converted: conversationStats?.converted || 0
+    converted: conversationStats?.converted || 0,
   };
 
-  const classificationPieData = classificationStats ? [
-    { name: 'Strong Match', value: classificationStats.strongMatch, color: '#22c55e' },
-    { name: 'Weak Match', value: classificationStats.weakMatch, color: '#eab308' },
-    { name: 'Not Relevant', value: classificationStats.notRelevant, color: '#ef4444' }
-  ] : [];
+  const accounts = rotationStatus?.accounts || [];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 lg:p-8 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-gray-500">Overview of your Reddit automation</p>
+          <h1 className="text-2xl font-semibold text-white">Dashboard</h1>
+          <p className="text-sm text-[#52525b] mt-0.5">Your outreach at a glance</p>
         </div>
         <button
           onClick={loadData}
-          className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow-sm hover:bg-gray-50"
+          disabled={loading}
+          className="flex items-center gap-2 px-3.5 py-2 text-sm text-[#a1a1aa] bg-[#141416] border border-[#23232a] rounded-xl hover:border-[#333] hover:text-white transition-all duration-200 disabled:opacity-50"
         >
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           Refresh
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
-          <AlertTriangle size={20} />
+        <div className="flex items-center gap-2.5 px-4 py-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+          <AlertTriangle size={16} />
           {error}
         </div>
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="DMs Today"
           value={analytics?.todayCount || 0}
-          subtitle="Daily quota"
+          subtitle="Daily sends"
           icon={MessageCircle}
-          color="blue"
+          accent="bg-blue-600/80"
         />
         <StatCard
           title="This Week"
           value={analytics?.weekCount || 0}
-          subtitle={`${analytics?.totalDMs || 0} total`}
+          subtitle={`${analytics?.totalDMs || 0} all time`}
           icon={TrendingUp}
-          color="green"
+          accent="bg-emerald-600/80"
         />
         <StatCard
           title="Success Rate"
           value={`${analytics?.successRate || 0}%`}
-          subtitle="Sent successfully"
+          subtitle="Delivered"
           icon={CheckCircle}
-          color="purple"
+          accent="bg-violet-600/80"
         />
         <StatCard
           title="Reply Rate"
           value={`${conversationStats?.replyRate || 0}%`}
           subtitle={`${conversationStats?.withReplies || 0} replies`}
           icon={Users}
-          color="orange"
+          accent="bg-amber-600/80"
         />
       </div>
 
-      {/* Queue Stats */}
-      {queueStats && (
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold mb-4">Queue Status</h2>
-          <div className="grid grid-cols-5 gap-4 text-center">
-            <div>
-              <p className="text-2xl font-bold text-yellow-500">{queueStats.pending}</p>
-              <p className="text-sm text-gray-500">Pending</p>
+      {/* Queue + Accounts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Queue Overview */}
+        {queueStats && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-[#71717a] uppercase tracking-wide">Queue</h2>
+              <a href="/queue" className="flex items-center gap-1 text-xs text-[#52525b] hover:text-[#a1a1aa] transition-colors">
+                View all <ChevronRight size={12} />
+              </a>
             </div>
-            <div>
-              <p className="text-2xl font-bold text-blue-500">{queueStats.approved}</p>
-              <p className="text-sm text-gray-500">Approved</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-green-500">{queueStats.sent}</p>
-              <p className="text-sm text-gray-500">Sent</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-red-500">{queueStats.failed}</p>
-              <p className="text-sm text-gray-500">Failed</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-500">{queueStats.rejected}</p>
-              <p className="text-sm text-gray-500">Rejected</p>
+            <div className="grid grid-cols-2 gap-2">
+              <QueuePill label="Pending" count={queueStats.pending} color="bg-amber-400" />
+              <QueuePill label="Approved" count={queueStats.approved} color="bg-blue-400" />
+              <QueuePill label="Sent" count={queueStats.sent} color="bg-emerald-400" />
+              <QueuePill label="Failed" count={queueStats.failed} color="bg-red-400" />
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Lead Funnel */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold mb-4">Lead Funnel</h2>
-          <FunnelChart data={funnelData} />
-        </div>
-
-        {/* Classification Breakdown */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold mb-4">Classification Breakdown</h2>
-          {classificationPieData.length > 0 ? (
-            <div className="flex items-center gap-8">
-              <ResponsiveContainer width={200} height={200}>
-                <PieChart>
-                  <Pie
-                    data={classificationPieData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={80}
-                  >
-                    {classificationPieData.map((entry, index) => (
-                      <Cell key={index} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="space-y-2">
-                {classificationPieData.map((item) => (
-                  <div key={item.name} className="flex items-center gap-2">
-                    <div
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="text-sm text-gray-600">{item.name}</span>
-                    <span className="font-semibold">{item.value}</span>
-                  </div>
-                ))}
-              </div>
+        {/* Account Health */}
+        {accounts.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-[#71717a] uppercase tracking-wide">Accounts</h2>
+              <a href="/accounts" className="flex items-center gap-1 text-xs text-[#52525b] hover:text-[#a1a1aa] transition-colors">
+                Manage <ChevronRight size={12} />
+              </a>
             </div>
-          ) : (
-            <p className="text-gray-400 text-center py-8">No classification data yet</p>
-          )}
-        </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {accounts.slice(0, 4).map(account => (
+                <AccountCard key={account.id} account={account} />
+              ))}
+            </div>
+            {accounts.length > 4 && (
+              <p className="text-xs text-[#52525b] text-center">+{accounts.length - 4} more accounts</p>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Conversation Status */}
-      {conversationStats && (
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold mb-4">Conversation Status</h2>
-          <div className="grid grid-cols-5 gap-4 text-center">
-            <div>
-              <p className="text-2xl font-bold text-blue-500">{conversationStats.active}</p>
-              <p className="text-sm text-gray-500">Active</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-green-500">{conversationStats.interested}</p>
-              <p className="text-sm text-gray-500">Interested</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-500">{conversationStats.cold}</p>
-              <p className="text-sm text-gray-500">Cold</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-400">{conversationStats.closed}</p>
-              <p className="text-sm text-gray-500">Closed</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-purple-500">{conversationStats.converted}</p>
-              <p className="text-sm text-gray-500">Converted</p>
-            </div>
+      {/* Lead Funnel */}
+      <div className="bg-[#141416] border border-[#23232a] rounded-2xl p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2.5">
+            <Activity size={16} className="text-violet-400" />
+            <h2 className="text-sm font-medium text-[#71717a] uppercase tracking-wide">Lead Funnel</h2>
           </div>
         </div>
-      )}
-
-      {/* Account Health */}
-      {rotationStatus?.accounts && rotationStatus.accounts.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold mb-4">Account Health</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {rotationStatus.accounts.map(account => {
-              const used = account.currentDailyCount || 0;
-              const limit = account.effectiveDailyLimit || account.dailyLimit || 20;
-              const pct = Math.min((used / limit) * 100, 100);
-              const barColor = account.status === 'shadowbanned' || account.status === 'suspended'
-                ? 'bg-red-500'
-                : pct >= 90 ? 'bg-orange-500'
-                : pct >= 60 ? 'bg-yellow-500'
-                : 'bg-green-500';
-
-              const statusBadge = {
-                active: 'bg-green-100 text-green-700',
-                warming_up: 'bg-yellow-100 text-yellow-700',
-                paused: 'bg-gray-100 text-gray-600',
-                shadowbanned: 'bg-red-100 text-red-700',
-                suspended: 'bg-red-200 text-red-800'
-              }[account.status] || 'bg-gray-100 text-gray-600';
-
-              return (
-                <div key={account.id} className="border border-gray-100 rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium text-sm text-gray-900">u/{account.username}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge}`}>
-                      {account.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
-                    </div>
-                    <span className="text-xs text-gray-500 whitespace-nowrap">{used}/{limit}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+        <FunnelChart data={funnelData} />
+      </div>
     </div>
   );
 }
