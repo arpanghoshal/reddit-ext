@@ -1230,32 +1230,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    // --- Direct Dashboard Sync (bypasses window.postMessage bridge) ---
-    // Reads Supabase session directly from the dashboard tab's localStorage
+    // --- Dashboard tab registration ---
+    // The content script (dashboard_auth_bridge.js) sends this when it loads
+    // on the dashboard domain. We record the tab ID so we can message it later.
+    if (request.action === 'DASHBOARD_TAB_READY') {
+        const tabId = sender?.tab?.id;
+        if (tabId) {
+            chrome.storage.local.set({ dashboardTabId: tabId });
+            console.log('[Sync] Dashboard content script registered tab:', tabId);
+        }
+        sendResponse({ ok: true });
+        return true;
+    }
+
+    // --- Dashboard Sync via content script bridge ---
+    // Instead of executeScript (which requires host permissions that may not
+    // be granted until extension re-install), we message the content script
+    // already running on the dashboard tab. The content script triggers the
+    // React app to re-broadcast its auth state via the postMessage bridge.
     if (request.action === 'SYNC_FROM_DASHBOARD') {
         (async () => {
             try {
-                // Find the dashboard tab
+                // Step 1: Check if we already have valid tokens in storage
+                const existing = await chrome.storage.local.get(['accessToken', 'expiresAt', 'userEmail', 'teamId', 'teams']);
+                if (existing.accessToken && existing.expiresAt && (Date.now() / 1000 < existing.expiresAt)) {
+                    console.log('[Sync] Already have valid tokens, skipping sync');
+                    sendResponse({ success: true, email: existing.userEmail, teams: existing.teams || [], teamId: existing.teamId });
+                    return;
+                }
+
+                // Step 2: Find the dashboard tab
                 let tabId = null;
 
-                // Method 1: Use saved tab ID from when popup opened the dashboard
+                // Method 1: Use tab ID registered by the content script
                 const stored = await chrome.storage.local.get(['dashboardTabId']);
-                console.log('[Sync] Stored dashboardTabId:', stored.dashboardTabId || 'NONE');
                 if (stored.dashboardTabId) {
                     try {
                         const tab = await chrome.tabs.get(stored.dashboardTabId);
-                        console.log('[Sync] Tab get result:', tab.id, 'discarded:', tab.discarded, 'status:', tab.status);
                         if (tab && !tab.discarded) {
                             tabId = tab.id;
-                            console.log('[Sync] Using saved dashboard tab:', tabId);
+                            console.log('[Sync] Using registered dashboard tab:', tabId);
                         }
                     } catch (e) {
-                        console.log('[Sync] Saved tab not found:', e.message);
+                        console.log('[Sync] Registered tab gone:', e.message);
                         await chrome.storage.local.remove('dashboardTabId');
                     }
                 }
 
-                // Method 2: Query tabs by URL (works when tabs permission is granted)
+                // Method 2: Query tabs by URL (works with host_permissions)
                 if (!tabId) {
                     const allTabs = await chrome.tabs.query({});
                     const dashTabs = allTabs.filter(t =>
@@ -1272,97 +1294,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
 
                 if (!tabId) {
-                    sendResponse({ success: false, error: 'No dashboard tab found. Open the dashboard from the extension popup first.' });
+                    sendResponse({ success: false, error: 'No dashboard tab found. Open the dashboard first.' });
                     return;
                 }
 
-                // Execute in the page's MAIN world to access its localStorage
-                console.log('[Sync] Executing script in tab', tabId);
-                const results = await chrome.scripting.executeScript({
-                    target: { tabId },
-                    world: 'MAIN',
-                    func: () => {
-                        try {
-                            // Find the Supabase auth key (sb-<ref>-auth-token)
-                            const allKeys = Object.keys(localStorage);
-                            const authKey = allKeys.find(
-                                k => k.startsWith('sb-') && k.endsWith('-auth-token')
-                            );
-                            if (!authKey) return { error: 'no_auth_key', keys: allKeys.filter(k => k.startsWith('sb-')).slice(0, 5) };
-                            const raw = localStorage.getItem(authKey);
-                            if (!raw) return { error: 'empty_value' };
-                            const parsed = JSON.parse(raw);
-                            const currentTeamId = localStorage.getItem('currentTeamId');
-                            return { session: parsed, currentTeamId };
-                        } catch (e) {
-                            return { error: 'parse_error', message: e.message };
-                        }
-                    }
-                });
-
-                const data = results?.[0]?.result;
-                console.log('[Sync] Script result:', data?.error || 'has session', data?.session ? 'token:' + !!data.session.access_token : '');
-                if (!data || data.error || !data.session) {
-                    sendResponse({ success: false, error: data?.error || 'No session in dashboard' });
-                    return;
-                }
-
-                const sess = data.session;
-                // Supabase JS v2 stores: { access_token, refresh_token, expires_at, user, ... }
-                const accessToken = sess.access_token;
-                const refreshToken = sess.refresh_token;
-                const expiresAt = sess.expires_at;
-                const user = sess.user;
-
-                if (!accessToken) {
-                    sendResponse({ success: false, error: 'No access token in session' });
-                    return;
-                }
-
-                // Store tokens immediately and respond right away
-                let teamId = data.currentTeamId || null;
-                const authData = {
-                    accessToken,
-                    refreshToken,
-                    expiresAt,
-                    teamId,
-                    teams: [],
-                    userEmail: user?.email || '',
-                    userName: user?.user_metadata?.full_name || ''
-                };
-                await chrome.storage.local.set(authData);
-                api.resetApiConfig();
-                startReplyQueuePolling();
-
-                // Respond immediately so the popup shows authenticated state
-                sendResponse({ success: true, email: authData.userEmail, teams: [], teamId });
-
-                // Enrich with teams from backend in the background (non-blocking)
+                // Step 3: Ask the content script to trigger the React app's auth broadcast
                 try {
-                    const baseUrl = 'https://backend-production-423ef.up.railway.app';
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 8000);
-                    const resp = await fetch(`${baseUrl}/api/auth/me`, {
-                        headers: {
-                            'Authorization': `Bearer ${accessToken}`,
-                            'Content-Type': 'application/json'
-                        },
-                        signal: controller.signal
-                    });
-                    clearTimeout(timeoutId);
-                    if (resp.ok) {
-                        const meData = await resp.json();
-                        const teams = meData.teams || [];
-                        if (!teamId && teams.length) {
-                            const personal = teams.find(t => t.is_personal);
-                            teamId = personal?.id || teams[0]?.id || null;
-                        }
-                        await chrome.storage.local.set({ teams, teamId });
-                        api.resetApiConfig();
-                    }
-                } catch {
-                    // Teams fetch failed — extension still works with token-only auth
+                    await chrome.tabs.sendMessage(tabId, { action: 'REQUEST_AUTH_FROM_PAGE' });
+                    console.log('[Sync] Sent REQUEST_AUTH_FROM_PAGE to tab', tabId);
+                } catch (e) {
+                    console.warn('[Sync] Failed to message content script:', e.message);
+                    sendResponse({ success: false, error: 'Dashboard tab not ready. Try refreshing the dashboard page.' });
+                    return;
                 }
+
+                // Step 4: Wait for tokens to arrive via the bridge
+                // The bridge flow is: content script -> RDM_BRIDGE_READY -> React app
+                // -> SESSION_RESTORE -> content script -> DASHBOARD_AUTH_SYNC -> stored
+                const maxWait = 6000;
+                const interval = 500;
+                const start = Date.now();
+                while (Date.now() - start < maxWait) {
+                    await new Promise(r => setTimeout(r, interval));
+                    const data = await chrome.storage.local.get(['accessToken', 'expiresAt', 'userEmail', 'teamId', 'teams']);
+                    if (data.accessToken && data.expiresAt && (Date.now() / 1000 < data.expiresAt)) {
+                        console.log('[Sync] Tokens arrived via bridge after', Date.now() - start, 'ms');
+                        sendResponse({ success: true, email: data.userEmail, teams: data.teams || [], teamId: data.teamId });
+                        return;
+                    }
+                }
+
+                // Tokens didn't arrive in time — the bridge may still be working
+                sendResponse({ success: false, error: 'Sync in progress. Close and reopen the popup in a few seconds.' });
             } catch (err) {
                 sendResponse({ success: false, error: err.message });
             }

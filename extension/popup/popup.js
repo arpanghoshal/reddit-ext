@@ -36,30 +36,23 @@ async function checkAuthState() {
         await loadStats();
         await checkConnection();
     } else {
-        // No local auth — try to sync from an open dashboard tab with retries
+        // No local auth — try to sync from an open dashboard tab
         setSyncStatus('Checking for dashboard session...');
 
-        for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-                const syncResult = await chrome.runtime.sendMessage({ action: 'SYNC_FROM_DASHBOARD' });
-                console.log(`[Popup] SYNC_FROM_DASHBOARD attempt ${attempt + 1}:`, syncResult);
-                if (syncResult && syncResult.success) {
-                    setSyncStatus('');
-                    showMainSection(syncResult.email);
-                    populateTeamSelector(syncResult.teams || [], syncResult.teamId);
-                    await loadStats();
-                    await checkConnection();
-                    return;
-                }
-                // Sync returned but wasn't successful — log the reason
-                console.warn(`[Popup] Sync attempt ${attempt + 1} failed:`, syncResult?.error || 'unknown');
-                setSyncStatus(syncResult?.error || 'Sync failed, retrying...');
-            } catch (err) {
-                console.warn(`[Popup] Sync attempt ${attempt + 1} error:`, err.message);
-                setSyncStatus('Connecting to extension...');
+        try {
+            const syncResult = await chrome.runtime.sendMessage({ action: 'SYNC_FROM_DASHBOARD' });
+            console.log('[Popup] SYNC_FROM_DASHBOARD result:', syncResult);
+            if (syncResult && syncResult.success) {
+                setSyncStatus('');
+                showMainSection(syncResult.email);
+                populateTeamSelector(syncResult.teams || [], syncResult.teamId);
+                await loadStats();
+                await checkConnection();
+                return;
             }
-            // Wait before retrying
-            if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+            console.log('[Popup] Sync not ready:', syncResult?.error);
+        } catch (err) {
+            console.warn('[Popup] Sync error:', err.message);
         }
 
         setSyncStatus('');

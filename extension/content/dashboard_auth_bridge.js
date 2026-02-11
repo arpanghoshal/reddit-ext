@@ -97,78 +97,23 @@ setTimeout(announceReady, 500);
 setTimeout(announceReady, 1500);
 setTimeout(announceReady, 3500);
 
-// --- Direct localStorage sync fallback ---
-// The postMessage bridge depends on React broadcasting at the right time.
-// This fallback injects a tiny script into the page's main world to read
-// the Supabase session directly from localStorage, ensuring the extension
-// gets auth tokens even if the React broadcast was missed.
+// --- Register this tab with the background service worker ---
+// The background needs to know which tab has the dashboard open so it can
+// request auth state on demand (e.g., when the popup asks for sync).
+// The sender.tab.id is automatically available to the background handler.
+sendToBackground({ action: 'DASHBOARD_TAB_READY' }).catch(() => {});
 
-let _directSyncDone = false;
-
-async function directLocalStorageSync() {
-  if (_directSyncDone) return;
-
-  try {
-    // Inject a script element that reads localStorage and posts results back
-    const scriptId = '__rdm_auth_reader_' + Date.now();
-    const script = document.createElement('script');
-    script.id = scriptId;
-    script.textContent = `
-      (function() {
-        try {
-          var authKey = Object.keys(localStorage).find(function(k) {
-            return k.startsWith('sb-') && k.endsWith('-auth-token');
-          });
-          if (!authKey) return;
-          var raw = localStorage.getItem(authKey);
-          if (!raw) return;
-          var parsed = JSON.parse(raw);
-          var teamId = localStorage.getItem('currentTeamId');
-          window.postMessage({
-            type: '__RDM_DIRECT_AUTH_SYNC',
-            session: parsed,
-            currentTeamId: teamId
-          }, window.location.origin);
-        } catch(e) {}
-        var el = document.getElementById('${scriptId}');
-        if (el) el.remove();
-      })();
-    `;
-    (document.head || document.documentElement).appendChild(script);
-  } catch (e) {
-    // Script injection failed (CSP etc)
-  }
-}
-
-// Listen for the direct sync response
-window.addEventListener('message', async (event) => {
-  if (event.data?.type !== '__RDM_DIRECT_AUTH_SYNC') return;
-  if (_directSyncDone) return;
-
-  const { session, currentTeamId } = event.data;
-  if (!session || !session.access_token) return;
-
-  _directSyncDone = true;
-
-  const payload = {
-    accessToken: session.access_token,
-    refreshToken: session.refresh_token,
-    expiresAt: session.expires_at,
-    teamId: currentTeamId || null,
-    teams: [],
-    userEmail: session.user?.email || '',
-    userName: session.user?.user_metadata?.full_name || '',
-  };
-
-  try {
-    await sendToBackground({ action: 'DASHBOARD_AUTH_SYNC', payload });
-    console.log('[Auth Bridge] Direct localStorage sync successful');
-  } catch (e) {
-    console.warn('[Auth Bridge] Direct sync failed:', e.message);
+// --- On-demand auth request from background ---
+// When the popup triggers SYNC_FROM_DASHBOARD, the background sends us this
+// message. We re-announce RDM_BRIDGE_READY so the React app re-broadcasts
+// the current session via the normal postMessage bridge flow.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action === 'REQUEST_AUTH_FROM_PAGE') {
+    console.log('[Auth Bridge] Received REQUEST_AUTH_FROM_PAGE, re-announcing ready');
+    announceReady();
+    // Also announce again after a short delay in case React hasn't mounted yet
+    setTimeout(announceReady, 300);
+    setTimeout(announceReady, 800);
+    sendResponse({ ok: true });
   }
 });
-
-// Run direct sync after a short delay to give the postMessage bridge a chance first
-setTimeout(directLocalStorageSync, 2000);
-// Retry once more in case page was still loading
-setTimeout(directLocalStorageSync, 5000);
