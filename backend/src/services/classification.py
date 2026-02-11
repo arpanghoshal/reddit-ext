@@ -46,6 +46,14 @@ async def get_cached_classification(post_url: str) -> Optional[Dict[str, Any]]:
             return None
 
         data = result.data[0]
+
+        # Skip poisoned cache entries (all scores zero = previous failure default)
+        if (data.get("relevance_score", 0) == 0
+                and data.get("confidence_score", 0) == 0
+                and data.get("category") == "not_relevant"):
+            logger.info(f"Skipping poisoned cache entry for {post_url}")
+            return None
+
         return {
             "relevanceScore": data.get("relevance_score"),
             "buyerIntent": data.get("buyer_intent_score"),
@@ -358,32 +366,45 @@ async def batch_classify_posts(
 
         prompt = _build_batch_prompt(batch, settings)
 
+        batch_failed = False
         try:
             response_text = await gemini_client.generate_content(
                 system_instruction="You are a lead qualification expert. Classify Reddit posts for sales outreach relevance. Respond only with a valid JSON array.",
                 user_prompt=prompt,
                 temperature=0.3,
-                max_tokens=4000,
+                max_tokens=8000,
                 response_mime_type="application/json",
             )
 
             if not response_text:
+                logger.error(f"Batch classification returned empty response for {len(batch)} posts")
                 batch_results = [_not_relevant_default() for _ in batch]
+                batch_failed = True
             else:
+                logger.info(f"Batch classification response ({len(batch)} posts): {response_text[:200]}...")
                 batch_results = _parse_batch_response(response_text, len(batch))
 
             # Pad if LLM returned fewer results than expected
             while len(batch_results) < len(batch):
                 batch_results.append(_not_relevant_default())
 
-            # Store results and save to cache
+            # Log category distribution for this batch
+            cats = {}
+            for br in batch_results:
+                c = br.get("category", "unknown")
+                cats[c] = cats.get(c, 0) + 1
+            logger.info(f"Batch classification categories: {cats}")
+
+            # Store results and save to cache (skip caching failures)
             for j, idx in enumerate(batch_indices):
                 classification = batch_results[j] if j < len(batch_results) else _not_relevant_default()
                 results[idx] = {**classification, "cached": False}
-                await save_classification(posts[idx], classification)
+                # Only cache real classifications, not failure defaults
+                if not batch_failed and classification.get("relevanceScore", 0) > 0:
+                    await save_classification(posts[idx], classification)
 
         except Exception as e:
-            logger.warning(f"Batch classification call failed: {e}")
+            logger.error(f"Batch classification call failed: {e}", exc_info=True)
             for idx in batch_indices:
                 results[idx] = {**_not_relevant_default(), "cached": False}
 

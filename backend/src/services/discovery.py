@@ -780,9 +780,23 @@ async def run_discovery_pipeline(session_id: str):
             return
 
         # Batch classify all posts (1-3 Gemini calls instead of N)
+        logger.info(f"Starting batch classification of {len(posts_to_classify)} posts")
         classifications = await classification_service.batch_classify_posts(
             posts_to_classify, settings
         )
+
+        # Log classification distribution
+        cat_dist = {}
+        for c in classifications:
+            cat = (c or {}).get("category", "none/null")
+            cat_dist[cat] = cat_dist.get(cat, 0) + 1
+        logger.info(f"Classification results: {cat_dist} (total: {len(classifications)})")
+
+        if all((c or {}).get("category") == "not_relevant" for c in classifications):
+            logger.warning(
+                f"ALL {len(classifications)} posts classified as not_relevant! "
+                f"Business: {settings.get('businessDesc', '')[:100]}"
+            )
 
         # Score and store leads
         leads_qualified = 0
