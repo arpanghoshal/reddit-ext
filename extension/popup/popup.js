@@ -157,9 +157,9 @@ function initEventListeners() {
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     document.getElementById('shortcut-hint').textContent = isMac ? '(Alt+R)' : '(Ctrl+Shift+R)';
 
-    // Login via Dashboard
+    // Login via Dashboard — open root URL; dashboard redirects to /login if needed
     document.getElementById('login-via-dashboard').addEventListener('click', () => {
-        chrome.tabs.create({ url: DEFAULT_DASHBOARD_URL + '/login' });
+        chrome.tabs.create({ url: DEFAULT_DASHBOARD_URL });
         window.close();
     });
 

@@ -1679,7 +1679,7 @@ async function executeClickChat() {
         return null;
     };
 
-    const chatBtn = await waitForElement(findChatButton, 8000);
+    const chatBtn = await pollForElement(findChatButton, 8000, 500);
 
     if (chatBtn) {
         console.log('✓ Chat button found. Animating cursor...');
@@ -1780,7 +1780,7 @@ async function executeFindChatUser(targetUser) {
     console.log('🔍 Looking for chat conversation with:', targetUser);
     const targetLower = targetUser.toLowerCase();
 
-    const userRoom = await waitForElement(() => findChatUserElement(targetLower), 12000);
+    const userRoom = await pollForElement(() => findChatUserElement(targetLower), 12000, 500);
 
     if (userRoom) {
         console.log('✓ Chat conversation found. Clicking to open...');
@@ -1809,7 +1809,7 @@ async function executeDirectChatSend(targetUser, text) {
     console.log('📨 Direct chat send to:', targetUser, '| message length:', text?.length);
 
     const targetLower = targetUser.toLowerCase();
-    const userRoom = await waitForElement(() => findChatUserElement(targetLower), 12000);
+    const userRoom = await pollForElement(() => findChatUserElement(targetLower), 12000, 500);
     if (!userRoom) {
         console.error('❌ Could not find chat conversation for:', targetUser);
         chrome.runtime.sendMessage({
@@ -1871,7 +1871,9 @@ async function executeTypeMessage(text) {
         return null;
     };
 
-    const input = await waitForElement(findChatInput, 10000);
+    // Use polling instead of MutationObserver since chat input is inside shadow DOM
+    // (MutationObserver on document.body cannot observe changes inside shadow roots)
+    const input = await pollForElement(findChatInput, 10000, 500);
 
     if (input) {
         console.log('✓ Chat input found. Typing message...');
@@ -1918,7 +1920,7 @@ async function executeTypeMessage(text) {
             );
         };
 
-        const sendBtn = await waitForElement(findSendButton, 3000);
+        const sendBtn = await pollForElement(findSendButton, 5000, 500);
         if (sendBtn) {
             console.log('✓ Send button found. Animating cursor...');
             await showCursorAnimation(sendBtn);
@@ -3572,6 +3574,26 @@ function getSubreddit() {
 }
 
 // --- Helper Functions ---
+// Poll-based element finder for shadow DOM elements that MutationObserver can't detect
+function pollForElement(selectorFn, timeout = 10000, interval = 500) {
+    return new Promise((resolve) => {
+        const element = selectorFn();
+        if (element) return resolve(element);
+
+        const start = Date.now();
+        const timer = setInterval(() => {
+            const element = selectorFn();
+            if (element) {
+                clearInterval(timer);
+                resolve(element);
+            } else if (Date.now() - start >= timeout) {
+                clearInterval(timer);
+                resolve(null);
+            }
+        }, interval);
+    });
+}
+
 function waitForElement(selectorFn, timeout = 5000) {
     return new Promise((resolve) => {
         const element = selectorFn();

@@ -1278,17 +1278,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
 
-                // Fetch teams from backend using the token
-                let teams = [];
+                // Store tokens immediately so extension is authenticated right away
                 let teamId = data.currentTeamId || null;
+                const authData = {
+                    accessToken,
+                    refreshToken,
+                    expiresAt,
+                    teamId,
+                    teams: [],
+                    userEmail: user?.email || '',
+                    userName: user?.user_metadata?.full_name || ''
+                };
+                await chrome.storage.local.set(authData);
+                api.resetApiConfig();
+                startReplyQueuePolling();
+
+                // Try to enrich with teams from backend (non-blocking, with timeout)
+                let teams = [];
                 try {
                     const baseUrl = 'https://backend-production-423ef.up.railway.app';
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
                     const resp = await fetch(`${baseUrl}/api/auth/me`, {
                         headers: {
                             'Authorization': `Bearer ${accessToken}`,
                             'Content-Type': 'application/json'
-                        }
+                        },
+                        signal: controller.signal
                     });
+                    clearTimeout(timeoutId);
                     if (resp.ok) {
                         const meData = await resp.json();
                         teams = meData.teams || [];
@@ -1296,24 +1314,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             const personal = teams.find(t => t.is_personal);
                             teamId = personal?.id || teams[0]?.id || null;
                         }
+                        // Update storage with teams
+                        await chrome.storage.local.set({ teams, teamId });
+                        api.resetApiConfig();
                     }
                 } catch {
-                    // Teams fetch failed, proceed with token-only sync
+                    // Teams fetch failed — extension still works with token-only auth
                 }
 
-                const authData = {
-                    accessToken,
-                    refreshToken,
-                    expiresAt,
-                    teamId,
-                    teams,
-                    userEmail: user?.email || '',
-                    userName: user?.user_metadata?.full_name || ''
-                };
-
-                await chrome.storage.local.set(authData);
-                api.resetApiConfig();
-                startReplyQueuePolling();
                 sendResponse({ success: true, email: authData.userEmail, teams, teamId });
             } catch (err) {
                 sendResponse({ success: false, error: err.message });
