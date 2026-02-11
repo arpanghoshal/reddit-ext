@@ -492,7 +492,7 @@ GUIDELINES:
 - Think about what real people would actually type when looking for help
 - Do NOT include subreddit names in queries — the search covers all of Reddit"""
 
-MAX_STRATEGY_RETRIES = 2
+MAX_STRATEGY_RETRIES = 3
 
 
 def _strip_json_fences(text: str) -> str:
@@ -527,6 +527,9 @@ def _repair_json(text: str) -> str:
         text += '"'
     text += ']' * max(open_brackets, 0)
     text += '}' * max(open_braces, 0)
+    # Remove trailing commas AGAIN — closing brackets above may have
+    # created new trailing commas (e.g. "value",  +  ]} → "value",]})
+    text = re.sub(r',\s*([}\]])', r'\1', text)
     return text
 
 
@@ -549,13 +552,15 @@ Insight Types: {', '.join(settings.get('insightTypes', []))}"""
             )
 
             json_str = _strip_json_fences(content)
+            logger.debug(f"Strategy raw response (attempt {attempt}): {json_str[:300]}")
 
             # Try parsing directly first, then with repair
             try:
                 strategy = json.loads(json_str)
             except json.JSONDecodeError:
-                logger.warning(f"Strategy JSON parse failed (attempt {attempt}), trying repair")
-                strategy = json.loads(_repair_json(json_str))
+                logger.warning(f"Strategy JSON parse failed (attempt {attempt}), trying repair. Raw: {json_str[:200]}")
+                repaired = _repair_json(json_str)
+                strategy = json.loads(repaired)
 
             # Validate structure — new format has "queries" list
             strategy.setdefault("queries", [])
