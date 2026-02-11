@@ -21,9 +21,9 @@ export default function App() {
           minWidth: 200,
           scale: 1.0,
           scaleMobile: 1.0,
-          color: 0x555555,
-          color2: 0x999999,
-          backgroundColor: 0xfafafa,
+          color: 0xe0e0e0,
+          color2: 0xeeeeee,
+          backgroundColor: 0xffffff,
           size: 1.5,
         });
       } catch (err) {
@@ -101,7 +101,7 @@ export default function App() {
             and sends them a DM that actually feels human.
           </p>
 
-          <p className="animate-fade-up-delay-2 text-sm text-[#999] mb-12">
+          <p className="animate-fade-up-delay-2 text-sm text-[#555] mb-12">
             40% reply rate &middot; 20% booked calls &middot; 10k+ DMs/month
           </p>
 
@@ -166,7 +166,7 @@ export default function App() {
               <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
               Reddit launching March
             </div>
-            <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-[#aaa]">
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-[#666]">
               <span>X</span>
               <span>Bluesky</span>
               <span>Threads</span>
@@ -180,10 +180,10 @@ export default function App() {
       {/* Footer */}
       <footer className="relative z-10 px-6 lg:px-16 py-6 border-t border-[#eee]/50">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-[#888]">
+          <span className="text-xs text-[#555]">
             &copy; {new Date().getFullYear()} QualyDM
           </span>
-          <span className="text-xs text-[#888]">
+          <span className="text-xs text-[#555]">
             Built for outreach that doesn't feel like outreach.
           </span>
         </div>
