@@ -1278,7 +1278,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
 
-                // Store tokens immediately so extension is authenticated right away
+                // Store tokens immediately and respond right away
                 let teamId = data.currentTeamId || null;
                 const authData = {
                     accessToken,
@@ -1293,8 +1293,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 api.resetApiConfig();
                 startReplyQueuePolling();
 
-                // Try to enrich with teams from backend (non-blocking, with timeout)
-                let teams = [];
+                // Respond immediately so the popup shows authenticated state
+                sendResponse({ success: true, email: authData.userEmail, teams: [], teamId });
+
+                // Enrich with teams from backend in the background (non-blocking)
                 try {
                     const baseUrl = 'https://backend-production-423ef.up.railway.app';
                     const controller = new AbortController();
@@ -1309,20 +1311,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     clearTimeout(timeoutId);
                     if (resp.ok) {
                         const meData = await resp.json();
-                        teams = meData.teams || [];
+                        const teams = meData.teams || [];
                         if (!teamId && teams.length) {
                             const personal = teams.find(t => t.is_personal);
                             teamId = personal?.id || teams[0]?.id || null;
                         }
-                        // Update storage with teams
                         await chrome.storage.local.set({ teams, teamId });
                         api.resetApiConfig();
                     }
                 } catch {
                     // Teams fetch failed — extension still works with token-only auth
                 }
-
-                sendResponse({ success: true, email: authData.userEmail, teams, teamId });
             } catch (err) {
                 sendResponse({ success: false, error: err.message });
             }

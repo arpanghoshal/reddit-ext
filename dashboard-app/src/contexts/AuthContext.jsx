@@ -266,6 +266,20 @@ export function AuthProvider({ children }) {
     setSession(data.session);
     sessionRef.current = data.session;
     setUser(data.user);
+
+    // Broadcast LOGIN immediately so extension gets tokens right away
+    if (data.session) {
+      broadcastToExtension('LOGIN', {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        expiresAt: data.session.expires_at,
+        teamId: null,
+        teams: [],
+        userEmail: data.user?.email || '',
+        userName: data.user?.user_metadata?.full_name || '',
+      });
+    }
+
     if (data.user) {
       await fetchUserTeams(data.user.id);
     }
