@@ -204,10 +204,8 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
         print(f"Using cached classification for: {post.get('url')}")
         return cached
 
-    # Fetch post comments for richer context
-    comments_text = await reddit_comments.get_post_comments_text(post.get("url", ""))
-
-    prompt = build_classification_prompt(post, settings, comments_text)
+    # Classify using title+body only — comments are fetched later for top posts in comment mining
+    prompt = build_classification_prompt(post, settings)
 
     system_instruction = "You are a lead qualification expert. Analyze Reddit posts and classify them for sales outreach relevance. Respond only with valid JSON."
 

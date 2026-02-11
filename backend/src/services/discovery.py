@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 MAX_POSTS_PER_SUBREDDIT = 25
 MAX_SUBREDDITS = 15
 MAX_COMMENT_MINING_POSTS = 15
+MAX_LEADS = 50
 
 _supabase: Optional[Client] = None
 
@@ -751,9 +752,15 @@ async def run_discovery_pipeline(session_id: str):
         seen_urls = set()
         queries_done = 0
 
-        for sr_name in subreddit_names:
-            sr_record = subreddit_records.get(sr_name)
-            sr_record_id = sr_record["id"] if sr_record else None
+        # Only search subreddits that were validated (info fetch succeeded)
+        valid_subreddit_names = [sr for sr in subreddit_names if sr in subreddit_records]
+        if len(valid_subreddit_names) < len(subreddit_names):
+            skipped = len(subreddit_names) - len(valid_subreddit_names)
+            logger.info(f"Skipping {skipped} invalid subreddits (info fetch failed)")
+
+        for sr_name in valid_subreddit_names:
+            sr_record = subreddit_records[sr_name]
+            sr_record_id = sr_record["id"]
 
             # Search with keywords and pain phrases
             for query in all_queries:
@@ -801,12 +808,18 @@ async def run_discovery_pipeline(session_id: str):
         leads_scored = 0
         leads_qualified = 0
         scored_posts = []  # Track for comment mining
+        seen_authors = set()  # Deduplicate authors across posts
 
         # Track per-subreddit stats
         subreddit_stats = {}  # sr_name -> {posts: 0, leads: 0}
 
         for normalized_post, sr_record_id in all_posts:
             try:
+                # Stop once we have enough qualified leads
+                if leads_qualified >= MAX_LEADS:
+                    logger.info(f"Reached {MAX_LEADS} leads, stopping scoring")
+                    break
+
                 # Check if session was cancelled
                 session_check = await get_session(session_id, team_id)
                 if session_check and session_check.get("status") == "cancelled":
@@ -820,18 +833,17 @@ async def run_discovery_pipeline(session_id: str):
                     subreddit_stats[sr_name] = {"posts": 0, "leads": 0}
                 subreddit_stats[sr_name]["posts"] += 1
 
-                # Lightweight pre-filter: skip posts with zero keyword overlap
-                if not _post_matches_keywords(normalized_post, keywords):
-                    logger.debug(
-                        f"Pre-filter skipped post by u/{author} in r/{sr_name}: "
-                        f"no keyword match in '{normalized_post.get('title', '')[:80]}'"
-                    )
+                # Skip duplicate authors — keep first (most relevant) post
+                if author.lower() in seen_authors:
                     leads_scored += 1
-                    await update_session(session_id, {"total_leads_scored": leads_scored})
                     continue
+                seen_authors.add(author.lower())
 
-                # Check if already contacted
+                # Skip already-contacted users — no need to classify/qualify
                 already_contacted = await check_already_contacted(author, team_id)
+                if already_contacted:
+                    leads_scored += 1
+                    continue
 
                 # Classify post
                 classification = await classification_service.classify_post(
@@ -840,7 +852,6 @@ async def run_discovery_pipeline(session_id: str):
 
                 if classification.get("category") == "not_relevant":
                     leads_scored += 1
-                    await update_session(session_id, {"total_leads_scored": leads_scored})
                     continue
 
                 # Qualify user
@@ -878,7 +889,7 @@ async def run_discovery_pipeline(session_id: str):
                     "lead_score": score,
                     "lead_tier": tier,
                     "lead_insights": lead_score_result.get("insights", []),
-                    "status": "already_contacted" if already_contacted else "scored",
+                    "status": "scored",
                 }
 
                 await store_lead(session_id, team_id, lead_data)
@@ -890,14 +901,22 @@ async def run_discovery_pipeline(session_id: str):
                 if score >= 50:
                     scored_posts.append((normalized_post, score, sr_record_id))
 
-                await update_session(session_id, {
-                    "total_leads_scored": leads_scored,
-                    "leads_qualified": leads_qualified,
-                })
+                # Batch session updates every 10 posts
+                if leads_scored % 10 == 0:
+                    await update_session(session_id, {
+                        "total_leads_scored": leads_scored,
+                        "leads_qualified": leads_qualified,
+                    })
 
             except Exception as e:
                 logger.warning(f"Failed to score post by u/{normalized_post.get('author')}: {e}")
                 leads_scored += 1
+
+        # Final session update after loop
+        await update_session(session_id, {
+            "total_leads_scored": leads_scored,
+            "leads_qualified": leads_qualified,
+        })
 
         # Update subreddit stats
         for sr_name, stats in subreddit_stats.items():
