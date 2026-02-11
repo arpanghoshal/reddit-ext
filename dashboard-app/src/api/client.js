@@ -27,27 +27,42 @@ function getCurrentTeamId() {
     return localStorage.getItem('currentTeamId') || '';
 }
 
-// Cached access token - updated on auth state changes
+// Cached access token + expiry - updated on auth state changes
 let _cachedAccessToken = null;
+let _tokenExpiresAt = 0; // unix seconds
 
 // Listen for session changes and cache the token
 supabase.auth.onAuthStateChange((_event, session) => {
     _cachedAccessToken = session?.access_token || null;
+    _tokenExpiresAt = session?.expires_at || 0;
 });
 
-// Get Supabase access token (uses cache, falls back to getSession)
+// Get Supabase access token — refreshes if expired or about to expire (60s buffer)
 async function getAccessToken() {
-    if (_cachedAccessToken) return _cachedAccessToken;
+    const now = Math.floor(Date.now() / 1000);
+    // Return cached token if still fresh (60s buffer)
+    if (_cachedAccessToken && _tokenExpiresAt > now + 60) {
+        return _cachedAccessToken;
+    }
+    // Token expired or about to — refresh it
     try {
-        const { data: { session } } = await supabase.auth.getSession();
-        _cachedAccessToken = session?.access_token || null;
+        const { data: { session }, error } = await supabase.auth.refreshSession();
+        if (error || !session) {
+            // Refresh failed — try getSession as last resort
+            const fallback = await supabase.auth.getSession();
+            _cachedAccessToken = fallback.data?.session?.access_token || null;
+            _tokenExpiresAt = fallback.data?.session?.expires_at || 0;
+            return _cachedAccessToken;
+        }
+        _cachedAccessToken = session.access_token;
+        _tokenExpiresAt = session.expires_at || 0;
         return _cachedAccessToken;
     } catch {
         return null;
     }
 }
 
-export async function apiRequest(endpoint, options = {}) {
+export async function apiRequest(endpoint, options = {}, _retried = false) {
     const url = `${API_BASE_URL}${endpoint}`;
     const apiKey = getApiKey();
     const teamId = getCurrentTeamId();
@@ -80,6 +95,12 @@ export async function apiRequest(endpoint, options = {}) {
         });
 
         if (!response.ok) {
+            if (response.status === 401 && !_retried) {
+                // Force token refresh and retry once
+                _cachedAccessToken = null;
+                _tokenExpiresAt = 0;
+                return apiRequest(endpoint, options, true);
+            }
             if (response.status === 401) {
                 throw new Error('Authentication required. Please log in.');
             }
