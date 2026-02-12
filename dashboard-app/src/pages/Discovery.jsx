@@ -1893,7 +1893,7 @@ export default function Discovery() {
       )}
 
       {/* Mode tabs (shown on input view) */}
-      {view === 'input' && (
+      {view === 'input' && (<>
         <div className="flex gap-2 mb-5 max-w-2xl mx-auto">
           <button
             onClick={() => setInputMode('discovery')}
@@ -1934,7 +1934,7 @@ export default function Discovery() {
           {inputMode === 'automation' && 'Auto-scan specific subreddits, filter by quality, and send messages on autopilot'}
           {inputMode === 'watch' && 'Track subreddits for new posts and get notified when relevant leads appear'}
         </p>
-      )}
+      </>)}
 
       {/* Views */}
       {view === 'input' && inputMode === 'discovery' && (
