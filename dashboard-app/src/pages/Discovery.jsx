@@ -439,7 +439,7 @@ function DiscoveryInput({ onStart, loading }) {
           className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#ff4500] text-white font-semibold rounded-lg hover:bg-[#e63e00] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           <Search className="w-5 h-5" />
-          {loading ? 'Starting...' : 'Start Discovery'}
+          {loading ? 'Starting...' : 'Start Smart Search'}
         </button>
       </div>
     </form>
@@ -611,7 +611,7 @@ function AutomationInput({ onStart, loading }) {
           className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#ff4500] text-white font-semibold rounded-lg hover:bg-[#e63e00] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           <Zap className="w-5 h-5" />
-          {loading ? 'Starting...' : 'Start Subreddit Automation'}
+          {loading ? 'Starting...' : 'Start Autopilot'}
         </button>
       </div>
     </form>
@@ -1904,7 +1904,7 @@ export default function Discovery() {
             }`}
           >
             <Search className="w-4 h-4" />
-            Discovery
+            Smart Search
           </button>
           <button
             onClick={() => setInputMode('automation')}
@@ -1915,7 +1915,7 @@ export default function Discovery() {
             }`}
           >
             <Zap className="w-4 h-4" />
-            Subreddit Automation
+            Subreddit Autopilot
           </button>
           <button
             onClick={() => setInputMode('watch')}
@@ -1926,9 +1926,14 @@ export default function Discovery() {
             }`}
           >
             <Radar className="w-4 h-4" />
-            Watch
+            Subreddit Monitor
           </button>
         </div>
+        <p className="text-xs text-[#a1a1aa] text-center mb-4 max-w-2xl mx-auto">
+          {inputMode === 'discovery' && 'Describe your business and let AI find leads across all of Reddit'}
+          {inputMode === 'automation' && 'Auto-scan specific subreddits, filter by quality, and send messages on autopilot'}
+          {inputMode === 'watch' && 'Track subreddits for new posts and get notified when relevant leads appear'}
+        </p>
       )}
 
       {/* Views */}

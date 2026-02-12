@@ -1,13 +1,12 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Users, Shield, Settings as SettingsIcon, XCircle, LogOut, BarChart2, ClipboardList, Search } from 'lucide-react';
+import { LayoutDashboard, Inbox as InboxIcon, ListChecks, Users, UserCircle, Shield, Settings as SettingsIcon, LogOut, BarChart2, ClipboardList, Search } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Dashboard from './pages/Dashboard';
 import Queue from './pages/Queue';
 import Inbox from './pages/Inbox';
 import Accounts from './pages/Accounts';
 import Settings from './pages/Settings';
-import Skipped from './pages/Skipped';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import TeamSettings from './pages/TeamSettings';
@@ -44,10 +43,9 @@ function AppLayout() {
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/discovery', icon: Search, label: 'Discovery' },
-    { to: '/queue', icon: MessageSquare, label: 'Queue' },
-    { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
-    { to: '/accounts', icon: Users, label: 'Accounts' },
-    { to: '/skipped', icon: XCircle, label: 'Skipped' },
+    { to: '/queue', icon: ListChecks, label: 'Queue' },
+    { to: '/inbox', icon: InboxIcon, label: 'Inbox' },
+    { to: '/accounts', icon: UserCircle, label: 'Accounts' },
     { to: '/team-settings', icon: Users, label: 'Team' },
     ...(!isPersonal ? [
       { to: '/analytics', icon: BarChart2, label: 'Analytics' },
@@ -130,7 +128,6 @@ function AppLayout() {
           <Route path="/queue" element={<Queue />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/accounts" element={<Accounts />} />
-          <Route path="/skipped" element={<Skipped />} />
           <Route path="/analytics" element={isPersonal ? <Navigate to="/" replace /> : <TeamAnalytics />} />
           <Route path="/audit-log" element={isPersonal ? <Navigate to="/" replace /> : <AuditLog />} />
           <Route path="/settings" element={<Settings />} />

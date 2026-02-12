@@ -581,15 +581,19 @@ async def bulk_queue_leads(
 # ============================================================================
 
 STRATEGY_SYSTEM_PROMPT = """You are an expert at finding potential customers on Reddit.
-Given a business description and target persona, generate exactly 8 diverse Reddit search
-queries that would find posts from people who need this product/service.
+Given a business description and target persona, generate diverse search queries AND
+suggest specific subreddits to search within.
 
 RESPOND IN VALID JSON FORMAT ONLY (no markdown, no explanation):
 {
-    "queries": ["query 1", "query 2", "query 3", "query 4", "query 5", "query 6", "query 7", "query 8"]
+    "queries": ["query 1", "query 2", "query 3", "query 4", "query 5", "query 6", "query 7", "query 8"],
+    "subreddit_searches": [
+        {"subreddit": "subredditname", "keywords": ["keyword1", "keyword2"]},
+        {"subreddit": "another_sub", "keywords": ["kw1", "kw2", "kw3"]}
+    ]
 }
 
-GUIDELINES:
+GOOGLE QUERY GUIDELINES (8 queries):
 - Generate exactly 8 search queries optimized for Google (site:reddit.com is added automatically)
 - Each query should be 3-8 words — specific enough to find relevant posts
 - Query 1: core problem/need (e.g. "best electric scooter commute")
@@ -603,7 +607,16 @@ GUIDELINES:
 - Make each query VERY distinct — cover different angles, synonyms, phrasings, and user intents
 - Think about what real people would actually type when looking for help
 - Do NOT include subreddit names in queries — the search covers all of Reddit
-- Do NOT repeat similar queries — maximize coverage across different intents"""
+- Do NOT repeat similar queries — maximize coverage across different intents
+
+SUBREDDIT SEARCH GUIDELINES (3-5 subreddits):
+- Suggest 3-5 subreddits where the target persona is most likely to post
+- Pick active subreddits relevant to the business domain (e.g. "smallbusiness" for B2B SaaS, "personalfinance" for budgeting apps)
+- Do NOT prefix with "r/" — just use the subreddit name (e.g. "Fitness" not "r/Fitness")
+- For each subreddit, provide 2-3 short Reddit-native keyword queries (1-3 words each)
+- Keywords should use natural Reddit language, not Google SEO-style phrasing
+- Keyword examples: "need help", "recommendation", "alternative", "frustrated", "looking for"
+- Each keyword targets a different user intent within that subreddit"""
 
 MAX_STRATEGY_RETRIES = 3
 
@@ -697,6 +710,17 @@ Insight Types: {', '.join(settings.get('insightTypes', []))}"""
             # Backward compat: if old format returned, build queries from keywords
             if not strategy["queries"] and strategy.get("keywords"):
                 strategy["queries"] = strategy["keywords"][:5]
+
+            # Validate subreddit_searches structure
+            strategy.setdefault("subreddit_searches", [])
+            validated_subs = []
+            for s in strategy.get("subreddit_searches", []):
+                if isinstance(s, dict) and s.get("subreddit") and s.get("keywords"):
+                    validated_subs.append({
+                        "subreddit": str(s["subreddit"]).replace("r/", "").strip(),
+                        "keywords": [str(k).strip() for k in s["keywords"][:3] if k],
+                    })
+            strategy["subreddit_searches"] = validated_subs[:5]
 
             # Store strategy in session
             await update_session(session_id, {"search_strategy": strategy})
@@ -817,6 +841,76 @@ async def check_already_contacted(author_username: str, team_id: str) -> bool:
 
 
 # ============================================================================
+# Subreddit Search Helpers
+# ============================================================================
+
+def _map_timeframe_to_sc(timeframe_code: str) -> str:
+    """Map session timeframe code (h/d/w/m/y) to ScrapeCreators timeframe string."""
+    mapping = {"h": "hour", "d": "day", "w": "week", "m": "month", "y": "year"}
+    return mapping.get(timeframe_code, "week")
+
+
+async def _run_subreddit_searches(
+    subreddit_searches: List[Dict[str, Any]],
+    timeframe: str = "week",
+) -> List[Dict[str, Any]]:
+    """
+    Search suggested subreddits via ScrapeCreators subreddit search API.
+    Returns results in SerpAPI-compatible format for merging into the pipeline.
+    """
+    results = []
+    local_seen = set()
+
+    for sub_search in subreddit_searches[:5]:
+        subreddit = sub_search.get("subreddit", "").strip()
+        keywords = sub_search.get("keywords", [])
+        if not subreddit:
+            continue
+
+        for keyword in keywords[:3]:
+            keyword = str(keyword).strip()
+            if not keyword:
+                continue
+            try:
+                response = await reddit_search.search_subreddit_posts(
+                    subreddit=subreddit,
+                    query=keyword,
+                    sort="relevance",
+                    timeframe=timeframe,
+                    filter_type="posts",
+                )
+                sc_posts = response.get("items", [])
+
+                for raw_post in sc_posts:
+                    normalized = reddit_search.normalize_post(raw_post)
+                    post_url = normalized.get("url", "")
+                    if not post_url or post_url in local_seen:
+                        continue
+                    local_seen.add(post_url)
+
+                    # Tag with source info for downstream tracking
+                    normalized["_source_type"] = "subreddit_search"
+
+                    # Convert to SerpAPI-compatible format for the pre-filter
+                    results.append({
+                        "title": normalized.get("title", ""),
+                        "link": post_url,
+                        "snippet": (normalized.get("body", "") or "")[:300],
+                        "displayed_link": f"reddit.com/r/{subreddit}",
+                        "_source": "scrapecreators_subreddit_search",
+                        "_already_normalized": normalized,
+                    })
+            except Exception as e:
+                logger.warning(
+                    f"ScrapeCreators subreddit search failed for "
+                    f"r/{subreddit} '{keyword}': {e}"
+                )
+
+    logger.info(f"ScrapeCreators subreddit search found {len(results)} posts")
+    return results
+
+
+# ============================================================================
 # Main Discovery Pipeline
 # ============================================================================
 
@@ -899,47 +993,100 @@ async def run_discovery_pipeline(session_id: str):
             "total_queries_planned": len(search_queries),
         })
 
-        # ---- Phase 2: SerpAPI Search (5 SerpAPI calls) ----
+        # ---- Phase 2: Parallel Search (SerpAPI + ScrapeCreators) ----
         await update_session(session_id, {"status": "scoring"})
 
-        serpapi_results = []  # list of SerpAPI result dicts
-        seen_urls = set()
+        # Build ScrapeCreators subreddit search config
+        subreddit_searches = strategy.get("subreddit_searches", [])
+        sc_timeframe = _map_timeframe_to_sc(session.get("timeframe", "w"))
 
         if is_automation and target_subs:
-            # Automation mode: search within specific subreddits via SerpAPI
-            for sr_name in target_subs[:3]:
-                sr_name = sr_name.strip().replace("r/", "")
-                if not sr_name:
-                    continue
-                for query in search_queries[:3]:
+            # Automation mode: use user-specified subreddits for SC search too
+            subreddit_searches = [
+                {"subreddit": sr.strip().replace("r/", ""), "keywords": search_queries[:3]}
+                for sr in target_subs[:3]
+                if sr.strip()
+            ]
+
+        # Task A: SerpAPI search
+        async def _serpapi_task():
+            serp_results = []
+            serp_seen = set()
+            if is_automation and target_subs:
+                for sr_name in target_subs[:3]:
+                    sr_name = sr_name.strip().replace("r/", "")
+                    if not sr_name:
+                        continue
+                    for query in search_queries[:3]:
+                        try:
+                            results = await serpapi_client.search_subreddit_posts(
+                                subreddit=sr_name, query=query,
+                                num_results=15, tbs=serp_tbs,
+                            )
+                            for r in results:
+                                url = r.get("link", "")
+                                if url and url not in serp_seen:
+                                    serp_seen.add(url)
+                                    serp_results.append(r)
+                        except Exception as e:
+                            logger.warning(f"SerpAPI search failed for r/{sr_name} '{query}': {e}")
+            else:
+                for query in search_queries:
                     try:
-                        results = await serpapi_client.search_subreddit_posts(
-                            subreddit=sr_name, query=query,
-                            num_results=15, tbs=serp_tbs,
+                        results = await serpapi_client.search_reddit_posts(
+                            query, num_results=30, tbs=serp_tbs,
                         )
                         for r in results:
                             url = r.get("link", "")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                serpapi_results.append(r)
+                            if url and url not in serp_seen:
+                                serp_seen.add(url)
+                                serp_results.append(r)
                     except Exception as e:
-                        logger.warning(f"SerpAPI search failed for r/{sr_name} '{query}': {e}")
-        else:
-            # Discovery mode: global Google search for Reddit posts
-            for query in search_queries:
-                try:
-                    results = await serpapi_client.search_reddit_posts(
-                        query, num_results=30, tbs=serp_tbs,
-                    )
-                    for r in results:
-                        url = r.get("link", "")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            serpapi_results.append(r)
-                except Exception as e:
-                    logger.warning(f"SerpAPI search failed for '{query}': {e}")
+                        logger.warning(f"SerpAPI search failed for '{query}': {e}")
+            return serp_results, serp_seen
 
-        logger.info(f"SerpAPI found {len(serpapi_results)} unique post URLs from {len(search_queries)} queries")
+        # Task B: ScrapeCreators subreddit search
+        async def _sc_task():
+            if not subreddit_searches:
+                return [], set()
+            try:
+                sc_results = await _run_subreddit_searches(
+                    subreddit_searches, timeframe=sc_timeframe,
+                )
+                sc_seen = {r.get("link", "") for r in sc_results if r.get("link")}
+                return sc_results, sc_seen
+            except Exception as e:
+                logger.warning(f"ScrapeCreators subreddit search phase failed: {e}")
+                return [], set()
+
+        # Run both search sources in parallel
+        (serp_results, serp_seen), (sc_results, _) = await asyncio.gather(
+            _serpapi_task(), _sc_task(),
+        )
+
+        # Merge results with URL-level dedup (SerpAPI first, then SC additions)
+        serpapi_results = []
+        seen_urls = set()
+
+        for r in serp_results:
+            url = r.get("link", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                serpapi_results.append(r)
+
+        sc_added = 0
+        for r in sc_results:
+            url = r.get("link", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                serpapi_results.append(r)
+                sc_added += 1
+
+        logger.info(
+            f"Combined search: {len(serp_results)} from SerpAPI + "
+            f"{sc_added} new from ScrapeCreators subreddit search = "
+            f"{len(serpapi_results)} unique post URLs"
+        )
 
         if not serpapi_results:
             await update_session(session_id, {
@@ -1021,23 +1168,39 @@ async def run_discovery_pipeline(session_id: str):
                 continue
 
             try:
-                enriched = await reddit_search.get_post_with_comments(post_url)
-                if enriched and enriched["post"].get("author"):
-                    post = enriched["post"]
+                # If this result came from ScrapeCreators and already has full data,
+                # skip the enrichment API call to save quota
+                pre_normalized = serpapi_result.get("_already_normalized")
+                if pre_normalized and pre_normalized.get("author"):
+                    post = pre_normalized
                     author = post["author"]
 
-                    # Skip deleted authors and deduplicate
                     if author == "[deleted]" or author.lower() in seen_authors:
                         continue
                     seen_authors.add(author.lower())
 
                     all_posts.append(post)
-
-                    # Stash comments for Phase 5 comment mining
-                    if enriched.get("comments"):
-                        post_comments[post["url"]] = enriched["comments"]
+                    # No pre-fetched comments from subreddit search;
+                    # comments will be fetched in Phase 5 if this post scores well
                 else:
-                    logger.info(f"Skipping post (no author from enrichment): {post_url}")
+                    # Standard enrichment path via get_post_with_comments()
+                    enriched = await reddit_search.get_post_with_comments(post_url)
+                    if enriched and enriched["post"].get("author"):
+                        post = enriched["post"]
+                        author = post["author"]
+
+                        # Skip deleted authors and deduplicate
+                        if author == "[deleted]" or author.lower() in seen_authors:
+                            continue
+                        seen_authors.add(author.lower())
+
+                        all_posts.append(post)
+
+                        # Stash comments for Phase 5 comment mining
+                        if enriched.get("comments"):
+                            post_comments[post["url"]] = enriched["comments"]
+                    else:
+                        logger.info(f"Skipping post (no author from enrichment): {post_url}")
             except Exception as e:
                 logger.warning(f"Post enrichment failed for {post_url}: {e}")
 

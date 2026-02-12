@@ -278,7 +278,7 @@ export default function TeamSettings() {
                   : 'bg-[#1a1a1b] border-[#343536] text-[#d7dadc] hover:border-[#818384]'
               }`}
             >
-              {team.isPersonal ? 'Personal' : team.name}
+              {team.name}
             </button>
           ))}
         </div>
@@ -535,23 +535,57 @@ export default function TeamSettings() {
       )}
 
       {currentTeam?.isPersonal && (
-        <div className="bg-[#1a1a1b] border border-[#343536] rounded-lg p-8 text-center">
-          <div className="w-16 h-16 bg-[#272729] rounded-full flex items-center justify-center mx-auto mb-4">
-            <User size={32} className="text-[#818384]" />
+        <div className="bg-[#1a1a1b] border border-[#343536] rounded-lg">
+          <div className="p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-[#272729] rounded-full flex items-center justify-center">
+                <User size={20} className="text-[#818384]" />
+              </div>
+              <div>
+                <h3 className="text-lg font-medium text-[#d7dadc]">
+                  Personal Workspace
+                </h3>
+                <p className="text-sm text-[#818384]">
+                  Rename your personal workspace or create a team to collaborate.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateTeam} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[#d7dadc] mb-2">
+                  Workspace Name
+                </label>
+                <input
+                  type="text"
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                  placeholder="Personal"
+                  className="w-full px-4 py-3 bg-[#272729] border border-[#343536] rounded-lg text-[#d7dadc] placeholder-[#818384] focus:outline-none focus:border-[#ff4500]"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={saving || !teamName.trim()}
+                className="px-4 py-2 bg-[#ff4500] hover:bg-[#ff5414] text-white rounded-lg transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </form>
+
+            <div className="mt-6 pt-6 border-t border-[#343536]">
+              <p className="text-sm text-[#818384] mb-3">
+                Want to collaborate with others?
+              </p>
+              <button
+                onClick={() => setShowCreateTeam(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-[#272729] hover:bg-[#343536] border border-[#343536] rounded-lg transition-colors text-[#d7dadc]"
+              >
+                <Plus size={18} />
+                Create a Team
+              </button>
+            </div>
           </div>
-          <h3 className="text-lg font-medium text-[#d7dadc] mb-2">
-            Personal Account
-          </h3>
-          <p className="text-[#818384] mb-4">
-            This is your personal workspace. Create a team to collaborate with
-            others.
-          </p>
-          <button
-            onClick={() => setShowCreateTeam(true)}
-            className="px-4 py-2 bg-[#ff4500] hover:bg-[#ff5414] text-white rounded-lg transition-colors"
-          >
-            Create a Team
-          </button>
         </div>
       )}
 

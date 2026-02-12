@@ -753,14 +753,16 @@ async def get_rotation_next(subreddit: str):
 
 
 @router.get("/rotation/status")
-async def get_rotation_status():
-    status = await rotation.get_rotation_status()
+async def get_rotation_status(request: Request):
+    team_id = get_current_team_id(request)
+    status = await rotation.get_rotation_status(team_id=team_id)
     return {"success": True, "data": status}
 
 
 @router.get("/rotation/next-available")
-async def get_next_available_route():
-    result = await rotation.get_next_available()
+async def get_next_available_route(request: Request):
+    team_id = get_current_team_id(request)
+    result = await rotation.get_next_available(team_id=team_id)
     return {"success": True, "data": result}
 
 

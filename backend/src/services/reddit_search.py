@@ -105,17 +105,21 @@ async def search_subreddit_posts(
     sort: str = "relevance",
     timeframe: str = "week",
     filter_type: str = "posts",
-) -> List[Dict[str, Any]]:
+    cursor: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Search within a specific subreddit via ScrapeCreators API.
     GET /v1/reddit/subreddit/search
+
+    Returns:
+        {"items": [...], "cursor": "..." or None}
     """
     api_key = _get_scrapecreators_key()
     if not api_key:
         logger.error("SCRAPECREATORS_API_KEY not set")
-        return []
+        return {"items": [], "cursor": None}
 
-    cache_key = f"sub_search:{subreddit}:{query}:{sort}:{timeframe}:{filter_type}"
+    cache_key = f"sub_search:{subreddit}:{query}:{sort}:{timeframe}:{filter_type}:{cursor or ''}"
     _evict_cache(_post_search_cache, POST_SEARCH_CACHE_TTL)
     if cache_key in _post_search_cache:
         return _post_search_cache[cache_key]["data"]
@@ -130,6 +134,8 @@ async def search_subreddit_posts(
         }
         if query:
             params["query"] = query
+        if cursor:
+            params["cursor"] = cursor
 
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -147,22 +153,35 @@ async def search_subreddit_posts(
                     f"ScrapeCreators subreddit search returned {response.status_code} "
                     f"for r/{subreddit} query '{query}'"
                 )
-                return []
+                return {"items": [], "cursor": None}
 
             data = response.json()
-            posts = data.get("posts", data.get("data", []))
-            if not isinstance(posts, list):
-                posts = []
+
+            # Extract items based on filter type
+            if filter_type == "comments":
+                items = data.get("comments", [])
+            elif filter_type == "media":
+                items = data.get("media", [])
+            else:
+                items = data.get("posts", data.get("data", []))
+
+            if not isinstance(items, list):
+                items = []
+
+            result = {
+                "items": items,
+                "cursor": data.get("cursor"),
+            }
 
             _post_search_cache[cache_key] = {
-                "data": posts,
+                "data": result,
                 "fetched_at": datetime.utcnow(),
             }
-            return posts
+            return result
 
     except Exception as e:
         logger.warning(f"ScrapeCreators subreddit search failed for r/{subreddit}: {e}")
-        return []
+        return {"items": [], "cursor": None}
 
 
 async def get_subreddit_posts(

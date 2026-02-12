@@ -37,7 +37,7 @@ export default function TeamSwitcher() {
         </div>
         <div className="flex-1 text-left min-w-0">
           <p className="text-sm font-medium text-[#d7dadc] truncate">
-            {currentTeam.isPersonal ? 'Personal' : currentTeam.name}
+            {currentTeam.name}
           </p>
           <p className="text-xs text-[#818384] truncate capitalize">
             {currentTeam.role}
@@ -73,7 +73,7 @@ export default function TeamSwitcher() {
                 </div>
                 <div className="flex-1 text-left min-w-0">
                   <p className="text-sm text-[#d7dadc] truncate">
-                    {team.isPersonal ? 'Personal' : team.name}
+                    {team.name}
                   </p>
                   <p className="text-xs text-[#818384] capitalize">{team.role}</p>
                 </div>

@@ -155,13 +155,13 @@ async def select_account_for_subreddit(subreddit: str) -> Optional[Dict[str, Any
     return available_accounts[0]
 
 
-async def select_any_available_account() -> Optional[Dict[str, Any]]:
+async def select_any_available_account(team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Select any available account (fallback when no subreddit assignment)"""
-    all_accounts = await accounts.get_accounts({"activeOnly": True})
+    all_accounts = await accounts.get_accounts({"activeOnly": True}, team_id=team_id)
 
     available_accounts = []
     for account in all_accounts:
-        can_send = await accounts.can_account_send_dm(account["id"])
+        can_send = await accounts.can_account_send_dm(account["id"], team_id=team_id)
         if can_send.get("allowed"):
             score = calculate_account_score({
                 "warmup_mode": account.get("warmupMode"),
@@ -190,9 +190,9 @@ async def select_any_available_account() -> Optional[Dict[str, Any]]:
     return available_accounts[0]
 
 
-async def get_rotation_status() -> Dict[str, int]:
+async def get_rotation_status(team_id: Optional[str] = None) -> Dict[str, int]:
     """Get account rotation status for dashboard"""
-    all_accounts = await accounts.get_accounts({"activeOnly": True})
+    all_accounts = await accounts.get_accounts({"activeOnly": True}, team_id=team_id)
 
     available = 0
     at_limit = 0
@@ -200,7 +200,7 @@ async def get_rotation_status() -> Dict[str, int]:
     warming_up = 0
 
     for account in all_accounts:
-        can_send = await accounts.can_account_send_dm(account["id"])
+        can_send = await accounts.can_account_send_dm(account["id"], team_id=team_id)
 
         if can_send.get("allowed"):
             available += 1
@@ -221,15 +221,15 @@ async def get_rotation_status() -> Dict[str, int]:
     }
 
 
-async def get_next_available() -> Dict[str, Any]:
+async def get_next_available(team_id: Optional[str] = None) -> Dict[str, Any]:
     """Get next available account with estimated wait time"""
-    account = await select_any_available_account()
+    account = await select_any_available_account(team_id=team_id)
 
     if account:
         return {"account": account, "waitTime": 0}
 
     # No account available - calculate wait time until one becomes available
-    all_accounts = await accounts.get_accounts({"activeOnly": True})
+    all_accounts = await accounts.get_accounts({"activeOnly": True}, team_id=team_id)
 
     shortest_wait = float("inf")
 
