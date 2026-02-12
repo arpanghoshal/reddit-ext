@@ -211,6 +211,7 @@ async def store_lead(session_id: str, team_id: str, lead_data: Dict[str, Any]) -
 async def get_session_leads(
     session_id: str, team_id: str,
     tier: str = None, status: str = None, subreddit: str = None,
+    relevance: str = None,
     limit: int = 50, offset: int = 0
 ) -> List[Dict[str, Any]]:
     """Get leads for a session with optional filters."""
@@ -228,6 +229,13 @@ async def get_session_leads(
         query = query.eq("status", status)
     if subreddit:
         query = query.eq("subreddit", subreddit)
+
+    # Relevance filter: "relevant" excludes irrelevant, "irrelevant" shows only irrelevant
+    if relevance == "relevant":
+        query = query.neq("lead_tier", "irrelevant")
+    elif relevance == "irrelevant":
+        query = query.eq("lead_tier", "irrelevant")
+    # "all" or None = no filter
 
     query = query.order("lead_score", desc=True).range(offset, offset + limit - 1)
     result = query.execute()
@@ -950,6 +958,73 @@ async def run_discovery_pipeline(session_id: str):
                 except Exception as e:
                     logger.warning(f"Failed to store subreddit {sr_name}: {e}")
 
+        # ---- Phase 2.7: Per-subreddit expansion via ScrapeCreators ----
+        POSTS_PER_SUBREDDIT = 10
+        expansion_posts = []
+        expansion_seen_urls = set(seen_urls)
+
+        subreddits_to_expand = list(subreddit_records.keys())
+        logger.info(f"Phase 2.7: Expanding {len(subreddits_to_expand)} subreddits via ScrapeCreators ({POSTS_PER_SUBREDDIT} posts each)")
+
+        for sr_name in subreddits_to_expand:
+            try:
+                sr_posts_raw = await reddit_search.get_subreddit_posts(
+                    subreddit=sr_name,
+                    sort="hot",
+                    timeframe="week",
+                )
+
+                sr_record = subreddit_records.get(sr_name, {})
+                expansion_count_for_sr = 0
+
+                for raw_post in sr_posts_raw:
+                    if expansion_count_for_sr >= POSTS_PER_SUBREDDIT:
+                        break
+
+                    normalized = reddit_search.normalize_post(raw_post)
+                    post_url = normalized.get("url", "")
+                    author = normalized.get("author", "")
+
+                    # Skip if no URL, no author, deleted, or already seen
+                    if not post_url or not author or author == "[deleted]":
+                        continue
+                    if post_url in expansion_seen_urls:
+                        continue
+                    if author.lower() in seen_authors:
+                        continue
+
+                    expansion_seen_urls.add(post_url)
+                    seen_authors.add(author.lower())
+
+                    # Tag with source type and subreddit record id
+                    normalized["_source_type"] = "subreddit_expansion"
+                    normalized["_subreddit_record_id"] = sr_record.get("id")
+
+                    expansion_posts.append(normalized)
+                    expansion_count_for_sr += 1
+
+                # Update subreddit expansion stats
+                if sr_record.get("id") and expansion_count_for_sr > 0:
+                    client = get_client()
+                    if client:
+                        client.table("discovered_subreddits").update({
+                            "expansion_posts_fetched": expansion_count_for_sr,
+                        }).eq("id", sr_record["id"]).execute()
+
+            except Exception as e:
+                logger.warning(f"Subreddit expansion failed for r/{sr_name}: {e}")
+
+        logger.info(f"Phase 2.7: Found {len(expansion_posts)} additional posts from subreddit expansion")
+
+        # Merge expansion posts into the main pipeline
+        all_posts.extend(expansion_posts)
+        seen_urls.update(expansion_seen_urls)
+
+        await update_session(session_id, {
+            "total_posts_found": len(all_posts),
+            "subreddit_posts_fetched": len(expansion_posts),
+        })
+
         # ---- Phase 3: Dedup (DB queries only) ----
         from . import dedup
         all_authors = [post["author"] for post in all_posts]
@@ -1002,16 +1077,13 @@ async def run_discovery_pipeline(session_id: str):
                 f"Falling back to unscored leads. Business: {settings.get('businessDesc', '')[:100]}"
             )
 
-        # Score and store leads
+        # Score and store ALL leads (including irrelevant ones)
         leads_qualified = 0
+        total_irrelevant = 0
         scored_posts = []  # For comment mining
         subreddit_stats = {}
 
         for i, post in enumerate(posts_to_classify):
-            if leads_qualified >= MAX_LEADS:
-                logger.info(f"Reached {MAX_LEADS} leads, stopping")
-                break
-
             classification = classifications[i] if i < len(classifications) else {}
 
             # If classification completely failed, treat all posts as weak leads
@@ -1023,8 +1095,12 @@ async def run_discovery_pipeline(session_id: str):
                     "reasoning": "Classification unavailable - stored as unscored lead",
                 }
 
-            if not classification or classification.get("category") == "not_relevant":
-                continue
+            is_irrelevant = (not classification or classification.get("category") == "not_relevant")
+
+            # Only count relevant leads toward MAX_LEADS cap
+            if not is_irrelevant and leads_qualified >= MAX_LEADS:
+                logger.info(f"Reached {MAX_LEADS} relevant leads, stopping")
+                break
 
             sr_name = post.get("subreddit", "")
             if sr_name not in subreddit_stats:
@@ -1032,14 +1108,16 @@ async def run_discovery_pipeline(session_id: str):
             subreddit_stats[sr_name]["posts"] += 1
 
             # Calculate lead score from classification (no API call)
-            relevance = classification.get("relevanceScore", 0)
-            buyer_intent = classification.get("buyerIntent", 0)
-            product_fit = classification.get("productFit", 0)
-            confidence = classification.get("confidence", 0)
+            relevance = classification.get("relevanceScore", 0) if classification else 0
+            buyer_intent = classification.get("buyerIntent", 0) if classification else 0
+            product_fit = classification.get("productFit", 0) if classification else 0
+            confidence = classification.get("confidence", 0) if classification else 0
             score = (relevance * 0.4) + (buyer_intent * 0.3) + (product_fit * 0.2) + (confidence * 0.1)
             score = round(score)
 
-            if relevance >= 70 and buyer_intent >= 60:
+            if is_irrelevant:
+                tier = "irrelevant"
+            elif relevance >= 70 and buyer_intent >= 60:
                 tier = "hot"
             elif relevance >= 50 or buyer_intent >= 40:
                 tier = "warm"
@@ -1048,37 +1126,44 @@ async def run_discovery_pipeline(session_id: str):
 
             sr_record = subreddit_records.get(sr_name, {})
 
+            # Use source_type from expansion tag if present, otherwise "post"
+            source_type = post.get("_source_type", "post")
+
             lead_data = {
-                "discovered_subreddit_id": sr_record.get("id"),
+                "discovered_subreddit_id": post.get("_subreddit_record_id") or sr_record.get("id"),
                 "post_url": post["url"],
                 "post_title": post["title"],
                 "post_body": post.get("body", "")[:2000],
                 "subreddit": sr_name,
                 "post_created_utc": post.get("created_utc", 0),
                 "author_username": post["author"],
-                "source_type": "post",
+                "source_type": source_type,
                 "relevance_score": relevance,
                 "buyer_intent": buyer_intent,
-                "problem_awareness": classification.get("problemAwareness", 0),
+                "problem_awareness": classification.get("problemAwareness", 0) if classification else 0,
                 "product_fit": product_fit,
                 "confidence": confidence,
-                "classification_category": classification.get("category"),
-                "classification_reasoning": classification.get("reasoning"),
-                "is_qualified": score >= 50,
+                "classification_category": classification.get("category", "not_relevant") if classification else "not_relevant",
+                "classification_reasoning": classification.get("reasoning", "") if classification else "",
+                "is_qualified": not is_irrelevant and score >= 50,
                 "account_quality_score": None,
                 "engagement_score": None,
                 "lead_score": score,
                 "lead_tier": tier,
-                "lead_insights": [{"type": "classification", "message": classification.get("reasoning", "")}],
+                "lead_insights": [{"type": "classification", "message": classification.get("reasoning", "") if classification else ""}],
                 "status": "scored",
             }
 
             try:
                 await store_lead(session_id, team_id, lead_data)
-                leads_qualified += 1
-                subreddit_stats[sr_name]["leads"] += 1
+                if is_irrelevant:
+                    total_irrelevant += 1
+                else:
+                    leads_qualified += 1
+                    subreddit_stats[sr_name]["leads"] += 1
 
-                if score >= 50:
+                # Only add relevant posts to comment mining candidates
+                if not is_irrelevant and score >= 50:
                     scored_posts.append((post, score, sr_record.get("id")))
             except Exception as e:
                 logger.warning(f"Failed to store lead for u/{post['author']}: {e}")
@@ -1086,6 +1171,7 @@ async def run_discovery_pipeline(session_id: str):
         await update_session(session_id, {
             "total_leads_scored": len(posts_to_classify),
             "leads_qualified": leads_qualified,
+            "total_posts_irrelevant": total_irrelevant,
         })
 
         # Update subreddit stats

@@ -171,6 +171,7 @@ async def get_leads(
     tier: Optional[str] = None,
     status: Optional[str] = None,
     subreddit: Optional[str] = None,
+    relevance: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
 ):
@@ -182,6 +183,7 @@ async def get_leads(
     leads = await discovery.get_session_leads(
         session_id, team_id,
         tier=tier, status=status, subreddit=subreddit,
+        relevance=relevance,
         limit=limit, offset=offset,
     )
     return {"success": True, "data": leads}

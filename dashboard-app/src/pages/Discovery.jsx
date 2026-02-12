@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff, ListChecks } from 'lucide-react';
+import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff, ListChecks, Ban, Eye, EyeOff } from 'lucide-react';
 import * as api from '../api/client';
 
 // ============================================================================
@@ -10,6 +10,7 @@ function TierBadge({ tier }) {
     hot: { bg: 'bg-red-500/15 text-red-400', icon: Flame, label: 'HOT' },
     warm: { bg: 'bg-orange-500/15 text-orange-400', icon: Thermometer, label: 'WARM' },
     cold: { bg: 'bg-blue-500/15 text-blue-400', icon: Snowflake, label: 'COLD' },
+    irrelevant: { bg: 'bg-gray-500/15 text-gray-500', icon: Ban, label: 'IRRELEVANT' },
   };
   const c = config[tier] || config.cold;
   const Icon = c.icon;
@@ -109,6 +110,11 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
               {lead.source_type === 'comment' && (
                 <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/15 text-purple-400">
                   Comment
+                </span>
+              )}
+              {lead.source_type === 'subreddit_expansion' && (
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-teal-500/15 text-teal-400">
+                  Subreddit
                 </span>
               )}
               {lead.status === 'queued' && (
@@ -213,8 +219,15 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
             </p>
           )}
 
+          {/* Irrelevant notice */}
+          {lead.lead_tier === 'irrelevant' && (
+            <div className="pt-2 border-t border-[#23232a] text-xs text-[#52525b] italic">
+              This post was classified as not relevant to your business context.
+            </div>
+          )}
+
           {/* Message generation & queue */}
-          {lead.status === 'scored' && (
+          {lead.status === 'scored' && lead.lead_tier !== 'irrelevant' && (
             <div className="space-y-3 pt-2 border-t border-[#23232a]">
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -688,7 +701,7 @@ function DiscoveryProgress({ session, onCancel }) {
       </div>
 
       {/* Stats */}
-      <div className={`grid ${session.mode === 'automation' ? 'grid-cols-4' : 'grid-cols-3'} gap-4 text-center`}>
+      <div className={`grid ${session.mode === 'automation' ? 'grid-cols-4' : session.subreddit_posts_fetched > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-4 text-center`}>
         <div className="bg-[#1e1e24] rounded-lg p-3">
           <div className="text-xl font-bold text-white">
             {session.total_posts_found || 0}
@@ -707,6 +720,14 @@ function DiscoveryProgress({ session, onCancel }) {
           </div>
           <div className="text-xs text-[#71717a]">Leads Found</div>
         </div>
+        {session.subreddit_posts_fetched > 0 && (
+          <div className="bg-[#1e1e24] rounded-lg p-3">
+            <div className="text-xl font-bold text-teal-400">
+              {session.subreddit_posts_fetched || 0}
+            </div>
+            <div className="text-xs text-[#71717a]">Subreddit Posts</div>
+          </div>
+        )}
         {session.mode === 'automation' && (
           <div className="bg-[#1e1e24] rounded-lg p-3">
             <div className="text-xl font-bold text-green-400">
@@ -729,6 +750,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
   const [loading, setLoading] = useState(true);
   const [tierFilter, setTierFilter] = useState('all');
   const [subredditFilter, setSubredditFilter] = useState('all');
+  const [relevanceFilter, setRelevanceFilter] = useState('relevant');
   const [subreddits, setSubreddits] = useState([]);
   const [bulkAccount, setBulkAccount] = useState('');
   const [bulkQueueing, setBulkQueueing] = useState(false);
@@ -736,7 +758,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
 
   useEffect(() => {
     loadData();
-  }, [sessionId, tierFilter, subredditFilter]);
+  }, [sessionId, tierFilter, subredditFilter, relevanceFilter]);
 
   const loadData = async () => {
     setLoading(true);
@@ -744,6 +766,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
       const filters = {};
       if (tierFilter !== 'all') filters.tier = tierFilter;
       if (subredditFilter !== 'all') filters.subreddit = subredditFilter;
+      if (relevanceFilter !== 'all') filters.relevance = relevanceFilter;
       filters.limit = 100;
 
       const [leadsData, accountsData, subredditsData] = await Promise.all([
@@ -777,7 +800,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
     }
   };
 
-  const eligibleLeads = leads.filter(l => l.status === 'scored');
+  const eligibleLeads = leads.filter(l => l.status === 'scored' && l.lead_tier !== 'irrelevant');
 
   const handleBulkQueue = async () => {
     if (!bulkAccount || eligibleLeads.length === 0) return;
@@ -804,6 +827,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
     hot: leads.filter(l => l.lead_tier === 'hot').length,
     warm: leads.filter(l => l.lead_tier === 'warm').length,
     cold: leads.filter(l => l.lead_tier === 'cold').length,
+    irrelevant: leads.filter(l => l.lead_tier === 'irrelevant').length,
   };
 
   const activeLeads = leads.filter(l => l.status !== 'dismissed');
@@ -818,6 +842,9 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
           </h2>
           <p className="text-sm text-[#71717a]">
             {session.leads_qualified || 0} leads found across {subreddits.length} subreddits
+            {session.subreddit_posts_fetched > 0 && (
+              <span> ({session.subreddit_posts_fetched} from subreddit expansion)</span>
+            )}
           </p>
         </div>
         <button
@@ -874,6 +901,42 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
           )}
         </div>
       )}
+
+      {/* Relevance toggle */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setRelevanceFilter('relevant')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            relevanceFilter === 'relevant'
+              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+              : 'bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] border border-transparent'
+          }`}
+        >
+          <Eye className="w-3.5 h-3.5" />
+          Relevant
+        </button>
+        <button
+          onClick={() => setRelevanceFilter('irrelevant')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            relevanceFilter === 'irrelevant'
+              ? 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+              : 'bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] border border-transparent'
+          }`}
+        >
+          <EyeOff className="w-3.5 h-3.5" />
+          Irrelevant ({session.total_posts_irrelevant || 0})
+        </button>
+        <button
+          onClick={() => setRelevanceFilter('all')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            relevanceFilter === 'all'
+              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+              : 'bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] border border-transparent'
+          }`}
+        >
+          All Posts
+        </button>
+      </div>
 
       {/* Tier summary */}
       <div className="grid grid-cols-3 gap-3 mb-4">

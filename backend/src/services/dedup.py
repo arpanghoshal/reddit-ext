@@ -111,9 +111,8 @@ async def has_been_contacted(recipient_username: str, team_id: str) -> Dict[str,
             }
 
         # Note: discovered_leads is intentionally NOT checked here.
-        # This function guards the DM queue (preventing double-sends).
-        # discovered_leads dedup is only in batch_check_contacted() for the
-        # discovery pipeline (preventing re-discovery across sessions).
+        # Only actually contacted users are excluded from future discovery.
+        # Users who were discovered but never DM'd should reappear.
 
         return {"contacted": False}
 
@@ -189,16 +188,9 @@ async def batch_check_contacted(usernames: List[str], team_id: str) -> set:
         for row in (result.data or []):
             contacted.add(row["participant_username"])
 
-        # 5. Check discovered_leads (past discovery sessions)
-        remaining = [u for u in remaining if u not in contacted]
-        if remaining:
-            result = client.table("discovered_leads").select(
-                "author_username"
-            ).eq("team_id", team_id).in_(
-                "author_username", remaining
-            ).neq("status", "dismissed").execute()
-            for row in (result.data or []):
-                contacted.add(row["author_username"].lower())
+        # Note: discovered_leads from past sessions are NOT excluded here.
+        # Users who were discovered but never DM'd should reappear in future sessions.
+        # Only actually contacted users (steps 1-4 above) are filtered out.
 
     except Exception as e:
         logger.warning(f"Batch dedup check failed: {e}")
