@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from ..database import get_client
+from .supabase_service import get_client
 from . import reddit_search
 from . import classification as classification_service
 from . import dedup
