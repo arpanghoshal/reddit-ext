@@ -32,15 +32,15 @@ function QueuePill({ label, count, color }) {
 
 function FunnelChart({ data }) {
   const stages = [
-    { name: 'Scanned', key: 'scanned', color: '#6366f1' },
     { name: 'Qualified', key: 'qualified', color: '#818cf8' },
     { name: 'Messaged', key: 'messaged', color: '#a78bfa' },
     { name: 'Replied', key: 'replied', color: '#c084fc' },
     { name: 'Converted', key: 'converted', color: '#e879f9' },
   ];
 
+  const scanned = data.scanned || 0;
   const maxValue = Math.max(...stages.map(s => data[s.key] || 0)) || 1;
-  const hasData = stages.some(s => data[s.key] > 0);
+  const hasData = stages.some(s => data[s.key] > 0) || scanned > 0;
 
   if (!hasData) {
     return (
@@ -79,6 +79,9 @@ function FunnelChart({ data }) {
           </div>
         );
       })}
+      <div className="pt-2 text-[13px] text-[#52525b]">
+        Total scanned: <span className="text-[#a1a1aa] font-medium">{scanned.toLocaleString()}</span>
+      </div>
     </div>
   );
 }
