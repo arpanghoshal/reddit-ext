@@ -127,15 +127,26 @@ function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQue
               </button>
             </div>
           )}
-          {item.status === 'approved' && isReplyQueue && onSend && (
-            <button
-              onClick={() => onSend(item)}
-              className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
-              title="Send via Reddit"
-            >
-              <Send size={16} />
-              Send
-            </button>
+          {item.status === 'approved' && (
+            <div className="flex gap-2">
+              {isReplyQueue && onSend && (
+                <button
+                  onClick={() => onSend(item)}
+                  className="flex items-center gap-1 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
+                  title="Send via Reddit"
+                >
+                  <Send size={16} />
+                  Send
+                </button>
+              )}
+              <button
+                onClick={() => onReject(item.id)}
+                className="p-2 bg-red-500/15 text-red-400 rounded-lg hover:bg-red-500/25"
+                title="Cancel / Reject"
+              >
+                <X size={18} />
+              </button>
+            </div>
           )}
         </div>
       </div>

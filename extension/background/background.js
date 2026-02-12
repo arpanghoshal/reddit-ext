@@ -33,13 +33,20 @@ let subredditQueues = {};
 
 // Track which tab is waiting for chat to prevent race conditions
 let chatWaitingTabId = null;
+// Persists the origin tab even after chatWaitingTabId is cleared by timeout,
+// so onUpdated can still transfer a task if the chat tab loads late
+let chatOriginTabId = null;
 
 // Track pending setTimeout IDs per tabId for cancellation on stop
 let pendingTimeouts = {};
 
+// Prevent overlapping processNextStep calls per tab
+let commandInFlight = {};
+
 function setTrackedTimeout(tabId, fn, delay) {
     const timeoutId = setTimeout(() => {
         if (pendingTimeouts[tabId]) pendingTimeouts[tabId].delete(timeoutId);
+        if (!activeTasks[tabId] && !subredditQueues[tabId]) return; // task was cleaned up
         fn();
     }, delay);
     if (!pendingTimeouts[tabId]) pendingTimeouts[tabId] = new Set();
@@ -54,11 +61,60 @@ function clearAllTimeouts(tabId) {
     }
 }
 
+// Poll content script until it responds to PING, confirming it's alive and ready
+async function ensureContentScriptReady(tabId, timeoutMs = 10000, intervalMs = 500) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const r = await chrome.tabs.sendMessage(tabId, { action: 'PING' });
+            if (r?.pong) return true;
+        } catch (e) {
+            // Content script not ready yet
+        }
+        await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return false;
+}
+
+// Send a command to the content script after verifying it's ready.
+// Handles failure by reporting to handleStepCompletion for retry.
+async function sendCommandWithReadinessCheck(tabId, message, expectedState, stepName) {
+    try {
+        const ready = await ensureContentScriptReady(tabId);
+        if (!ready) {
+            console.error(`Content script not ready for ${stepName}`);
+            delete commandInFlight[tabId];
+            handleStepCompletion(tabId, { success: false, error: 'Content script not ready', step: stepName });
+            return;
+        }
+        // Verify state hasn't changed during the wait
+        if (!activeTasks[tabId] || activeTasks[tabId].status !== expectedState) {
+            console.log(`State changed during readiness wait for ${stepName}, aborting`);
+            delete commandInFlight[tabId];
+            return;
+        }
+        await chrome.tabs.sendMessage(tabId, message);
+        delete commandInFlight[tabId];
+    } catch (err) {
+        console.error(`Failed to send ${stepName}:`, err);
+        delete commandInFlight[tabId];
+        handleStepCompletion(tabId, { success: false, error: 'Message send failed', step: stepName });
+    }
+}
+
 // Cleanup function to remove tasks for closed tabs
 function cleanupTask(tabId) {
     clearAllTimeouts(tabId);
+    delete commandInFlight[tabId];
     if (activeTasks[tabId]) {
         console.log(`Cleaning up task for closed tab ${tabId}`);
+        // Release queue processing locks if this was a queued task
+        if (activeTasks[tabId].data?.isReply) replyQueueProcessing = false;
+        if (activeTasks[tabId].data?.isOutreach) outreachQueueProcessing = false;
+        // Clear persistent in-progress marker
+        if (activeTasks[tabId].data?.queueItemId) {
+            clearQueueItemInProgress(activeTasks[tabId].data.queueItemId).catch(() => {});
+        }
         delete activeTasks[tabId];
     }
     if (subredditQueues[tabId]) {
@@ -75,6 +131,9 @@ function cleanupTask(tabId) {
     }
     if (chatWaitingTabId === tabId) {
         chatWaitingTabId = null;
+    }
+    if (chatOriginTabId === tabId) {
+        chatOriginTabId = null;
     }
 }
 
@@ -161,18 +220,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // the entire flow: find user → open conversation → type → send.
             // We set status to TYPING_MESSAGE so handleStepCompletion's
             // TYPE_MESSAGE success handler fires on completion.
-            setTrackedTimeout(tabId, () => {
-                if (activeTasks[tabId]?.status === AutomationState.TYPING_MESSAGE) {
-                    chrome.tabs.sendMessage(tabId, {
-                        action: 'EXECUTE_ACTION',
-                        command: 'DIRECT_CHAT_SEND',
-                        targetUser: targetUser,
-                        text: message
-                    }).catch(err => {
-                        console.error('Failed to send DIRECT_CHAT_SEND:', err);
-                    });
-                }
-            }, 3000);
+            sendCommandWithReadinessCheck(tabId, {
+                action: 'EXECUTE_ACTION',
+                command: 'DIRECT_CHAT_SEND',
+                targetUser: targetUser,
+                text: message
+            }, AutomationState.TYPING_MESSAGE, 'DIRECT_CHAT_SEND');
         };
 
         doSend();
@@ -235,7 +288,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'AUTOMATION_STEP_COMPLETE') {
-        const tabId = sender.tab.id;
+        const tabId = sender.tab?.id ?? request.tabId;
         handleStepCompletion(tabId, request.result).catch(err => {
             console.error('handleStepCompletion error:', err);
         });
@@ -260,10 +313,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
         console.log(`Stopping automation for tab ${tabId}`);
 
-        // Cancel all pending timeouts for this tab first
+        // Cancel all pending timeouts and in-flight commands for this tab
         clearAllTimeouts(tabId);
+        delete commandInFlight[tabId];
 
-        if (activeTasks[tabId]) delete activeTasks[tabId];
+        const stoppedTask = activeTasks[tabId];
+        if (stoppedTask) {
+            if (stoppedTask.data?.queueItemId) {
+                clearQueueItemInProgress(stoppedTask.data.queueItemId).catch(() => {});
+            }
+            delete activeTasks[tabId];
+        }
         if (subredditQueues[tabId]) {
             const queue = subredditQueues[tabId];
 
@@ -274,16 +334,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     successCount: queue.successCount || 0,
                     failedCount: queue.failedCount || 0,
                     status: 'stopped'
-                });
+                }).catch(e => console.error('Failed to update session:', e));
             }
 
             queue.isActive = false;
             delete subredditQueues[tabId];
         }
 
-        // Reset queue processing flags so polling isn't stuck
-        replyQueueProcessing = false;
-        outreachQueueProcessing = false;
+        // Only reset the relevant queue processing flag (not both)
+        if (stoppedTask?.data?.isReply) replyQueueProcessing = false;
+        else if (stoppedTask?.data?.isOutreach) outreachQueueProcessing = false;
+        else { replyQueueProcessing = false; outreachQueueProcessing = false; }
+
+        // Clear chat waiting state
+        if (chatWaitingTabId === tabId) chatWaitingTabId = null;
+        if (chatOriginTabId === tabId) chatOriginTabId = null;
 
         sendResponse({ success: true });
     }
@@ -318,6 +383,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
 
             setTrackedTimeout(tabId, () => {
+                // Reset status to the "waiting" state so processNextStep can re-enter
+                if (task.status === AutomationState.CLICKING_CHAT) {
+                    task.status = AutomationState.WAITING_FOR_PROFILE;
+                } else if (task.status === AutomationState.TYPING_MESSAGE) {
+                    task.status = AutomationState.WAITING_FOR_CHAT;
+                }
                 processNextStep(tabId);
             }, delay);
         }
@@ -367,6 +438,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             processNextQueueItem(tabId);
         } else {
             // Single automation - just clear the task
+            // Release queue processing locks
+            if (task?.data?.isReply) replyQueueProcessing = false;
+            if (task?.data?.isOutreach) outreachQueueProcessing = false;
+            if (task?.data?.queueItemId) clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
             delete activeTasks[tabId];
         }
 
@@ -458,21 +533,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // Check if this is a chat.reddit.com tab that we're waiting for
     if (changeInfo.status === 'complete' && tab.url && tab.url.includes('chat.reddit.com')) {
-        // Only transfer if we have a specific tab waiting for chat (prevents race condition)
+        // Primary: transfer if chatWaitingTabId is still set
         if (chatWaitingTabId !== null && activeTasks[chatWaitingTabId]) {
             const task = activeTasks[chatWaitingTabId];
             if (task.status === AutomationState.WAITING_FOR_CHAT) {
                 console.log(`Chat tab detected! Tab ${tabId}, transferring task from ${chatWaitingTabId}`);
 
-                // Transfer the task to the new chat tab
+                task.data.onChatTab = true; // Mark as transferred to a separate chat tab
                 activeTasks[tabId] = task;
                 delete activeTasks[chatWaitingTabId];
-
-                // Clear the waiting flag
-                const originalTabId = chatWaitingTabId;
                 chatWaitingTabId = null;
+                chatOriginTabId = null;
 
-                // Process next step on the new tab
+                processNextStep(tabId);
+                return;
+            }
+        }
+
+        // Fallback: chatWaitingTabId was cleared by timeout, but the origin tab still
+        // has a task that failed TYPE_MESSAGE. Rescue by transferring to this chat tab.
+        if (chatOriginTabId !== null && activeTasks[chatOriginTabId]) {
+            const originTask = activeTasks[chatOriginTabId];
+            // Task is still in a chat-related state (timeout sent TYPE_MESSAGE which failed,
+            // or it's retrying). Transfer if the task hasn't moved past typing.
+            if (originTask.status === AutomationState.WAITING_FOR_CHAT ||
+                originTask.status === AutomationState.TYPING_MESSAGE) {
+                console.log(`Late chat tab ${tabId} detected! Transferring task from origin ${chatOriginTabId}`);
+
+                originTask.status = AutomationState.WAITING_FOR_CHAT;
+                originTask.retries = 0;
+                originTask.data.onChatTab = true;
+                activeTasks[tabId] = originTask;
+                delete activeTasks[chatOriginTabId];
+                chatOriginTabId = null;
+
                 processNextStep(tabId);
                 return;
             }
@@ -491,6 +585,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         else if (activeTasks[tabId].status === AutomationState.WAITING_FOR_PROFILE) {
             processNextStep(tabId);
         }
+        // If we were waiting for chat (transferred via onCreated but not yet loaded)
+        else if (activeTasks[tabId].status === AutomationState.WAITING_FOR_CHAT) {
+            processNextStep(tabId);
+        }
     }
 });
 
@@ -507,13 +605,20 @@ chrome.tabs.onCreated.addListener((tab) => {
                 console.log(`Chat tab opened! Transferring task from tab ${chatWaitingTabId} to ${tab.id}`);
 
                 // Transfer task to new tab
+                task.data.onChatTab = true;
                 activeTasks[tab.id] = task;
                 delete activeTasks[chatWaitingTabId];
 
-                // Clear the waiting flag
                 chatWaitingTabId = null;
+                chatOriginTabId = null;
 
                 // onUpdated will trigger processNextStep when the new tab finishes loading
+            } else if (!pendingUrl) {
+                // URL not yet available (Chrome hasn't resolved it).
+                // Store this tab ID so onUpdated can check it when the URL resolves.
+                console.log(`New tab ${tab.id} has no URL yet, will check in onUpdated`);
+                // onUpdated handler already checks for chat.reddit.com tabs via
+                // chatWaitingTabId and chatOriginTabId, so this will be caught there.
             }
         }
     }
@@ -578,11 +683,25 @@ async function processNextStep(tabId) {
     const task = activeTasks[tabId];
     if (!task) return;
 
+    // Guard: prevent overlapping processNextStep calls for the same tab
+    if (commandInFlight[tabId]) {
+        console.log(`processNextStep: command already in-flight for tab ${tabId}, skipping`);
+        return;
+    }
+
     try {
         switch (task.status) {
             case AutomationState.WAITING_FOR_POST:
                 console.log('Post loaded. Extracting data and generating DM...');
                 task.status = AutomationState.GENERATING_DM;
+
+                // Safety timeout: if DM generation takes too long (30s), fail the step
+                setTrackedTimeout(tabId, () => {
+                    if (activeTasks[tabId]?.status === AutomationState.GENERATING_DM) {
+                        console.warn('DM generation timed out after 30s');
+                        handleStepCompletion(tabId, { success: false, error: 'DM generation timed out' }).catch(err => console.error('handleStepCompletion error:', err));
+                    }
+                }, 30000);
 
                 // 1. Get Post Data
                 chrome.tabs.sendMessage(tabId, { action: 'GET_POST_DATA' }, async (postData) => {
@@ -661,14 +780,15 @@ async function processNextStep(tabId) {
                         console.log('DM Generated:', message);
 
                         // 3. Update task data with the new user, message, and classification
-                        task.data = {
+                        // Use Object.assign to preserve existing fields (isReply, isOutreach, queueItemId, accountId, etc.)
+                        Object.assign(task.data, {
                             targetUser: postData.author,
                             message: message,
                             postUrl: postData.url,
                             postTitle: postData.title,
                             subreddit: postData.subreddit,
                             classification: classification
-                        };
+                        });
 
                         // Check DM send mode
                         const modeSettings = await chrome.storage.local.get(['dmSendMode']);
@@ -677,6 +797,22 @@ async function processNextStep(tabId) {
                         if (dmSendMode === 'confirm') {
                             // Show confirmation dialog in content script
                             task.status = AutomationState.AWAITING_CONFIRMATION;
+
+                            // Safety timeout: auto-skip if user doesn't respond in 5 minutes
+                            setTrackedTimeout(tabId, () => {
+                                if (activeTasks[tabId]?.status === AutomationState.AWAITING_CONFIRMATION) {
+                                    console.warn('Confirmation timed out after 5 minutes, auto-skipping');
+                                    const q = subredditQueues[tabId];
+                                    if (q && q.isActive) {
+                                        q.currentIndex++;
+                                        delete activeTasks[tabId];
+                                        processNextQueueItem(tabId);
+                                    } else {
+                                        delete activeTasks[tabId];
+                                    }
+                                }
+                            }, 300000);
+
                             chrome.tabs.sendMessage(tabId, {
                                 action: 'SHOW_DM_CONFIRMATION',
                                 data: {
@@ -708,37 +844,32 @@ async function processNextStep(tabId) {
                 console.log('Profile loaded. Attempting to find and click Chat button...');
                 task.status = AutomationState.CLICKING_CHAT;
 
-                // Inject script to find and click chat
-                // We send a message to the content script to perform the action
-                // The content script must be ready.
-                setTrackedTimeout(tabId, () => {
-                    chrome.tabs.sendMessage(tabId, {
-                        action: 'EXECUTE_ACTION',
-                        command: 'CLICK_CHAT_BUTTON'
-                    }).catch(err => {
-                        console.error('Failed to send CLICK_CHAT_BUTTON:', err);
-                        // Retry or abort?
-                    });
-                }, 2000); // Small delay to ensure hydration
-                break;
+                // Wait for content script readiness, then send command
+                commandInFlight[tabId] = true;
+                sendCommandWithReadinessCheck(tabId, {
+                    action: 'EXECUTE_ACTION',
+                    command: 'CLICK_CHAT_BUTTON'
+                }, AutomationState.CLICKING_CHAT, 'CLICK_CHAT_BUTTON');
+                return; // Lock released inside sendCommandWithReadinessCheck
 
             case AutomationState.WAITING_FOR_CHAT:
-                console.log('Chat loaded. Attempting to type message...');
+                // Always find the target user's conversation first to avoid typing
+                // into the wrong chat (popup may show most recent conversation)
+                console.log(`Chat ready. Finding ${task.data.targetUser}'s conversation before typing...`);
                 task.status = AutomationState.TYPING_MESSAGE;
+                commandInFlight[tabId] = true;
 
-                setTrackedTimeout(tabId, () => {
-                    chrome.tabs.sendMessage(tabId, {
-                        action: 'EXECUTE_ACTION',
-                        command: 'TYPE_MESSAGE',
-                        text: task.data.message
-                    });
-                }, 2000);
-                break;
+                sendCommandWithReadinessCheck(tabId, {
+                    action: 'EXECUTE_ACTION',
+                    command: 'DIRECT_CHAT_SEND',
+                    targetUser: task.data.targetUser,
+                    text: task.data.message
+                }, AutomationState.TYPING_MESSAGE, 'DIRECT_CHAT_SEND');
+                return;
 
         }
     } catch (error) {
         console.error('Automation Error:', error);
-        // Handle error state
     }
 }
 
@@ -755,26 +886,51 @@ async function handleStepCompletion(tabId, result) {
 
             // Set this tab as waiting for chat (in case a new tab opens)
             chatWaitingTabId = tabId;
+            chatOriginTabId = tabId;
             task.status = AutomationState.WAITING_FOR_CHAT;
 
             // Wait for either:
             // 1. Chat popup to render on same page
             // 2. New chat.reddit.com tab to open (handled by onCreated/onUpdated)
-            // After 5.5 seconds, try to type on current tab (popup case)
-            setTrackedTimeout(tabId, () => {
+            // After 5.5 seconds, check for chat tabs before assuming popup
+            setTrackedTimeout(tabId, async () => {
                 // Only proceed if we're still waiting (didn't transfer to new tab)
                 if (chatWaitingTabId === tabId && activeTasks[tabId] &&
                     activeTasks[tabId].status === AutomationState.WAITING_FOR_CHAT) {
-                    console.log('Chat popup detected (same tab). Sending TYPE_MESSAGE...');
+
+                    // Before assuming popup, check if a chat.reddit.com tab was opened
+                    // (onCreated may have missed it due to undefined pendingUrl)
+                    try {
+                        const chatTabs = await chrome.tabs.query({ url: '*://chat.reddit.com/*' });
+                        const chatTab = chatTabs.find(t => t.id !== tabId);
+                        if (chatTab) {
+                            console.log(`Found chat tab ${chatTab.id} during timeout, transferring task from ${tabId}`);
+                            activeTasks[tabId].data.onChatTab = true;
+                            activeTasks[chatTab.id] = activeTasks[tabId];
+                            delete activeTasks[tabId];
+                            chatWaitingTabId = null;
+                            chatOriginTabId = null;
+
+                            if (chatTab.status === 'complete') {
+                                processNextStep(chatTab.id);
+                            }
+                            // else: onUpdated will fire when it finishes loading
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('Error checking for chat tabs:', e);
+                    }
+
+                    console.log(`Chat popup detected (same tab). Finding ${task.data.targetUser}'s conversation...`);
                     chatWaitingTabId = null;
                     activeTasks[tabId].status = AutomationState.TYPING_MESSAGE;
-                    chrome.tabs.sendMessage(tabId, {
+
+                    sendCommandWithReadinessCheck(tabId, {
                         action: 'EXECUTE_ACTION',
-                        command: 'TYPE_MESSAGE',
+                        command: 'DIRECT_CHAT_SEND',
+                        targetUser: task.data.targetUser,
                         text: task.data.message
-                    }).catch(err => {
-                        console.error('Failed to send TYPE_MESSAGE:', err);
-                    });
+                    }, AutomationState.TYPING_MESSAGE, 'DIRECT_CHAT_SEND');
                 }
             }, 5500);
 
@@ -792,11 +948,27 @@ async function handleStepCompletion(tabId, result) {
             if (task.data.queueItemId) {
                 console.log('Marking queue item as sent:', task.data.queueItemId);
 
-                try {
-                    await api.markQueueItemSent(task.data.queueItemId);
-                } catch (err) {
-                    console.error('Failed to mark queue item as sent:', err);
+                let markedSent = false;
+                for (let attempt = 0; attempt < 3 && !markedSent; attempt++) {
+                    try {
+                        await api.markQueueItemSent(task.data.queueItemId);
+                        markedSent = true;
+                    } catch (err) {
+                        console.error(`Failed to mark queue item as sent (attempt ${attempt + 1}/3):`, err);
+                        if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+                    }
                 }
+                if (!markedSent) {
+                    // Last resort: store locally so we don't re-send
+                    console.error('Could not mark queue item as sent after 3 attempts, storing locally');
+                    try {
+                        const { sentQueueItems = [] } = await chrome.storage.local.get('sentQueueItems');
+                        sentQueueItems.push(task.data.queueItemId);
+                        await chrome.storage.local.set({ sentQueueItems: sentQueueItems.slice(-100) }); // keep last 100
+                    } catch (e) { console.error('Failed to store sent item locally:', e); }
+                }
+                // Clear persistent in-progress marker
+                clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
             }
 
             // Log DM to Supabase (tagged with the current logged-in account)
@@ -857,9 +1029,10 @@ async function handleStepCompletion(tabId, result) {
                             api.updateAutomationSession(queue.sessionId, {
                                 status: 'stopped',
                                 processedCount: queue.currentIndex + 1
-                            });
+                            }).catch(e => console.error('Failed to update session:', e));
                         }
                         delete activeTasks[tabId];
+                        delete subredditQueues[tabId];
                         return;
                     }
 
@@ -878,10 +1051,22 @@ async function handleStepCompletion(tabId, result) {
                             queue.currentIndex++;
                             processNextQueueItem(tabId);
                         }, delay);
+                    }).catch(err => {
+                        console.error('Failed to get delay:', err);
+                        queue.currentIndex++;
+                        processNextQueueItem(tabId);
                     });
+                }).catch(err => {
+                    console.error('Rate limit check failed:', err);
+                    // Continue anyway to avoid stuck state
+                    queue.currentIndex++;
+                    processNextQueueItem(tabId);
                 });
             } else {
                 // Single automation completed - notify content script to refresh UI
+                // Release queue processing locks so polling can resume
+                if (task.data?.isReply) replyQueueProcessing = false;
+                if (task.data?.isOutreach) outreachQueueProcessing = false;
                 delete activeTasks[tabId];
                 chrome.tabs.sendMessage(tabId, {
                     action: 'AUTOMATION_STOPPED'
@@ -979,7 +1164,19 @@ async function handleStepCompletion(tabId, result) {
                 delete activeTasks[tabId];
                 processNextQueueItem(tabId);
             } else {
-                // Single automation failed - show error and stop
+                // Single/reply/outreach automation failed - show error and stop
+                // Release queue processing locks
+                if (task.data?.isReply) replyQueueProcessing = false;
+                if (task.data?.isOutreach) outreachQueueProcessing = false;
+
+                // Mark queue item as failed in backend so it doesn't get re-processed
+                if (task.data?.queueItemId) {
+                    api.markQueueItemFailed(task.data.queueItemId, result.error || 'Max retries exceeded').catch(err => {
+                        console.error('Failed to mark queue item as failed:', err);
+                    });
+                    clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
+                }
+
                 chrome.tabs.sendMessage(tabId, {
                     action: 'AUTOMATION_ERROR',
                     error: { message: 'Failed after maximum retries. Please try again.' },
@@ -1007,10 +1204,11 @@ async function processNextQueueItem(tabId) {
                 successCount: queue.successCount,
                 failedCount: queue.failedCount,
                 status: 'completed'
-            });
+            }).catch(e => console.error('Failed to update session:', e));
         }
 
         delete activeTasks[tabId];
+        delete subredditQueues[tabId];
         return;
     }
 
@@ -1105,8 +1303,8 @@ async function recordDMSent(accountId = null) {
 }
 
 async function getDelayBetweenDMs() {
-    const settings = await chrome.storage.local.get(['delayBetweenDMs']);
-    const baseDelay = (settings.delayBetweenDMs || 20) * 1000;
+    const settings = await chrome.storage.local.get(['dmDelay']);
+    const baseDelay = (settings.dmDelay || 20) * 1000;
     // Add random jitter (0-5 seconds) for more human-like behavior
     const jitter = Math.random() * 5000;
     return baseDelay + jitter;
@@ -1147,10 +1345,17 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
 
     if (command === 'stop-automation') {
-        // Cancel all pending timeouts for this tab
+        // Cancel all pending timeouts and in-flight commands for this tab
         clearAllTimeouts(tab.id);
+        delete commandInFlight[tab.id];
 
-        if (activeTasks[tab.id]) delete activeTasks[tab.id];
+        const stoppedTask = activeTasks[tab.id];
+        if (stoppedTask) {
+            if (stoppedTask.data?.queueItemId) {
+                clearQueueItemInProgress(stoppedTask.data.queueItemId).catch(() => {});
+            }
+            delete activeTasks[tab.id];
+        }
         if (subredditQueues[tab.id]) {
             const queue = subredditQueues[tab.id];
             if (queue.sessionId) {
@@ -1159,15 +1364,20 @@ chrome.commands.onCommand.addListener(async (command) => {
                     successCount: queue.successCount || 0,
                     failedCount: queue.failedCount || 0,
                     status: 'stopped'
-                });
+                }).catch(e => console.error('Failed to update session:', e));
             }
             queue.isActive = false;
             delete subredditQueues[tab.id];
         }
 
-        // Reset queue processing flags so polling isn't stuck
-        replyQueueProcessing = false;
-        outreachQueueProcessing = false;
+        // Only reset the relevant queue processing flag
+        if (stoppedTask?.data?.isReply) replyQueueProcessing = false;
+        else if (stoppedTask?.data?.isOutreach) outreachQueueProcessing = false;
+        else { replyQueueProcessing = false; outreachQueueProcessing = false; }
+
+        // Clear chat waiting state
+        if (chatWaitingTabId === tab.id) chatWaitingTabId = null;
+        if (chatOriginTabId === tab.id) chatOriginTabId = null;
 
         chrome.tabs.sendMessage(tab.id, {
             action: 'AUTOMATION_STOPPED'
@@ -1435,7 +1645,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'GET_QUEUE') {
-        api.getQueue(request.status || 'pending', request.limit || 10).then(items => sendResponse(items)).catch(() => sendResponse([]));
+        api.getQueue({ status: request.status || 'pending', limit: request.limit || 10 }).then(items => sendResponse(items)).catch(() => sendResponse([]));
         return true;
     }
 
@@ -1568,6 +1778,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 const REPLY_QUEUE_ALARM_NAME = 'reply-queue-poll';
 const REPLY_QUEUE_POLL_INTERVAL_MINUTES = 0.25; // 15 seconds (minimum chrome.alarms supports ~0.08 min in MV3 dev)
 let replyQueueProcessing = false;
+
+// Persistent tracking of in-progress queue item IDs (survives service worker restarts)
+const QUEUE_IN_PROGRESS_KEY = 'queueItemsInProgress';
+const QUEUE_IN_PROGRESS_TTL_MS = 5 * 60 * 1000; // 5 min TTL — auto-expire stale entries
+
+async function markQueueItemInProgress(itemId) {
+    const data = await chrome.storage.local.get(QUEUE_IN_PROGRESS_KEY);
+    const inProgress = data[QUEUE_IN_PROGRESS_KEY] || {};
+    inProgress[itemId] = Date.now();
+    await chrome.storage.local.set({ [QUEUE_IN_PROGRESS_KEY]: inProgress });
+}
+
+async function clearQueueItemInProgress(itemId) {
+    const data = await chrome.storage.local.get(QUEUE_IN_PROGRESS_KEY);
+    const inProgress = data[QUEUE_IN_PROGRESS_KEY] || {};
+    delete inProgress[itemId];
+    await chrome.storage.local.set({ [QUEUE_IN_PROGRESS_KEY]: inProgress });
+}
+
+async function isQueueItemInProgress(itemId) {
+    const data = await chrome.storage.local.get(QUEUE_IN_PROGRESS_KEY);
+    const inProgress = data[QUEUE_IN_PROGRESS_KEY] || {};
+    const startTime = inProgress[itemId];
+    if (!startTime) return false;
+    // Auto-expire entries older than TTL (handles crashed automations)
+    if (Date.now() - startTime > QUEUE_IN_PROGRESS_TTL_MS) {
+        delete inProgress[itemId];
+        await chrome.storage.local.set({ [QUEUE_IN_PROGRESS_KEY]: inProgress });
+        return false;
+    }
+    return true;
+}
 let replyQueueConsecutiveFailures = 0;
 let replyQueuePollSkips = 0;
 
@@ -1607,10 +1849,29 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         replyQueueConsecutiveFailures = 0;
 
         if (nextReply) {
+            // Skip if this item is already being processed (persists across SW restarts)
+            if (await isQueueItemInProgress(nextReply.id)) {
+                console.log('Reply queue: item already in progress, skipping:', nextReply.id);
+                return;
+            }
+            // Skip if this item was already sent locally but API failed to update
+            try {
+                const { sentQueueItems = [] } = await chrome.storage.local.get('sentQueueItems');
+                if (sentQueueItems.includes(nextReply.id)) {
+                    console.log('Reply queue: item already sent locally, retrying API mark:', nextReply.id);
+                    api.markQueueItemSent(nextReply.id).then(() => {
+                        const updated = sentQueueItems.filter(id => id !== nextReply.id);
+                        chrome.storage.local.set({ sentQueueItems: updated });
+                    }).catch(() => {});
+                    return;
+                }
+            } catch (e) { /* ignore storage errors */ }
             console.log('Found approved reply to send:', nextReply.id);
             replyQueueProcessing = true;
+            await markQueueItemInProgress(nextReply.id);
             await processReplyQueueItem(nextReply);
-            replyQueueProcessing = false;
+            // NOTE: replyQueueProcessing stays true until the automation completes.
+            // It is reset in handleStepCompletion (on success/failure) or cleanupTask.
         }
     } catch (err) {
         replyQueueConsecutiveFailures++;
@@ -1650,10 +1911,15 @@ async function startReplyQueuePolling() {
         if (limitCheck.allowed) {
             const nextReply = await api.getNextReplyToSend();
             if (nextReply) {
-                console.log('Found approved reply to send (immediate):', nextReply.id);
-                replyQueueProcessing = true;
-                await processReplyQueueItem(nextReply);
-                replyQueueProcessing = false;
+                if (await isQueueItemInProgress(nextReply.id)) {
+                    console.log('Reply queue: item already in progress (immediate), skipping:', nextReply.id);
+                } else {
+                    console.log('Found approved reply to send (immediate):', nextReply.id);
+                    replyQueueProcessing = true;
+                    await markQueueItemInProgress(nextReply.id);
+                    await processReplyQueueItem(nextReply);
+                    // replyQueueProcessing stays true until automation completes
+                }
             }
         } else {
             console.log('Reply queue: daily limit reached at startup');
@@ -1695,12 +1961,23 @@ async function processReplyQueueItem(item) {
             }).catch(() => {});
         }
 
+        await clearQueueItemInProgress(item.id);
+        replyQueueProcessing = false;
         return;
     }
 
-    // Find an active Reddit tab or create one
+    // Find an available Reddit tab (one without an active task) or create one
     const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
-    let tabId = tabs[0]?.id;
+    const availableTab = tabs.find(t => !activeTasks[t.id]);
+    let tabId = availableTab?.id;
+
+    if (!tabId && tabs.length > 0) {
+        // All Reddit tabs have active tasks — defer instead of overwriting
+        console.log('Reply queue: all Reddit tabs busy, deferring');
+        await clearQueueItemInProgress(item.id);
+        replyQueueProcessing = false;
+        return;
+    }
 
     if (!tabId) {
         console.log('No Reddit tab found - creating one for reply automation');
@@ -1744,7 +2021,7 @@ async function processReplyQueueItem(item) {
         return;
     }
 
-    // Start automation task for this reply
+    // Start automation task for this reply on the available tab
     activeTasks[tabId] = {
         status: AutomationState.NAVIGATING_PROFILE,
         data: {
@@ -1800,22 +2077,26 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         return;
     }
 
-    // Check if daily limit allows sending
+    // Check if daily limit allows sending (skip this poll, don't stop entirely)
     const limitCheck = await canSendDM();
     if (!limitCheck.allowed) {
-        console.log('Outreach queue: daily limit reached, stopping');
-        stopOutreachQueuePolling();
+        console.log('Outreach queue: daily limit reached, skipping this poll');
         return;
     }
 
     try {
         const nextItem = await api.getNextQueueItem(null, 'outreach');
         if (nextItem) {
+            if (await isQueueItemInProgress(nextItem.id)) {
+                console.log('Outreach queue: item already in progress, skipping:', nextItem.id);
+                return;
+            }
             console.log('Found approved outreach item to send:', nextItem.id);
             outreachQueueProcessing = true;
+            await markQueueItemInProgress(nextItem.id);
             await processOutreachQueueItem(nextItem);
             lastOutreachSendTime = Date.now();
-            outreachQueueProcessing = false;
+            // outreachQueueProcessing stays true until automation completes
         } else {
             // No more items - stop polling
             console.log('Outreach queue: no more approved items, stopping');
@@ -1846,11 +2127,16 @@ async function startOutreachQueuePolling() {
         if (limitCheck.allowed) {
             const nextItem = await api.getNextQueueItem(null, 'outreach');
             if (nextItem) {
-                console.log('Found approved outreach item (immediate):', nextItem.id);
-                outreachQueueProcessing = true;
-                await processOutreachQueueItem(nextItem);
-                lastOutreachSendTime = Date.now();
-                outreachQueueProcessing = false;
+                if (await isQueueItemInProgress(nextItem.id)) {
+                    console.log('Outreach queue: item already in progress (immediate), skipping:', nextItem.id);
+                } else {
+                    console.log('Found approved outreach item (immediate):', nextItem.id);
+                    outreachQueueProcessing = true;
+                    await markQueueItemInProgress(nextItem.id);
+                    await processOutreachQueueItem(nextItem);
+                    lastOutreachSendTime = Date.now();
+                    // outreachQueueProcessing stays true until automation completes
+                }
             }
         } else {
             console.log('Outreach queue: daily limit reached at startup');
@@ -1889,12 +2175,23 @@ async function processOutreachQueueItem(item) {
                 type: 'warning'
             }).catch(() => {});
         }
+        await clearQueueItemInProgress(item.id);
+        outreachQueueProcessing = false;
         return;
     }
 
-    // Find or create a Reddit tab
+    // Find an available Reddit tab (one without an active task) or create one
     const tabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
-    let tabId = tabs[0]?.id;
+    const availableTab = tabs.find(t => !activeTasks[t.id]);
+    let tabId = availableTab?.id;
+
+    if (!tabId && tabs.length > 0) {
+        // All Reddit tabs have active tasks — defer instead of overwriting
+        console.log('Outreach queue: all Reddit tabs busy, deferring');
+        await clearQueueItemInProgress(item.id);
+        outreachQueueProcessing = false;
+        return;
+    }
 
     if (!tabId) {
         console.log('No Reddit tab found - creating one for outreach automation');
@@ -1927,7 +2224,8 @@ async function processOutreachQueueItem(item) {
                 queueItemId: item.id,
                 conversationId: null,
                 accountId: item.accountId || detected.accountId || null,
-                isReply: false
+                isReply: false,
+                isOutreach: true
             },
             retries: 0
         };
@@ -1936,7 +2234,7 @@ async function processOutreachQueueItem(item) {
         return;
     }
 
-    // Use existing Reddit tab
+    // Use available Reddit tab
     activeTasks[tabId] = {
         status: AutomationState.NAVIGATING_PROFILE,
         data: {
@@ -1945,6 +2243,7 @@ async function processOutreachQueueItem(item) {
             queueItemId: item.id,
             conversationId: null,
             accountId: item.accountId || detected.accountId || null,
+            isOutreach: true,
             isReply: false
         },
         retries: 0

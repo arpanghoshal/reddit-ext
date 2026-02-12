@@ -270,7 +270,7 @@ async def approve_queue_item(item_id: str, approved_by: Optional[str] = None, te
 
 
 async def reject_queue_item(item_id: str, reason: Optional[str] = None, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Reject a queue item"""
+    """Reject a queue item (works on both pending and approved items)"""
     client = get_client()
     if not client:
         return None
@@ -280,7 +280,7 @@ async def reject_queue_item(item_id: str, reason: Optional[str] = None, team_id:
             "status": "rejected",
             "failed_reason": reason,
             "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", item_id).eq("status", "pending")
+        }).eq("id", item_id).in_("status", ["pending", "approved"])
         if team_id:
             query = query.eq("team_id", team_id)
         result = query.execute()
@@ -326,7 +326,7 @@ async def bulk_reject(ids: List[str], reason: Optional[str] = None, team_id: Opt
             "status": "rejected",
             "failed_reason": reason,
             "updated_at": datetime.utcnow().isoformat()
-        }).in_("id", ids).eq("status", "pending")
+        }).in_("id", ids).in_("status", ["pending", "approved"])
         if team_id:
             query = query.eq("team_id", team_id)
         result = query.execute()

@@ -171,7 +171,7 @@ function showToast(message, type = 'info') {
 
 function initEventListeners() {
     // Set OS-specific shortcut hint
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const isMac = (navigator.userAgentData?.platform || navigator.platform || '').toUpperCase().indexOf('MAC') >= 0;
     document.getElementById('shortcut-hint').textContent = isMac ? '(Alt+R)' : '(Ctrl+Shift+R)';
 
     // Login via Dashboard — background opens the tab and saves its ID

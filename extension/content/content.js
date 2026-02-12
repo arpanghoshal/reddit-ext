@@ -31,6 +31,20 @@ setInterval(() => {
     }
 }, 5000);
 
+// Safe wrapper for chrome.runtime.sendMessage — silently ignores context invalidation
+function safeSendMessage(message) {
+    if (!isContextValid()) return;
+    try {
+        chrome.runtime.sendMessage(message);
+    } catch (e) {
+        if (e.message?.includes('Extension context invalidated')) {
+            onContextInvalidated();
+        } else {
+            console.error('safeSendMessage error:', e);
+        }
+    }
+}
+
 // --- Configuration & State ---
 let isSidebarOpen = false;
 let sidebarWidth = 400;
@@ -87,6 +101,8 @@ async function syncChatMessages() {
             // Create a unique key for this sync batch to avoid duplicates
             const syncKey = `${conv.participantUsername}_${conv.messages.length}_${conv.messages[conv.messages.length - 1]?.content?.substring(0, 20)}`;
             if (lastSyncedMessages.has(syncKey)) continue;
+            // Cap size to prevent unbounded memory growth
+            if (lastSyncedMessages.size > 500) lastSyncedMessages.clear();
 
             // Sync to backend
             try {
@@ -1046,7 +1062,8 @@ function extractMessagesFromDOM(participantUsername) {
     }
 
     // Extract message data
-    console.log(`🔍 Processing ${messageElements.length} message elements...`);
+    console.log(`Processing ${messageElements.length} message elements...`);
+    const cachedCurrentUsername = getCurrentUsername();
     messageElements.forEach((el, index) => {
         // Get message content - try multiple approaches
         let content = '';
@@ -1098,8 +1115,7 @@ function extractMessagesFromDOM(participantUsername) {
         }
 
         // Skip content that's exactly the current user's name or participant name (UI headers)
-        const currentUserName = getCurrentUsername();
-        if (currentUserName && content.toLowerCase() === currentUserName.toLowerCase()) {
+        if (cachedCurrentUsername && content.toLowerCase() === cachedCurrentUsername.toLowerCase()) {
             console.log(`  [${index}] ❌ Skipped: current user name`);
             return;
         }
@@ -1110,7 +1126,7 @@ function extractMessagesFromDOM(participantUsername) {
         // Determine direction (outbound = sent by user, inbound = received)
         // For Reddit's rs-timeline-event, we need to look inside Shadow DOM for author
         let isOutbound = false;
-        const currentUser = getCurrentUsername();
+        const currentUser = cachedCurrentUsername;
 
         // Debug: Log Shadow DOM inner HTML structure (first 500 chars)
         if (el.shadowRoot) {
@@ -1362,13 +1378,12 @@ function startChatSync() {
 
     history.pushState = function(...args) {
         originalPushState.apply(this, args);
-        console.log('📍 pushState navigation detected');
-        debouncedSync('pushstate');
+        if (isContextValid()) debouncedSync('pushstate');
     };
 
     history.replaceState = function(...args) {
         originalReplaceState.apply(this, args);
-        debouncedSync('replacestate');
+        if (isContextValid()) debouncedSync('replacestate');
     };
 
     // Listen for popstate (back/forward buttons)
@@ -1495,8 +1510,11 @@ function checkCookieCaptureInstructions() {
 
 // --- Initialization ---
 async function init() {
+    if (window.__redditDMExtInitialized) return;
+    window.__redditDMExtInitialized = true;
+
     if (!isContextValid()) return;
-    console.log('📍 Content script init() called on:', window.location.href);
+    console.log('Content script init() called on:', window.location.href);
     // Load state from storage
     const data = await chrome.storage.local.get(['isSidebarOpen', 'sidebarWidth']);
     isSidebarOpen = data.isSidebarOpen || false;
@@ -1514,16 +1532,18 @@ async function init() {
     // Listen for messages from background script
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!isContextValid()) return;
+        if (request.action === 'PING') {
+            sendResponse({ pong: true });
+            return;
+        }
         if (request.action === 'TOGGLE_SIDEBAR') {
             toggleSidebar(request.isOpen);
         } else if (request.action === 'GET_POST_DATA') {
             sendResponse(extractPostData());
         } else if (request.action === 'EXECUTE_ACTION') {
-            // Handle automation commands from background
-            handleAutomationCommand(request)
-                .then(result => sendResponse(result))
-                .catch(err => sendResponse({ success: false, error: err.message }));
-            return true; // Keep channel open for async response
+            // Fire-and-forget: kick off the command, ack immediately.
+            // The real result goes through AUTOMATION_STEP_COMPLETE messages.
+            sendResponse(handleAutomationCommand(request));
         } else if (request.action === 'AUTOMATION_STOPPED') {
             isAutomationRunning = false;
             showToast('Automation stopped', 'info');
@@ -1588,7 +1608,7 @@ async function init() {
     document.addEventListener('keydown', (e) => {
         if (!isContextValid()) return;
         // Ctrl+Shift+R (Windows/Linux) or Alt+R (Mac) to toggle sidebar
-        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+        const isMac = (navigator.userAgentData?.platform || navigator.platform || '').toUpperCase().indexOf('MAC') >= 0;
         const isToggleShortcut = isMac
             ? (e.altKey && e.key.toLowerCase() === 'r')
             : (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'r');
@@ -1604,28 +1624,59 @@ async function init() {
 }
 
 // --- Automation Command Handler ---
-async function handleAutomationCommand(request) {
+// Synchronous fire-and-forget: kicks off async work and returns an immediate ack.
+// The actual result is delivered via AUTOMATION_STEP_COMPLETE messages.
+function handleAutomationCommand(request) {
     console.log('📬 Received automation command:', request.command);
 
     switch (request.command) {
         case 'CLICK_CHAT_BUTTON':
-            return await executeClickChat();
+            executeClickChat().catch(err => {
+                console.error('executeClickChat error:', err);
+                safeSendMessage({
+                    action: 'AUTOMATION_STEP_COMPLETE',
+                    result: { success: false, error: err.message, step: 'CLICK_CHAT_BUTTON' }
+                });
+            });
+            return { ack: true };
 
         case 'FIND_CHAT_USER':
-            return await executeFindChatUser(request.targetUser);
+            executeFindChatUser(request.targetUser).catch(err => {
+                console.error('executeFindChatUser error:', err);
+                safeSendMessage({
+                    action: 'AUTOMATION_STEP_COMPLETE',
+                    result: { success: false, error: err.message, step: 'FIND_CHAT_USER' }
+                });
+            });
+            return { ack: true };
 
         case 'DIRECT_CHAT_SEND':
-            return await executeDirectChatSend(request.targetUser, request.text);
+            executeDirectChatSend(request.targetUser, request.text).catch(err => {
+                console.error('executeDirectChatSend error:', err);
+                safeSendMessage({
+                    action: 'AUTOMATION_STEP_COMPLETE',
+                    result: { success: false, error: err.message, step: 'DIRECT_CHAT_SEND' }
+                });
+            });
+            return { ack: true };
 
         case 'TYPE_MESSAGE':
-            return await executeTypeMessage(request.text);
+            executeTypeMessage(request.text).catch(err => {
+                console.error('executeTypeMessage error:', err);
+                safeSendMessage({
+                    action: 'AUTOMATION_STEP_COMPLETE',
+                    result: { success: false, error: err.message, step: 'TYPE_MESSAGE' }
+                });
+            });
+            return { ack: true };
 
         default:
-            return { success: false, error: `Unknown command: ${request.command}` };
+            return { ack: false, error: `Unknown command: ${request.command}` };
     }
 }
 
 async function executeClickChat() {
+    if (!isContextValid()) throw new Error('Extension context invalidated');
     console.log('🔍 Looking for Chat button...');
 
     const findChatButton = () => {
@@ -1684,99 +1735,135 @@ async function executeClickChat() {
     if (chatBtn) {
         console.log('✓ Chat button found. Animating cursor...');
         await showCursorAnimation(chatBtn);
-        console.log('Clicking chat button...');
-        chatBtn.click();
 
-        // Notify background that step is complete
-        chrome.runtime.sendMessage({
-            action: 'AUTOMATION_STEP_COMPLETE',
-            result: { success: true, step: 'CLICK_CHAT_BUTTON' }
-        });
+        // Detect if clicking will cause same-tab navigation (destroying this script)
+        const navLink = chatBtn.tagName === 'A' && chatBtn.href &&
+            (chatBtn.href.includes('chat.reddit.com') || chatBtn.href.includes('/chat/'));
+        const parentNavLink = !navLink && chatBtn.closest('a[href*="chat"]');
+        const willNavigate = navLink || parentNavLink;
 
-        return { success: true };
+        if (willNavigate) {
+            console.log('Chat button is a navigation link, sending step-complete before click...');
+            // Send step-complete BEFORE clicking, since click will destroy this content script
+            chrome.runtime.sendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: true, step: 'CLICK_CHAT_BUTTON' }
+            });
+            // Delay to ensure message is flushed before navigation begins
+            await new Promise(r => setTimeout(r, 300));
+            chatBtn.click();
+        } else {
+            console.log('Clicking chat button (popup/overlay mode)...');
+            chatBtn.click();
+            // Safe to send after click since no navigation occurred
+            chrome.runtime.sendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: true, step: 'CLICK_CHAT_BUTTON' }
+            });
+        }
     } else {
         console.error('❌ Could not find Chat button');
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: 'Chat button not found', step: 'CLICK_CHAT_BUTTON' }
         });
-        return { success: false, error: 'Chat button not found' };
     }
 }
 
 // Search for a chat conversation with the given username in the chat sidebar.
 // Returns a clickable element or null. Works across shadow DOMs.
+// Uses exact username matching first, then word-boundary fallback to avoid substring false positives.
 function findChatUserElement(targetLower) {
-    // Strategy 1: rs-rooms-nav-room elements (Reddit chat web components)
-    const rooms = document.querySelectorAll('rs-rooms-nav-room');
-    for (const room of rooms) {
-        if (!room.shadowRoot) continue;
-        const chatLink = room.shadowRoot.querySelector('a[aria-label]');
-        if (chatLink) {
-            const ariaLabel = chatLink.getAttribute('aria-label') || '';
-            if (ariaLabel.toLowerCase().includes(targetLower)) {
-                console.log('✓ Found via rs-rooms-nav-room aria-label:', ariaLabel);
-                return chatLink;
-            }
-        }
-        const deepText = getDeepTextContent(room).toLowerCase();
-        if (deepText.includes(targetLower)) {
-            console.log('✓ Found via rs-rooms-nav-room text content');
-            return room.shadowRoot.querySelector('a') || room;
-        }
+    // Helper: check if text matches the target username (exact or word-boundary)
+    function isExactMatch(text) {
+        const normalized = text.replace(/^u\//, '').trim();
+        return normalized === targetLower || text === `u/${targetLower}`;
+    }
+    function isWordBoundaryMatch(text) {
+        try {
+            const escaped = targetLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp('(?:^|[\\s/])' + escaped + '(?:$|[\\s,.])', 'i').test(text);
+        } catch { return false; }
     }
 
-    // Strategy 2: Deep search ALL shadow DOMs for clickable elements with username
-    const allClickables = querySelectorDeep('a, button, [role="listitem"], [role="option"], [role="link"]');
-    for (const el of allClickables) {
-        const text = (el.textContent || '').trim().toLowerCase();
-        const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
-        if (text.includes(targetLower) || ariaLabel.includes(targetLower)) {
-            console.log('✓ Found via deep clickable search:', el.tagName, text.substring(0, 50));
-            return el;
-        }
-    }
-
-    // Strategy 3: Standard DOM links/buttons containing username
-    const allLinks = document.querySelectorAll('a, button');
-    for (const link of allLinks) {
-        const linkText = (link.textContent || '').trim().toLowerCase();
-        if (linkText === targetLower || linkText === `u/${targetLower}` || linkText.includes(targetLower)) {
-            console.log('✓ Found via standard DOM text:', link.tagName, linkText.substring(0, 50));
-            return link;
-        }
-    }
-
-    // Strategy 4: Walk entire DOM tree including shadow roots for text nodes
-    const findClickableWithText = (root) => {
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-        let node;
-        while ((node = walker.nextNode())) {
-            if (node.textContent.trim().toLowerCase().includes(targetLower)) {
-                let el = node.parentElement;
-                while (el && el !== root) {
-                    if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'listitem' || el.onclick) {
-                        console.log('✓ Found via text node walk:', el.tagName);
-                        return el;
-                    }
-                    el = el.parentElement;
+    // Pass 1: Exact matches across all strategies
+    // Pass 2: Word-boundary matches (fallback)
+    for (const matchFn of [isExactMatch, isWordBoundaryMatch]) {
+        // Strategy 1: rs-rooms-nav-room elements (Reddit chat web components)
+        const rooms = document.querySelectorAll('rs-rooms-nav-room');
+        for (const room of rooms) {
+            if (!room.shadowRoot) continue;
+            const chatLink = room.shadowRoot.querySelector('a[aria-label]');
+            if (chatLink) {
+                const ariaLabel = (chatLink.getAttribute('aria-label') || '').toLowerCase();
+                if (matchFn(ariaLabel)) {
+                    console.log('Found via rs-rooms-nav-room aria-label:', ariaLabel);
+                    return chatLink;
                 }
             }
-        }
-        const elements = root.querySelectorAll('*');
-        for (const el of elements) {
-            if (el.shadowRoot) {
-                const result = findClickableWithText(el.shadowRoot);
-                if (result) return result;
+            const deepText = getDeepTextContent(room).toLowerCase();
+            if (matchFn(deepText)) {
+                console.log('Found via rs-rooms-nav-room text content');
+                return room.shadowRoot.querySelector('a') || room;
             }
         }
-        return null;
-    };
 
-    return findClickableWithText(document);
+        // Strategy 2: Deep search ALL shadow DOMs for clickable elements with username
+        const allClickables = querySelectorDeep('a, button, [role="listitem"], [role="option"], [role="link"]');
+        for (const el of allClickables) {
+            const text = (el.textContent || '').trim().toLowerCase();
+            const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+            if (matchFn(text) || matchFn(ariaLabel)) {
+                console.log('Found via deep clickable search:', el.tagName, text.substring(0, 50));
+                return el;
+            }
+        }
+
+        // Strategy 3: Standard DOM links/buttons containing username
+        const allLinks = document.querySelectorAll('a, button');
+        for (const link of allLinks) {
+            const linkText = (link.textContent || '').trim().toLowerCase();
+            if (matchFn(linkText)) {
+                console.log('Found via standard DOM text:', link.tagName, linkText.substring(0, 50));
+                return link;
+            }
+        }
+
+        // Strategy 4: Walk entire DOM tree including shadow roots for text nodes
+        const findClickableWithText = (root) => {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (matchFn(node.textContent.trim().toLowerCase())) {
+                    let el = node.parentElement;
+                    while (el && el !== root) {
+                        if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'listitem' || el.onclick) {
+                            console.log('Found via text node walk:', el.tagName);
+                            return el;
+                        }
+                        el = el.parentElement;
+                    }
+                }
+            }
+            const elements = root.querySelectorAll('*');
+            for (const el of elements) {
+                if (el.shadowRoot) {
+                    const result = findClickableWithText(el.shadowRoot);
+                    if (result) return result;
+                }
+            }
+            return null;
+        };
+
+        const result = findClickableWithText(document);
+        if (result) return result;
+    }
+
+    return null;
 }
 
 async function executeFindChatUser(targetUser) {
+    if (!isContextValid()) throw new Error('Extension context invalidated');
     console.log('🔍 Looking for chat conversation with:', targetUser);
     const targetLower = targetUser.toLowerCase();
 
@@ -1787,14 +1874,14 @@ async function executeFindChatUser(targetUser) {
         userRoom.click();
         await new Promise(r => setTimeout(r, 1500));
 
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: true, step: 'FIND_CHAT_USER' }
         });
         return { success: true };
     } else {
         console.error('❌ Could not find chat conversation for:', targetUser);
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: `Chat with ${targetUser} not found`, step: 'FIND_CHAT_USER' }
         });
@@ -1806,30 +1893,52 @@ async function executeFindChatUser(targetUser) {
 // Runs entirely within the content script to avoid state-transition issues when
 // clicking a conversation causes a soft/hard navigation.
 async function executeDirectChatSend(targetUser, text) {
+    if (!isContextValid()) throw new Error('Extension context invalidated');
     console.log('📨 Direct chat send to:', targetUser, '| message length:', text?.length);
 
     const targetLower = targetUser.toLowerCase();
     const userRoom = await pollForElement(() => findChatUserElement(targetLower), 12000, 500);
     if (!userRoom) {
         console.error('❌ Could not find chat conversation for:', targetUser);
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: `Chat with ${targetUser} not found`, step: 'DIRECT_CHAT_SEND' }
         });
         return { success: false, error: `Chat with ${targetUser} not found` };
     }
 
-    console.log('✓ Found conversation for', targetUser, '- clicking...');
+    console.log('Found conversation for', targetUser, '- clicking...');
     userRoom.click();
 
     // Wait for conversation to open and chat input to appear
     await new Promise(r => setTimeout(r, 2000));
+
+    // Verify the opened conversation belongs to the target user by checking visible header/username
+    const verifyConversation = () => {
+        // Check conversation header text across shadow DOMs
+        const headers = querySelectorDeep('h1, h2, h3, [class*="header"], [class*="title"], [class*="name"]');
+        const normalizedTarget = targetUser.replace(/^u\//, '').toLowerCase();
+        for (const h of headers) {
+            const text = (h.textContent || '').trim().toLowerCase();
+            if (text.includes(normalizedTarget)) return true;
+        }
+        // Also check the URL for the username
+        if (window.location.href.toLowerCase().includes(normalizedTarget)) return true;
+        return false;
+    };
+
+    if (!verifyConversation()) {
+        console.warn('Conversation header does not match target user:', targetUser);
+        // Don't hard-fail — the conversation may still be correct if Reddit's UI doesn't show the username prominently
+        console.log('Proceeding cautiously...');
+    }
 
     // Type and send using the existing logic
     return await executeTypeMessage(text);
 }
 
 async function executeTypeMessage(text) {
+    if (!isContextValid()) throw new Error('Extension context invalidated');
     console.log('🔍 Looking for chat input...');
 
     const findChatInput = () => {
@@ -1933,19 +2042,22 @@ async function executeTypeMessage(text) {
             // --- CLOSE CHAT LOGIC REMOVED ---
             console.log('Automation stopping here as requested.');
 
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: true, step: 'TYPE_MESSAGE' }
+            });
+            return { success: true };
         } else {
-            console.warn('⚠️ Send button not found. Message typed but not sent.');
+            console.warn('Send button not found. Message typed but not sent.');
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: false, step: 'TYPE_MESSAGE', error: 'Send button not found' }
+            });
+            return { success: false, error: 'Send button not found' };
         }
-
-        chrome.runtime.sendMessage({
-            action: 'AUTOMATION_STEP_COMPLETE',
-            result: { success: true, step: 'TYPE_MESSAGE' }
-        });
-
-        return { success: true };
     } else {
         console.error('❌ Could not find chat input');
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: 'Chat input not found', step: 'TYPE_MESSAGE' }
         });
@@ -1959,6 +2071,7 @@ function injectSidebar() {
     if (document.getElementById('reddit-insight-sidebar-host') || isSidebarInjecting) return;
     isSidebarInjecting = true;
 
+    try {
     const host = document.createElement('div');
     host.id = 'reddit-insight-sidebar-host';
     host.style.position = 'fixed';
@@ -2163,11 +2276,12 @@ function injectSidebar() {
     shadowRoot.appendChild(container);
     sidebarContainer = container;
 
-    // Clear injection flag
-    isSidebarInjecting = false;
-
     // Initialize Logic
     initSidebarLogic();
+    } finally {
+        // Always clear injection flag, even if an error occurred
+        isSidebarInjecting = false;
+    }
 }
 
 function makeDraggable(element, sidebar) {
@@ -2362,25 +2476,15 @@ async function initSidebarLogic() {
         checkPageStatus();
     }
 
-    // Debounced URL change detection to prevent excessive UI rebuilds
+    // Lightweight URL change detection via polling (avoids expensive MutationObserver on full DOM)
     let lastUrl = location.href;
-    let urlChangeTimeout = null;
-
-    new MutationObserver(() => {
+    setInterval(() => {
         const url = location.href;
         if (url !== lastUrl) {
             lastUrl = url;
-
-            // Debounce: wait 500ms after last URL change before updating UI
-            if (urlChangeTimeout) {
-                clearTimeout(urlChangeTimeout);
-            }
-            urlChangeTimeout = setTimeout(() => {
-                urlChangeTimeout = null;
-                checkPageStatus();
-            }, 500);
+            checkPageStatus();
         }
-    }).observe(document, { subtree: true, childList: true });
+    }, 1000);
 
     checkPageStatus();
 }
@@ -2512,15 +2616,15 @@ async function loadQueue() {
             }
 
             queueList.innerHTML = items.map(item => `
-                <div class="queue-item" data-id="${item.id}">
+                <div class="queue-item" data-id="${escapeHtml(item.id)}">
                     <div class="queue-item-header">
                         <span class="queue-user">u/${escapeHtml(item.recipient_username || 'Unknown')}</span>
                         ${item.relevance_score ? `<span class="queue-score">${Math.round(item.relevance_score * 100)}%</span>` : ''}
                     </div>
                     <div class="queue-message">${escapeHtml(truncateText(item.message_content || '', 80))}</div>
                     <div class="queue-actions">
-                        <button class="btn-approve" onclick="approveQueueItem('${item.id}')">Approve</button>
-                        <button class="btn-reject" onclick="rejectQueueItem('${item.id}')">Reject</button>
+                        <button class="btn-approve">Approve</button>
+                        <button class="btn-reject">Reject</button>
                     </div>
                 </div>
             `).join('');
@@ -2911,7 +3015,7 @@ function renderRunningState(status) {
 
         <p class="progress-step">${statusMessage}</p>
 
-        <p class="shortcut-hint">Press ${navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '<kbd>Alt</kbd>+<kbd>S</kbd>' : '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>'} to stop</p>
+        <p class="shortcut-hint">Press ${(navigator.userAgentData?.platform || navigator.platform || '').toUpperCase().indexOf('MAC') >= 0 ? '<kbd>Alt</kbd>+<kbd>S</kbd>' : '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>'} to stop</p>
 
         <button id="stop-auto-btn" class="btn-danger" style="margin-top: 16px;">STOP AUTOMATION</button>
       </div>
@@ -3213,7 +3317,7 @@ async function showPreview(message, author, postData = {}) {
           </select>
         </div>
         <label>Draft Message</label>
-        <textarea id="dm-message" rows="4">${message}</textarea>
+        <textarea id="dm-message" rows="4">${escapeHtml(message)}</textarea>
         <div class="actions">
           <button id="copy-btn" class="btn-secondary">Copy</button>
           <button id="send-btn" class="btn-primary">Send DM</button>
@@ -3399,9 +3503,9 @@ function escapeHtml(str) {
 
 function truncate(str, n) {
     if (!str) return '';
-    // First escape HTML, then truncate
-    const escaped = escapeHtml(str);
-    return (escaped.length > n) ? escaped.substring(0, n - 1) + '…' : escaped;
+    // Truncate first (on raw text), then escape to avoid breaking HTML entities mid-entity
+    const truncated = str.length > n ? str.substring(0, n - 1) + '…' : str;
+    return escapeHtml(truncated);
 }
 
 // Safe truncate that returns text (not HTML)
@@ -3591,28 +3695,6 @@ function pollForElement(selectorFn, timeout = 10000, interval = 500) {
                 resolve(null);
             }
         }, interval);
-    });
-}
-
-function waitForElement(selectorFn, timeout = 5000) {
-    return new Promise((resolve) => {
-        const element = selectorFn();
-        if (element) return resolve(element);
-
-        const observer = new MutationObserver(() => {
-            const element = selectorFn();
-            if (element) {
-                observer.disconnect();
-                resolve(element);
-            }
-        });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-
-        setTimeout(() => {
-            observer.disconnect();
-            resolve(null);
-        }, timeout);
     });
 }
 

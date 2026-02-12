@@ -77,7 +77,7 @@ async function updateTemplate(id, updates) {
 // Delete a template
 async function deleteTemplate(id) {
     const templates = await getTemplates();
-    const filtered = templates.filter(t => t.id !== id && !t.isDefault);
+    const filtered = templates.filter(t => t.id !== id || t.isDefault);
 
     await chrome.storage.local.set({ [TEMPLATES_STORAGE_KEY]: filtered });
     return true;

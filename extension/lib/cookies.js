@@ -130,10 +130,15 @@ export async function checkAccountMatch(expectedAccountId) {
  */
 export async function verifySession() {
     try {
+        // Service workers have no cookie jar, so credentials: 'include' won't work.
+        // Read session cookies via chrome.cookies API and pass as header.
+        const cookies = await chrome.cookies.getAll({ domain: '.reddit.com' });
+        const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+
         const response = await fetch('https://www.reddit.com/api/me.json', {
-            credentials: 'include',
             headers: {
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                ...(cookieHeader ? { 'Cookie': cookieHeader } : {})
             }
         });
 
