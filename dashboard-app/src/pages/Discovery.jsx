@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff, ListChecks, Ban, Eye, EyeOff } from 'lucide-react';
+import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff, ListChecks, Ban, Eye, EyeOff, Radar, Plus, Pause, Trash2, ArrowLeft, Calendar, BarChart3 } from 'lucide-react';
 import * as api from '../api/client';
 
 // ============================================================================
@@ -25,7 +25,7 @@ function TierBadge({ tier }) {
 // ============================================================================
 // Lead Card component
 // ============================================================================
-function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessionId }) {
+function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessionId, generateMessageFn, queueLeadFn }) {
   const [expanded, setExpanded] = useState(false);
   const [message, setMessage] = useState(lead.generated_message || '');
   const [reasoning, setReasoning] = useState(lead.message_reasoning || '');
@@ -47,7 +47,8 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const result = await api.generateLeadMessage(sessionId, lead.id);
+      const fn = generateMessageFn || ((sid, lid) => api.generateLeadMessage(sid, lid));
+      const result = await fn(sessionId, lead.id);
       if (result?.message) {
         setMessage(result.message);
         if (result.reasoning) {
@@ -65,7 +66,8 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
     if (!selectedAccount) return;
     setQueueing(true);
     try {
-      await api.queueLead(sessionId, lead.id, {
+      const fn = queueLeadFn || ((sid, lid, data) => api.queueLead(sid, lid, data));
+      await fn(sessionId, lead.id, {
         accountId: selectedAccount,
         editedMessage: message || undefined,
       });
@@ -308,9 +310,21 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
 // ============================================================================
 // Discovery Input Form
 // ============================================================================
+const TIMEFRAME_OPTIONS = [
+  { value: 'h', label: 'Past Hour' },
+  { value: 'd', label: 'Past Day' },
+  { value: 'w', label: 'Past Week' },
+  { value: 'm', label: 'Past Month' },
+  { value: 'y', label: 'Past Year' },
+  { value: 'custom', label: 'Custom Range' },
+];
+
 function DiscoveryInput({ onStart, loading }) {
   const [businessDesc, setBusinessDesc] = useState('');
   const [persona, setPersona] = useState('');
+  const [timeframe, setTimeframe] = useState('w');
+  const [timeframeStart, setTimeframeStart] = useState('');
+  const [timeframeEnd, setTimeframeEnd] = useState('');
   const [prefilling, setPrefilling] = useState(false);
 
   const prefillFromSettings = async () => {
@@ -335,7 +349,13 @@ function DiscoveryInput({ onStart, loading }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!businessDesc.trim()) return;
-    onStart({ businessDesc, persona });
+    const data = { businessDesc, persona, timeframe };
+    if (timeframe === 'custom' && timeframeStart && timeframeEnd) {
+      data.timeframeStart = timeframeStart;
+      data.timeframeEnd = timeframeEnd;
+      data.timeframe = 'w'; // fallback preset (custom range takes priority on backend)
+    }
+    onStart(data);
   };
 
   return (
@@ -378,6 +398,41 @@ function DiscoveryInput({ onStart, loading }) {
           />
         </div>
 
+        <div>
+          <label className="block text-sm font-medium text-[#d7dadc] mb-1">
+            <Calendar className="w-3.5 h-3.5 inline mr-1.5" />
+            Post Timeframe
+          </label>
+          <select
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
+            className="w-full bg-[#1e1e24] border border-[#23232a] rounded-lg p-3 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+          >
+            {TIMEFRAME_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {timeframe === 'custom' && (
+            <div className="flex gap-3 mt-2">
+              <input
+                type="date"
+                value={timeframeStart}
+                onChange={(e) => setTimeframeStart(e.target.value)}
+                className="flex-1 bg-[#1e1e24] border border-[#23232a] rounded-lg p-2.5 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+                required
+              />
+              <span className="text-[#71717a] self-center text-sm">to</span>
+              <input
+                type="date"
+                value={timeframeEnd}
+                onChange={(e) => setTimeframeEnd(e.target.value)}
+                className="flex-1 bg-[#1e1e24] border border-[#23232a] rounded-lg p-2.5 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+                required
+              />
+            </div>
+          )}
+        </div>
+
         <button
           type="submit"
           disabled={loading || !businessDesc.trim()}
@@ -400,6 +455,9 @@ function AutomationInput({ onStart, loading }) {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [autoApprove, setAutoApprove] = useState(false);
   const [minScore, setMinScore] = useState(50);
+  const [timeframe, setTimeframe] = useState('w');
+  const [timeframeStart, setTimeframeStart] = useState('');
+  const [timeframeEnd, setTimeframeEnd] = useState('');
   const [loadingAccounts, setLoadingAccounts] = useState(true);
 
   useEffect(() => {
@@ -420,14 +478,21 @@ function AutomationInput({ onStart, loading }) {
       .map(s => s.trim().replace(/^r\//, ''))
       .filter(Boolean);
     if (!list.length || !selectedAccount) return;
-    onStart({
+    const data = {
       mode: 'automation',
       targetSubreddits: list,
       accountId: selectedAccount,
       autoQueue: true,
       autoApprove,
       minLeadScore: minScore,
-    });
+      timeframe,
+    };
+    if (timeframe === 'custom' && timeframeStart && timeframeEnd) {
+      data.timeframeStart = timeframeStart;
+      data.timeframeEnd = timeframeEnd;
+      data.timeframe = 'w';
+    }
+    onStart(data);
   };
 
   return (
@@ -487,6 +552,41 @@ function AutomationInput({ onStart, loading }) {
           </div>
         </div>
 
+        <div>
+          <label className="block text-sm font-medium text-[#d7dadc] mb-1">
+            <Calendar className="w-3.5 h-3.5 inline mr-1.5" />
+            Post Timeframe
+          </label>
+          <select
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
+            className="w-full bg-[#1e1e24] border border-[#23232a] rounded-lg p-3 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+          >
+            {TIMEFRAME_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {timeframe === 'custom' && (
+            <div className="flex gap-3 mt-2">
+              <input
+                type="date"
+                value={timeframeStart}
+                onChange={(e) => setTimeframeStart(e.target.value)}
+                className="flex-1 bg-[#1e1e24] border border-[#23232a] rounded-lg p-2.5 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+                required
+              />
+              <span className="text-[#71717a] self-center text-sm">to</span>
+              <input
+                type="date"
+                value={timeframeEnd}
+                onChange={(e) => setTimeframeEnd(e.target.value)}
+                className="flex-1 bg-[#1e1e24] border border-[#23232a] rounded-lg p-2.5 text-sm text-white focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+                required
+              />
+            </div>
+          )}
+        </div>
+
         <div className="flex items-center gap-3 p-3 bg-[#0a0a0b] rounded-lg">
           <input
             type="checkbox"
@@ -511,7 +611,7 @@ function AutomationInput({ onStart, loading }) {
           className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-[#ff4500] text-white font-semibold rounded-lg hover:bg-[#e63e00] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           <Zap className="w-5 h-5" />
-          {loading ? 'Starting...' : 'Start Automation'}
+          {loading ? 'Starting...' : 'Start Subreddit Automation'}
         </button>
       </div>
     </form>
@@ -755,6 +855,8 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
   const [bulkAccount, setBulkAccount] = useState('');
   const [bulkQueueing, setBulkQueueing] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(null); // {queued, failed, total}
+  const [previouslyFound, setPreviouslyFound] = useState([]);
+  const [showPreviouslyFound, setShowPreviouslyFound] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -769,15 +871,17 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
       if (relevanceFilter !== 'all') filters.relevance = relevanceFilter;
       filters.limit = 100;
 
-      const [leadsData, accountsData, subredditsData] = await Promise.all([
+      const [leadsData, accountsData, subredditsData, prevData] = await Promise.all([
         api.getDiscoveryLeads(sessionId, filters),
         api.getAccountsSummary().catch(() => []),
         api.getDiscoverySubreddits(sessionId).catch(() => []),
+        api.getPreviouslyFoundLeads(sessionId).catch(() => []),
       ]);
 
       setLeads(leadsData || []);
       setAccounts(accountsData || []);
       setSubreddits(subredditsData || []);
+      setPreviouslyFound(prevData || []);
       if (accountsData?.length && !bulkAccount) {
         setBulkAccount(accountsData[0].id);
       }
@@ -846,6 +950,29 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
               <span> ({session.subreddit_posts_fetched} from subreddit expansion)</span>
             )}
           </p>
+          {(session.yield_rate != null || session.duplicate_posts_skipped > 0) && (
+            <div className="flex items-center gap-3 mt-1">
+              {session.yield_rate != null && (
+                <span className={`text-xs font-medium ${
+                  session.yield_rate >= 20 ? 'text-green-400' : session.yield_rate >= 10 ? 'text-yellow-400' : 'text-red-400'
+                }`}>
+                  <BarChart3 className="w-3 h-3 inline mr-1" />
+                  Yield: {session.yield_rate}%
+                </span>
+              )}
+              {session.duplicate_posts_skipped > 0 && (
+                <span className="text-xs text-[#52525b]">
+                  {session.duplicate_posts_skipped} duplicate posts skipped
+                </span>
+              )}
+            </div>
+          )}
+          {session.yield_rate != null && session.yield_rate < 10 && session.yield_rate > 0 && (
+            <p className="text-xs text-yellow-400/80 mt-1">
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              Low yield — try a narrower timeframe or different business context
+            </p>
+          )}
         </div>
         <button
           onClick={onNewSearch}
@@ -1020,6 +1147,51 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
           ))}
         </div>
       )}
+
+      {/* Previously Found leads from past sessions */}
+      {previouslyFound.length > 0 && (
+        <div className="mt-6 border-t border-[#23232a] pt-4">
+          <button
+            onClick={() => setShowPreviouslyFound(!showPreviouslyFound)}
+            className="flex items-center gap-2 text-sm font-medium text-[#a1a1aa] hover:text-white transition-colors"
+          >
+            <History className="w-4 h-4" />
+            Previously Found ({previouslyFound.length} un-contacted leads from past sessions)
+            {showPreviouslyFound ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+
+          {showPreviouslyFound && (
+            <div className="space-y-3 mt-3">
+              {previouslyFound.map(lead => (
+                <div key={lead.id} className="relative">
+                  <div className="absolute top-2 right-2 z-10">
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/15 text-yellow-400">
+                      Previously Found
+                    </span>
+                  </div>
+                  <LeadCard
+                    lead={lead}
+                    accounts={accounts}
+                    sessionId={lead.session_id}
+                    onQueue={(leadId) => {
+                      setPreviouslyFound(prev => prev.filter(l => l.id !== leadId));
+                    }}
+                    onDismiss={async (leadId) => {
+                      try {
+                        await api.dismissLead(lead.session_id, leadId);
+                        setPreviouslyFound(prev => prev.filter(l => l.id !== leadId));
+                      } catch (err) {
+                        console.error('Failed to dismiss lead:', err);
+                      }
+                    }}
+                    onGenerateMessage={() => {}}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1083,6 +1255,18 @@ function SessionHistory({ sessions, onSelect, onBack }) {
                   <div className="text-xs text-[#71717a] mt-1">
                     {session.leads_qualified || 0} leads
                     {session.leads_queued > 0 && ` / ${session.leads_queued} queued`}
+                    {session.yield_rate != null && (
+                      <span className={`ml-2 ${
+                        session.yield_rate >= 20 ? 'text-green-400' : session.yield_rate >= 10 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                        {session.yield_rate}% yield
+                      </span>
+                    )}
+                    {session.duplicate_posts_skipped > 0 && (
+                      <span className="ml-2 text-[#52525b]">
+                        ({session.duplicate_posts_skipped} dupes skipped)
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1095,8 +1279,461 @@ function SessionHistory({ sessions, onSelect, onBack }) {
 }
 
 // ============================================================================
+// Watch List component
+// ============================================================================
+function WatchList() {
+  const [watches, setWatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newSubreddit, setNewSubreddit] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshingId, setRefreshingId] = useState(null);
+  const [selectedWatch, setSelectedWatch] = useState(null);
+
+  useEffect(() => {
+    loadWatches();
+  }, []);
+
+  const loadWatches = async () => {
+    setLoading(true);
+    try {
+      const data = await api.getWatches();
+      setWatches(data || []);
+    } catch (err) {
+      console.error('Failed to load watches:', err);
+    }
+    setLoading(false);
+  };
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!newSubreddit.trim()) return;
+    setAdding(true);
+    try {
+      const watch = await api.createWatch(newSubreddit.trim());
+      if (watch) {
+        setWatches(prev => [watch, ...prev]);
+        setNewSubreddit('');
+      }
+    } catch (err) {
+      console.error('Failed to create watch:', err);
+    }
+    setAdding(false);
+  };
+
+  const handleRefresh = async (watchId) => {
+    setRefreshingId(watchId);
+    try {
+      await api.refreshWatch(watchId);
+      // Update status optimistically
+      setWatches(prev => prev.map(w =>
+        w.id === watchId ? { ...w, status: 'refreshing' } : w
+      ));
+      // Poll for completion
+      const poll = setInterval(async () => {
+        const updated = await api.getWatches();
+        const w = (updated || []).find(x => x.id === watchId);
+        if (w && w.status !== 'refreshing') {
+          setWatches(updated);
+          clearInterval(poll);
+          setRefreshingId(null);
+        }
+      }, 3000);
+      // Safety timeout
+      setTimeout(() => { clearInterval(poll); setRefreshingId(null); loadWatches(); }, 60000);
+    } catch (err) {
+      console.error('Failed to refresh watch:', err);
+      setRefreshingId(null);
+    }
+  };
+
+  const handleRefreshAll = async () => {
+    setRefreshingAll(true);
+    try {
+      await api.refreshAllWatches();
+      // Mark all active as refreshing
+      setWatches(prev => prev.map(w =>
+        w.status === 'active' ? { ...w, status: 'refreshing' } : w
+      ));
+      // Poll for completion
+      const poll = setInterval(async () => {
+        const updated = await api.getWatches();
+        const stillRefreshing = (updated || []).some(w => w.status === 'refreshing');
+        setWatches(updated || []);
+        if (!stillRefreshing) {
+          clearInterval(poll);
+          setRefreshingAll(false);
+        }
+      }, 5000);
+      setTimeout(() => { clearInterval(poll); setRefreshingAll(false); loadWatches(); }, 120000);
+    } catch (err) {
+      console.error('Failed to refresh all:', err);
+      setRefreshingAll(false);
+    }
+  };
+
+  const handleTogglePause = async (watch) => {
+    const newStatus = watch.status === 'paused' ? 'active' : 'paused';
+    try {
+      const updated = await api.updateWatch(watch.id, { status: newStatus });
+      if (updated) {
+        setWatches(prev => prev.map(w => w.id === watch.id ? updated : w));
+      }
+    } catch (err) {
+      console.error('Failed to update watch:', err);
+    }
+  };
+
+  const handleDelete = async (watchId) => {
+    try {
+      await api.deleteWatch(watchId);
+      setWatches(prev => prev.filter(w => w.id !== watchId));
+    } catch (err) {
+      console.error('Failed to delete watch:', err);
+    }
+  };
+
+  // If a watch is selected, show its leads
+  if (selectedWatch) {
+    return (
+      <WatchLeads
+        watch={selectedWatch}
+        onBack={() => { setSelectedWatch(null); loadWatches(); }}
+      />
+    );
+  }
+
+  return (
+    <div>
+      {/* Add subreddit input */}
+      <form onSubmit={handleAdd} className="flex gap-2 mb-4 max-w-xl">
+        <input
+          type="text"
+          value={newSubreddit}
+          onChange={(e) => setNewSubreddit(e.target.value)}
+          placeholder="Enter subreddit name (e.g. saas, startups)"
+          className="flex-1 bg-[#1e1e24] border border-[#23232a] rounded-lg px-3 py-2 text-sm text-white placeholder-[#52525b] focus:ring-2 focus:ring-[#ff4500]/50 focus:border-[#ff4500]"
+        />
+        <button
+          type="submit"
+          disabled={adding || !newSubreddit.trim()}
+          className="flex items-center gap-1.5 px-4 py-2 bg-[#ff4500] text-white text-sm font-medium rounded-lg hover:bg-[#e63e00] disabled:opacity-50"
+        >
+          <Plus className="w-4 h-4" />
+          {adding ? 'Adding...' : 'Add'}
+        </button>
+      </form>
+
+      {/* Refresh all button */}
+      {watches.length > 0 && (
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-sm text-[#71717a]">
+            {watches.length} watched subreddit{watches.length !== 1 ? 's' : ''}
+          </p>
+          <button
+            onClick={handleRefreshAll}
+            disabled={refreshingAll}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[#a1a1aa] hover:text-white bg-[#1e1e24] hover:bg-[#23232a] rounded-lg disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshingAll ? 'animate-spin' : ''}`} />
+            {refreshingAll ? 'Refreshing...' : 'Refresh All'}
+          </button>
+        </div>
+      )}
+
+      {/* Watch list */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <RefreshCw className="w-6 h-6 animate-spin text-[#ff4500]" />
+        </div>
+      ) : watches.length === 0 ? (
+        <div className="text-center py-12 bg-[#141416] rounded-lg border border-[#23232a]">
+          <Radar className="w-10 h-10 text-[#52525b] mx-auto mb-3" />
+          <p className="text-[#71717a] text-sm">No watched subreddits yet</p>
+          <p className="text-[#52525b] text-xs mt-1">Add subreddits above to start monitoring for new posts</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {watches.map(watch => (
+            <div
+              key={watch.id}
+              className="bg-[#141416] rounded-lg border border-[#23232a] p-4 hover:border-[#ff4500]/30 transition-colors"
+            >
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    setSelectedWatch(watch);
+                    api.resetWatchNewLeads(watch.id).catch(() => {});
+                  }}
+                  className="flex-1 text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-base font-semibold text-white">
+                      r/{watch.subreddit_name}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                      watch.status === 'active' ? 'bg-green-500/15 text-green-400' :
+                      watch.status === 'paused' ? 'bg-yellow-500/15 text-yellow-400' :
+                      watch.status === 'refreshing' ? 'bg-blue-500/15 text-blue-400' :
+                      'bg-gray-500/15 text-gray-400'
+                    }`}>
+                      {watch.status === 'refreshing' ? (
+                        <span className="flex items-center gap-1">
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                          Refreshing
+                        </span>
+                      ) : watch.status}
+                    </span>
+                    {(watch.new_leads_since_last_view || 0) > 0 && (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-[#ff4500] text-white">
+                        {watch.new_leads_since_last_view} new
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4 mt-1 text-xs text-[#71717a]">
+                    <span>{watch.total_leads_found || 0} leads found</span>
+                    <span>{watch.total_posts_checked || 0} posts checked</span>
+                    {watch.last_checked_at && (
+                      <span>Last checked: {formatTimeAgoISO(watch.last_checked_at)}</span>
+                    )}
+                  </div>
+                </button>
+
+                <div className="flex items-center gap-1 ml-3">
+                  <button
+                    onClick={() => handleRefresh(watch.id)}
+                    disabled={refreshingId === watch.id || watch.status === 'refreshing' || watch.status === 'paused'}
+                    className="p-1.5 rounded hover:bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] disabled:opacity-30"
+                    title="Refresh now"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${refreshingId === watch.id ? 'animate-spin' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => handleTogglePause(watch)}
+                    disabled={watch.status === 'refreshing'}
+                    className="p-1.5 rounded hover:bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] disabled:opacity-30"
+                    title={watch.status === 'paused' ? 'Resume' : 'Pause'}
+                  >
+                    {watch.status === 'paused' ? (
+                      <Play className="w-4 h-4" />
+                    ) : (
+                      <Pause className="w-4 h-4" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(watch.id)}
+                    className="p-1.5 rounded hover:bg-red-500/10 text-[#71717a] hover:text-red-400"
+                    title="Delete watch"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Watch Leads component
+// ============================================================================
+function WatchLeads({ watch, onBack }) {
+  const [leads, setLeads] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tierFilter, setTierFilter] = useState('all');
+  const [relevanceFilter, setRelevanceFilter] = useState('relevant');
+
+  useEffect(() => {
+    loadData();
+  }, [watch.id, tierFilter, relevanceFilter]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const filters = {};
+      if (tierFilter !== 'all') filters.tier = tierFilter;
+      if (relevanceFilter !== 'all') filters.relevance = relevanceFilter;
+      filters.limit = 100;
+
+      const [leadsData, accountsData] = await Promise.all([
+        api.getWatchLeads(watch.id, filters),
+        api.getAccountsSummary().catch(() => []),
+      ]);
+
+      setLeads(leadsData || []);
+      setAccounts(accountsData || []);
+    } catch (err) {
+      console.error('Failed to load watch leads:', err);
+    }
+    setLoading(false);
+  };
+
+  const handleQueue = (leadId) => {
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'queued' } : l));
+  };
+
+  const handleDismiss = async (leadId) => {
+    try {
+      await api.dismissWatchLead(watch.id, leadId);
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'dismissed' } : l));
+    } catch (err) {
+      console.error('Failed to dismiss lead:', err);
+    }
+  };
+
+  // Custom API functions for watch leads
+  const watchGenerateMessage = (watchId, leadId) => api.generateWatchLeadMessage(watch.id, leadId);
+  const watchQueueLead = (watchId, leadId, data) => api.queueWatchLead(watch.id, leadId, data);
+
+  const tierCounts = {
+    hot: leads.filter(l => l.lead_tier === 'hot').length,
+    warm: leads.filter(l => l.lead_tier === 'warm').length,
+    cold: leads.filter(l => l.lead_tier === 'cold').length,
+  };
+
+  const activeLeads = leads.filter(l => l.status !== 'dismissed');
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="p-1.5 rounded hover:bg-[#1e1e24] text-[#71717a] hover:text-white"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h2 className="text-lg font-semibold text-white">
+              r/{watch.subreddit_name}
+            </h2>
+            <p className="text-sm text-[#71717a]">
+              {watch.total_leads_found || 0} leads found from {watch.total_posts_checked || 0} posts
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Relevance toggle */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setRelevanceFilter('relevant')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            relevanceFilter === 'relevant'
+              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+              : 'bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] border border-transparent'
+          }`}
+        >
+          <Eye className="w-3.5 h-3.5" />
+          Relevant
+        </button>
+        <button
+          onClick={() => setRelevanceFilter('irrelevant')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            relevanceFilter === 'irrelevant'
+              ? 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+              : 'bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] border border-transparent'
+          }`}
+        >
+          <EyeOff className="w-3.5 h-3.5" />
+          Irrelevant
+        </button>
+        <button
+          onClick={() => setRelevanceFilter('all')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            relevanceFilter === 'all'
+              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+              : 'bg-[#1e1e24] text-[#71717a] hover:text-[#a1a1aa] border border-transparent'
+          }`}
+        >
+          All Posts
+        </button>
+      </div>
+
+      {/* Tier summary */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <button
+          onClick={() => setTierFilter(tierFilter === 'hot' ? 'all' : 'hot')}
+          className={`p-3 rounded-lg border text-center transition-colors ${
+            tierFilter === 'hot' ? 'border-red-500/50 bg-red-500/10' : 'border-[#23232a] bg-[#141416] hover:border-red-500/30'
+          }`}
+        >
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <Flame className="w-4 h-4 text-red-500" />
+            <span className="text-sm font-medium text-[#a1a1aa]">Hot</span>
+          </div>
+          <div className="text-2xl font-bold text-red-400">{tierCounts.hot}</div>
+        </button>
+        <button
+          onClick={() => setTierFilter(tierFilter === 'warm' ? 'all' : 'warm')}
+          className={`p-3 rounded-lg border text-center transition-colors ${
+            tierFilter === 'warm' ? 'border-orange-500/50 bg-orange-500/10' : 'border-[#23232a] bg-[#141416] hover:border-orange-500/30'
+          }`}
+        >
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <Thermometer className="w-4 h-4 text-orange-500" />
+            <span className="text-sm font-medium text-[#a1a1aa]">Warm</span>
+          </div>
+          <div className="text-2xl font-bold text-orange-400">{tierCounts.warm}</div>
+        </button>
+        <button
+          onClick={() => setTierFilter(tierFilter === 'cold' ? 'all' : 'cold')}
+          className={`p-3 rounded-lg border text-center transition-colors ${
+            tierFilter === 'cold' ? 'border-blue-500/50 bg-blue-500/10' : 'border-[#23232a] bg-[#141416] hover:border-blue-500/30'
+          }`}
+        >
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <Snowflake className="w-4 h-4 text-blue-500" />
+            <span className="text-sm font-medium text-[#a1a1aa]">Cold</span>
+          </div>
+          <div className="text-2xl font-bold text-blue-400">{tierCounts.cold}</div>
+        </button>
+      </div>
+
+      {/* Leads list */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <RefreshCw className="w-6 h-6 animate-spin text-[#ff4500]" />
+        </div>
+      ) : activeLeads.length === 0 ? (
+        <div className="text-center py-12 text-[#52525b]">
+          No leads found matching filters
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {activeLeads.map(lead => (
+            <LeadCard
+              key={lead.id}
+              lead={lead}
+              accounts={accounts}
+              sessionId={watch.id}
+              onQueue={handleQueue}
+              onDismiss={handleDismiss}
+              onGenerateMessage={() => {}}
+              generateMessageFn={watchGenerateMessage}
+              queueLeadFn={watchQueueLead}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // Helper
 // ============================================================================
+function formatTimeAgoISO(isoString) {
+  if (!isoString) return '';
+  const ts = new Date(isoString).getTime() / 1000;
+  return formatTimeAgo(ts);
+}
+
 function formatTimeAgo(utcTimestamp) {
   if (!utcTimestamp) return '';
   const now = Date.now() / 1000;
@@ -1112,7 +1749,7 @@ function formatTimeAgo(utcTimestamp) {
 // ============================================================================
 export default function Discovery() {
   const [view, setView] = useState('input'); // input | progress | results | history
-  const [inputMode, setInputMode] = useState('discovery'); // discovery | automation
+  const [inputMode, setInputMode] = useState('discovery'); // discovery | automation | watch
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [activeSession, setActiveSession] = useState(null);
   const [sessions, setSessions] = useState([]);
@@ -1278,7 +1915,18 @@ export default function Discovery() {
             }`}
           >
             <Zap className="w-4 h-4" />
-            Automation
+            Subreddit Automation
+          </button>
+          <button
+            onClick={() => setInputMode('watch')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              inputMode === 'watch'
+                ? 'bg-[#ff4500] text-white'
+                : 'bg-[#1e1e24] text-[#a1a1aa] hover:bg-[#23232a]'
+            }`}
+          >
+            <Radar className="w-4 h-4" />
+            Watch
           </button>
         </div>
       )}
@@ -1290,6 +1938,10 @@ export default function Discovery() {
 
       {view === 'input' && inputMode === 'automation' && (
         <AutomationInput onStart={handleStart} loading={starting} />
+      )}
+
+      {view === 'input' && inputMode === 'watch' && (
+        <WatchList />
       )}
 
       {view === 'progress' && activeSession && (

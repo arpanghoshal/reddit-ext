@@ -54,6 +54,10 @@ async def create_session(team_id: str, input_data: Dict[str, Any]) -> Dict[str, 
         "target_persona": input_data.get("persona", ""),
         "tone": input_data.get("tone", "Curious"),
         "insight_types": input_data.get("insightTypes", []),
+        # Timeframe control
+        "timeframe": input_data.get("timeframe", "w"),
+        "timeframe_start": input_data.get("timeframeStart"),
+        "timeframe_end": input_data.get("timeframeEnd"),
         # Automation mode fields
         "mode": input_data.get("mode", "discovery"),
         "target_subreddits": input_data.get("targetSubreddits", []),
@@ -241,6 +245,79 @@ async def get_session_leads(
     result = query.execute()
 
     return result.data or []
+
+
+async def get_previously_found_leads(
+    current_session_id: str, team_id: str,
+    limit: int = 50, offset: int = 0
+) -> List[Dict[str, Any]]:
+    """
+    Get un-contacted leads from PAST sessions that were never DM'd.
+    These are leads the pipeline skipped (dedup) but the user should still see.
+    Returns leads with previously_found=True flag.
+    """
+    client = get_client()
+    if not client:
+        return []
+
+    # Get authors already contacted (via DMs)
+    contacted_usernames = set()
+
+    # Check contacted_recipients
+    cr_result = client.table("contacted_recipients").select(
+        "recipient_username"
+    ).eq("team_id", team_id).execute()
+    for row in (cr_result.data or []):
+        contacted_usernames.add(row["recipient_username"])
+
+    # Check dm_queue (pending/approved/sent)
+    dq_result = client.table("dm_queue").select(
+        "recipient_username"
+    ).eq("team_id", team_id).in_(
+        "status", ["pending", "approved", "sent"]
+    ).execute()
+    for row in (dq_result.data or []):
+        contacted_usernames.add(row["recipient_username"].lower())
+
+    # Get authors already in the current session (no need to show duplicates)
+    current_result = client.table("discovered_leads").select(
+        "author_username"
+    ).eq("session_id", current_session_id).eq("team_id", team_id).execute()
+    current_authors = set()
+    for row in (current_result.data or []):
+        current_authors.add(row["author_username"].lower())
+
+    # Get scored leads from OTHER sessions that haven't been contacted
+    query = client.table("discovered_leads").select("*").eq(
+        "team_id", team_id
+    ).neq(
+        "session_id", current_session_id
+    ).eq(
+        "status", "scored"
+    ).neq(
+        "lead_tier", "irrelevant"
+    ).order(
+        "lead_score", desc=True
+    ).range(offset, offset + limit - 1)
+
+    result = query.execute()
+
+    # Filter out contacted and current-session authors, deduplicate by author
+    seen_authors = set()
+    filtered = []
+    for lead in (result.data or []):
+        author = lead.get("author_username", "").lower()
+        if author in contacted_usernames:
+            continue
+        if author in current_authors:
+            continue
+        if author in seen_authors:
+            continue
+        seen_authors.add(author)
+        lead["previously_found"] = True
+        filtered.append(lead)
+
+    return filtered
 
 
 async def get_lead(lead_id: str, team_id: str) -> Optional[Dict[str, Any]]:
@@ -569,12 +646,30 @@ def _repair_json(text: str) -> str:
     return text
 
 
-async def generate_search_strategy(session_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_search_strategy(session_id: str, settings: Dict[str, Any], team_id: str = None) -> Dict[str, Any]:
     """Use LLM to generate search keywords, pain phrases, and subreddit suggestions."""
     user_prompt = f"""Business Description: {settings.get('businessDesc', 'Not specified')}
 Target Persona: {settings.get('persona', 'Not specified')}
 Tone: {settings.get('tone', 'Curious')}
 Insight Types: {', '.join(settings.get('insightTypes', []))}"""
+
+    # Load past queries for this team to avoid repetition
+    if team_id:
+        try:
+            client = get_client()
+            if client:
+                pq_result = client.table("discovery_query_history").select(
+                    "query_text, times_used"
+                ).eq("team_id", team_id).order(
+                    "last_used_at", desc=True
+                ).limit(20).execute()
+                past_queries = pq_result.data or []
+                if past_queries:
+                    user_prompt += "\n\nPREVIOUSLY USED QUERIES (generate DIFFERENT queries that explore NEW angles, synonyms, and intents):\n"
+                    for pq in past_queries:
+                        user_prompt += f"- \"{pq['query_text']}\" (used {pq['times_used']}x)\n"
+        except Exception as e:
+            logger.warning(f"Failed to load past queries for evolution: {e}")
 
     last_error = None
     for attempt in range(1, MAX_STRATEGY_RETRIES + 1):
@@ -762,6 +857,15 @@ async def run_discovery_pipeline(session_id: str):
         is_automation = session.get("mode") == "automation"
         target_subs = session.get("target_subreddits") or []
 
+        # ---- Build SerpAPI tbs param from timeframe settings ----
+        if session.get("timeframe_start") and session.get("timeframe_end"):
+            tf_start = datetime.strptime(str(session["timeframe_start"]), "%Y-%m-%d").strftime("%m/%d/%Y")
+            tf_end = datetime.strptime(str(session["timeframe_end"]), "%Y-%m-%d").strftime("%m/%d/%Y")
+            serp_tbs = f"cdr:1,cd_min:{tf_start},cd_max:{tf_end}"
+        else:
+            serp_tbs = f"qdr:{session.get('timeframe', 'w')}"
+        logger.info(f"Discovery session {session_id} using tbs={serp_tbs}")
+
         # ---- Pre-load: Fetch own account usernames to exclude from leads ----
         own_account_usernames = set()
         try:
@@ -783,7 +887,7 @@ async def run_discovery_pipeline(session_id: str):
             "started_at": datetime.utcnow().isoformat(),
         })
 
-        strategy = await generate_search_strategy(session_id, settings)
+        strategy = await generate_search_strategy(session_id, settings, team_id=team_id)
         search_queries = strategy.get("queries", [])[:8]
 
         if not search_queries:
@@ -811,7 +915,7 @@ async def run_discovery_pipeline(session_id: str):
                     try:
                         results = await serpapi_client.search_subreddit_posts(
                             subreddit=sr_name, query=query,
-                            num_results=15, time_period="m",
+                            num_results=15, tbs=serp_tbs,
                         )
                         for r in results:
                             url = r.get("link", "")
@@ -825,7 +929,7 @@ async def run_discovery_pipeline(session_id: str):
             for query in search_queries:
                 try:
                     results = await serpapi_client.search_reddit_posts(
-                        query, num_results=30, time_period="m",
+                        query, num_results=30, tbs=serp_tbs,
                     )
                     for r in results:
                         url = r.get("link", "")
@@ -892,7 +996,20 @@ async def run_discovery_pipeline(session_id: str):
             except Exception as e:
                 logger.warning(f"Pre-filter failed, using first {MAX_ENRICH} results: {e}")
 
-        # ---- Phase 2.5b: Enrich top picks via ScrapeCreators ----
+        # ---- Phase 2.5b: Pre-enrichment URL dedup ----
+        # Skip posts already in discovered_leads for this team (across all sessions).
+        # This prevents wasting ScrapeCreators calls on posts we've already processed.
+        from . import dedup
+        pick_urls = [serpapi_results[idx].get("link", "") for idx in picks if serpapi_results[idx].get("link")]
+        known_urls = await dedup.batch_check_known_urls(pick_urls, team_id)
+        duplicate_posts_skipped = 0
+        if known_urls:
+            original_count = len(picks)
+            picks = [idx for idx in picks if serpapi_results[idx].get("link", "") not in known_urls]
+            duplicate_posts_skipped = original_count - len(picks)
+            logger.info(f"Pre-enrichment URL dedup: skipped {duplicate_posts_skipped} already-known posts")
+
+        # ---- Phase 2.5c: Enrich top picks via ScrapeCreators ----
         all_posts = []  # Enriched post dicts
         post_comments = {}  # {url: [comment_list]} for Phase 5
         seen_authors = set(own_account_usernames)  # Pre-seed with own accounts to skip them
@@ -988,7 +1105,7 @@ async def run_discovery_pipeline(session_id: str):
                     # Skip if no URL, no author, deleted, or already seen
                     if not post_url or not author or author == "[deleted]":
                         continue
-                    if post_url in expansion_seen_urls:
+                    if post_url in expansion_seen_urls or post_url in known_urls:
                         continue
                     if author.lower() in seen_authors:
                         continue
@@ -1340,15 +1457,43 @@ async def run_discovery_pipeline(session_id: str):
                 logger.warning(f"Comment analysis batch {batch_start // COMMENT_BATCH_SIZE + 1} failed: {e}")
 
         # ---- Phase 6: Complete ----
+        total_checked = len(all_posts) + duplicate_posts_skipped
+        yield_rate = round((leads_qualified / total_checked * 100), 2) if total_checked > 0 else 0
+
         await update_session(session_id, {
             "status": "completed",
             "completed_at": datetime.utcnow().isoformat(),
             "leads_qualified": leads_qualified,
+            "duplicate_posts_skipped": duplicate_posts_skipped,
+            "yield_rate": yield_rate,
         })
+
+        # ---- Phase 6b: Store query history for evolution ----
+        try:
+            for q in search_queries:
+                # Check if query already exists, then update or insert
+                existing = client.table("discovery_query_history").select(
+                    "id, times_used"
+                ).eq("team_id", team_id).eq("query_text", q).limit(1).execute()
+                if existing.data:
+                    client.table("discovery_query_history").update({
+                        "times_used": (existing.data[0].get("times_used", 0) or 0) + 1,
+                        "last_used_at": datetime.utcnow().isoformat(),
+                    }).eq("id", existing.data[0]["id"]).execute()
+                else:
+                    client.table("discovery_query_history").insert({
+                        "team_id": team_id,
+                        "query_text": q,
+                        "times_used": 1,
+                        "last_used_at": datetime.utcnow().isoformat(),
+                    }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to store query history: {e}")
 
         logger.info(
             f"Discovery session {session_id} completed: "
-            f"{len(all_posts)} posts enriched, {leads_qualified} leads qualified"
+            f"{len(all_posts)} posts enriched, {leads_qualified} leads qualified, "
+            f"{duplicate_posts_skipped} duplicates skipped, yield={yield_rate}%"
         )
 
     except Exception as e:

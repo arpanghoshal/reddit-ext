@@ -111,8 +111,9 @@ async def has_been_contacted(recipient_username: str, team_id: str) -> Dict[str,
             }
 
         # Note: discovered_leads is intentionally NOT checked here.
-        # Only actually contacted users are excluded from future discovery.
-        # Users who were discovered but never DM'd should reappear.
+        # This function guards the DM queue (preventing double-sends).
+        # discovered_leads dedup is in batch_check_contacted() for the
+        # discovery pipeline (preventing re-classification across sessions).
 
         return {"contacted": False}
 
@@ -188,14 +189,58 @@ async def batch_check_contacted(usernames: List[str], team_id: str) -> set:
         for row in (result.data or []):
             contacted.add(row["participant_username"])
 
-        # Note: discovered_leads from past sessions are NOT excluded here.
-        # Users who were discovered but never DM'd should reappear in future sessions.
-        # Only actually contacted users (steps 1-4 above) are filtered out.
+        # 5. Check discovered_leads (past discovery sessions)
+        # Prevents re-classifying the same users across sessions (saves API costs).
+        # Un-contacted leads from past sessions are shown separately in the UI
+        # with a "Previously Found" badge instead.
+        remaining = [u for u in remaining if u not in contacted]
+        if remaining:
+            result = client.table("discovered_leads").select(
+                "author_username"
+            ).eq("team_id", team_id).in_(
+                "author_username", remaining
+            ).neq("status", "dismissed").execute()
+            for row in (result.data or []):
+                contacted.add(row["author_username"].lower())
 
     except Exception as e:
         logger.warning(f"Batch dedup check failed: {e}")
 
     return contacted
+
+
+async def batch_check_known_urls(urls: List[str], team_id: str) -> set:
+    """
+    Check which post URLs already exist in discovered_leads for this team
+    (across all sessions). Used BEFORE enrichment to skip re-enriching
+    posts that were already processed in a previous discovery run.
+
+    Returns a set of URLs that are already known.
+    """
+    if not urls or not team_id:
+        return set()
+
+    client = get_client()
+    if not client:
+        return set()
+
+    known = set()
+    try:
+        # Query in batches of 100 to avoid query size limits
+        for batch_start in range(0, len(urls), 100):
+            batch = urls[batch_start:batch_start + 100]
+            result = client.table("discovered_leads").select(
+                "post_url"
+            ).eq("team_id", team_id).in_(
+                "post_url", batch
+            ).execute()
+            for row in (result.data or []):
+                if row.get("post_url"):
+                    known.add(row["post_url"])
+    except Exception as e:
+        logger.warning(f"Batch URL dedup check failed: {e}")
+
+    return known
 
 
 async def record_contact(

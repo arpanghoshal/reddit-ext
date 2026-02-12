@@ -463,6 +463,11 @@ export async function getDiscoveryLeads(sessionId, filters = {}) {
     return result.data;
 }
 
+export async function getPreviouslyFoundLeads(sessionId, limit = 50) {
+    const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/previously-found?limit=${limit}`);
+    return result.data;
+}
+
 export async function getDiscoveryLeadDetail(sessionId, leadId) {
     const result = await apiRequest(`/discovery/sessions/${sessionId}/leads/${leadId}`);
     return result.data;
@@ -496,6 +501,80 @@ export async function bulkQueueLeads(sessionId, data) {
         body: JSON.stringify(data),
     });
     return result.data;
+}
+
+// ============================================================================
+// Watches
+// ============================================================================
+
+export async function getWatches() {
+    const result = await apiRequest('/discovery/watches');
+    return result.data;
+}
+
+export async function createWatch(subredditName) {
+    const result = await apiRequest('/discovery/watches', {
+        method: 'POST',
+        body: JSON.stringify({ subredditName }),
+    });
+    return result.data;
+}
+
+export async function updateWatch(watchId, data) {
+    const result = await apiRequest(`/discovery/watches/${watchId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    });
+    return result.data;
+}
+
+export async function deleteWatch(watchId) {
+    await apiRequest(`/discovery/watches/${watchId}`, { method: 'DELETE' });
+}
+
+export async function refreshWatch(watchId) {
+    const result = await apiRequest(`/discovery/watches/${watchId}/refresh`, { method: 'POST' });
+    return result.data;
+}
+
+export async function refreshAllWatches() {
+    const result = await apiRequest('/discovery/watches/refresh-all', { method: 'POST' });
+    return result.data;
+}
+
+export async function getWatchLeads(watchId, filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const qs = params.toString();
+    const result = await apiRequest(`/discovery/watches/${watchId}/leads${qs ? '?' + qs : ''}`);
+    return result.data;
+}
+
+export async function resetWatchNewLeads(watchId) {
+    await apiRequest(`/discovery/watches/${watchId}/leads/reset-new`, { method: 'POST' });
+}
+
+export async function generateWatchLeadMessage(watchId, leadId) {
+    const result = await apiRequest(`/discovery/watches/${watchId}/leads/${leadId}/generate-message`, {
+        method: 'POST',
+    });
+    return result.data;
+}
+
+export async function queueWatchLead(watchId, leadId, data) {
+    const result = await apiRequest(`/discovery/watches/${watchId}/leads/${leadId}/queue`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    return result.data;
+}
+
+export async function dismissWatchLead(watchId, leadId) {
+    await apiRequest(`/discovery/watches/${watchId}/leads/${leadId}/dismiss`, { method: 'POST' });
 }
 
 // Extension Direct Send

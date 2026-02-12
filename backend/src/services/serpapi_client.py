@@ -47,6 +47,7 @@ async def search_reddit_posts(
     query: str,
     num_results: int = 20,
     time_period: str = "m",
+    tbs: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search Google for Reddit posts via SerpAPI.
@@ -54,7 +55,9 @@ async def search_reddit_posts(
     Args:
         query: Search query (site:reddit.com is appended automatically)
         num_results: Number of results to request
-        time_period: Google time filter (w=week, m=month, y=year)
+        time_period: Google time filter shortcut (h/d/w/m/y). Ignored if tbs is set.
+        tbs: Full Google tbs param (e.g. "qdr:w" or "cdr:1,cd_min:01/01/2025,cd_max:02/01/2025").
+             If provided, overrides time_period.
 
     Returns:
         List of result dicts with: title, link, snippet, displayed_link
@@ -64,7 +67,8 @@ async def search_reddit_posts(
         logger.error("SERPAPI_API_KEY not set")
         return []
 
-    cache_key = f"serp:{query}:{num_results}:{time_period}"
+    tbs_value = tbs if tbs else f"qdr:{time_period}"
+    cache_key = f"serp:{query}:{num_results}:{tbs_value}"
     _evict_cache(_search_cache, SEARCH_CACHE_TTL)
     if cache_key in _search_cache:
         return _search_cache[cache_key]["data"]
@@ -81,7 +85,7 @@ async def search_reddit_posts(
                     "q": full_query,
                     "api_key": api_key,
                     "num": str(num_results),
-                    "tbs": f"qdr:{time_period}",
+                    "tbs": tbs_value,
                     "gl": "us",
                     "hl": "en",
                 },
@@ -136,10 +140,14 @@ async def search_subreddit_posts(
     query: str,
     num_results: int = 15,
     time_period: str = "m",
+    tbs: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search Google for posts within a specific subreddit.
     Scopes search with site:reddit.com/r/{subreddit}.
+
+    Args:
+        tbs: Full Google tbs param. If provided, overrides time_period.
     """
     scoped_query = f"{query} site:reddit.com/r/{subreddit}"
     api_key = _get_serpapi_key()
@@ -147,7 +155,8 @@ async def search_subreddit_posts(
         logger.error("SERPAPI_API_KEY not set")
         return []
 
-    cache_key = f"serp_sub:{subreddit}:{query}:{num_results}:{time_period}"
+    tbs_value = tbs if tbs else f"qdr:{time_period}"
+    cache_key = f"serp_sub:{subreddit}:{query}:{num_results}:{tbs_value}"
     _evict_cache(_search_cache, SEARCH_CACHE_TTL)
     if cache_key in _search_cache:
         return _search_cache[cache_key]["data"]
@@ -162,7 +171,7 @@ async def search_subreddit_posts(
                     "q": scoped_query,
                     "api_key": api_key,
                     "num": str(num_results),
-                    "tbs": f"qdr:{time_period}",
+                    "tbs": tbs_value,
                     "gl": "us",
                     "hl": "en",
                 },
