@@ -2011,6 +2011,7 @@ async function processReplyQueueItem(item) {
                 message: item.finalMessage,
                 queueItemId: item.id,
                 conversationId: item.conversationId,
+                accountId: item.accountId || detected.accountId || null,
                 isReply: true
             },
             retries: 0
@@ -2029,6 +2030,7 @@ async function processReplyQueueItem(item) {
             message: item.finalMessage,
             queueItemId: item.id,
             conversationId: item.conversationId,
+            accountId: item.accountId || detected.accountId || null,
             isReply: true
         },
         retries: 0

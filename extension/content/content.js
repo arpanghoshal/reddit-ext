@@ -1777,7 +1777,11 @@ function findChatUserElement(targetLower) {
     // Helper: check if text matches the target username (exact or word-boundary)
     function isExactMatch(text) {
         const normalized = text.replace(/^u\//, '').trim();
-        return normalized === targetLower || text === `u/${targetLower}`;
+        if (normalized === targetLower || text === `u/${targetLower}`) return true;
+        // Handle aria-labels like "Direct chat with _Devouring_"
+        const chatMatch = text.match(/direct chat with (\S+)/i);
+        if (chatMatch && chatMatch[1].toLowerCase() === targetLower) return true;
+        return false;
     }
     function isWordBoundaryMatch(text) {
         try {
@@ -1785,10 +1789,14 @@ function findChatUserElement(targetLower) {
             return new RegExp('(?:^|[\\s/])' + escaped + '(?:$|[\\s,.])', 'i').test(text);
         } catch { return false; }
     }
+    function isSubstringMatch(text) {
+        return text.includes(targetLower);
+    }
 
     // Pass 1: Exact matches across all strategies
     // Pass 2: Word-boundary matches (fallback)
-    for (const matchFn of [isExactMatch, isWordBoundaryMatch]) {
+    // Pass 3: Substring matches (loose fallback, chat elements only)
+    for (const matchFn of [isExactMatch, isWordBoundaryMatch, isSubstringMatch]) {
         // Strategy 1: rs-rooms-nav-room elements (Reddit chat web components)
         const rooms = document.querySelectorAll('rs-rooms-nav-room');
         for (const room of rooms) {
@@ -1818,6 +1826,9 @@ function findChatUserElement(targetLower) {
                 return el;
             }
         }
+
+        // Skip broad DOM strategies for substring match (too many false positives)
+        if (matchFn === isSubstringMatch) continue;
 
         // Strategy 3: Standard DOM links/buttons containing username
         const allLinks = document.querySelectorAll('a, button');
@@ -1897,8 +1908,57 @@ async function executeDirectChatSend(targetUser, text) {
     console.log('📨 Direct chat send to:', targetUser, '| message length:', text?.length);
 
     const targetLower = targetUser.toLowerCase();
+    const onChatPage = /chat\.reddit\.com|reddit\.com\/chat/i.test(window.location.href);
+
+    // When on a chat page (navigated from profile "Chat" button), the conversation
+    // may already be open directly — no sidebar entry exists for new conversations.
+    // Race: look for either the sidebar entry OR a directly-available chat input.
+    if (onChatPage) {
+        console.log('On chat page, racing sidebar lookup vs direct chat input...');
+        const result = await raceForChatReady(targetLower, 15000, 500);
+
+        if (result === 'direct') {
+            console.log('Chat input found directly for', targetUser, '- typing...');
+            return await executeTypeMessage(text);
+        } else if (result === 'sidebar') {
+            // findChatUserElement found a clickable sidebar entry — use it
+            const userRoom = findChatUserElement(targetLower);
+            if (userRoom) {
+                console.log('Found conversation for', targetUser, 'in sidebar - clicking...');
+                userRoom.click();
+                await new Promise(r => setTimeout(r, 2000));
+                return await executeTypeMessage(text);
+            }
+        }
+
+        // Final fallback: poll for chat input alone (page may still be loading)
+        console.log('Race failed, polling for chat input as last resort...');
+        const chatInput = await pollForElement(findChatInput, 8000, 500);
+        if (chatInput) {
+            console.log('Chat input found (late) - typing directly for', targetUser);
+            return await executeTypeMessage(text);
+        }
+
+        console.error('❌ Could not find chat conversation for:', targetUser);
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `Chat with ${targetUser} not found`, step: 'DIRECT_CHAT_SEND' }
+        });
+        return { success: false, error: `Chat with ${targetUser} not found` };
+    }
+
+    // Not on a dedicated chat page — chat opened as overlay/popup on the current page.
+    // Look for the user in the sidebar.
     const userRoom = await pollForElement(() => findChatUserElement(targetLower), 12000, 500);
     if (!userRoom) {
+        // Fallback: chat may already be open from the chat button click (new conversation)
+        console.log('Sidebar lookup failed, checking if chat is already open for', targetUser);
+        const chatInput = await pollForElement(findChatInput, 5000, 500);
+        if (chatInput && verifyConversationUser(targetUser)) {
+            console.log('Chat already open for', targetUser, '- typing directly');
+            return await executeTypeMessage(text);
+        }
+
         console.error('❌ Could not find chat conversation for:', targetUser);
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
@@ -1913,21 +1973,7 @@ async function executeDirectChatSend(targetUser, text) {
     // Wait for conversation to open and chat input to appear
     await new Promise(r => setTimeout(r, 2000));
 
-    // Verify the opened conversation belongs to the target user by checking visible header/username
-    const verifyConversation = () => {
-        // Check conversation header text across shadow DOMs
-        const headers = querySelectorDeep('h1, h2, h3, [class*="header"], [class*="title"], [class*="name"]');
-        const normalizedTarget = targetUser.replace(/^u\//, '').toLowerCase();
-        for (const h of headers) {
-            const text = (h.textContent || '').trim().toLowerCase();
-            if (text.includes(normalizedTarget)) return true;
-        }
-        // Also check the URL for the username
-        if (window.location.href.toLowerCase().includes(normalizedTarget)) return true;
-        return false;
-    };
-
-    if (!verifyConversation()) {
+    if (!verifyConversationUser(targetUser)) {
         console.warn('Conversation header does not match target user:', targetUser);
         // Don't hard-fail — the conversation may still be correct if Reddit's UI doesn't show the username prominently
         console.log('Proceeding cautiously...');
@@ -1937,48 +1983,105 @@ async function executeDirectChatSend(targetUser, text) {
     return await executeTypeMessage(text);
 }
 
+// Race between finding the user in the sidebar and finding a direct chat input.
+// Returns 'direct' if a chat input is found, 'sidebar' if a sidebar entry is found, or null.
+function raceForChatReady(targetLower, timeout, interval) {
+    return new Promise((resolve) => {
+        // Check immediately
+        if (findChatInput()) return resolve('direct');
+        if (findChatUserElement(targetLower)) return resolve('sidebar');
+
+        const start = Date.now();
+        const timer = setInterval(() => {
+            if (findChatInput()) {
+                clearInterval(timer);
+                resolve('direct');
+            } else if (findChatUserElement(targetLower)) {
+                clearInterval(timer);
+                resolve('sidebar');
+            } else if (Date.now() - start >= timeout) {
+                clearInterval(timer);
+                resolve(null);
+            }
+        }, interval);
+    });
+}
+
+// Standalone helper: find a chat input element across shadow DOMs
+function findChatInput() {
+    const findInShadow = (root) => {
+        if (!root) return null;
+
+        const textareaByName = root.querySelector('textarea[name="message"]');
+        if (textareaByName) return textareaByName;
+
+        const textareaByAria = root.querySelector('textarea[aria-label="Write message"]');
+        if (textareaByAria) return textareaByAria;
+
+        const contentEditable = root.querySelector('div[contenteditable="true"][role="textbox"]');
+        if (contentEditable) return contentEditable;
+
+        const fallback = root.querySelector('textarea[placeholder="Message"]');
+        if (fallback) return fallback;
+
+        // Reddit chat (Matrix-based) may use different aria labels
+        const sendMsgAria = root.querySelector('textarea[aria-label="Send a message…"], textarea[aria-label="Send a message"]');
+        if (sendMsgAria) return sendMsgAria;
+
+        // Generic contenteditable divs in chat context
+        const chatEditable = root.querySelector('[data-testid="chat-input"] textarea, [data-testid="chat-input"] [contenteditable="true"]');
+        if (chatEditable) return chatEditable;
+
+        // Any visible textarea or contenteditable in the chat area
+        const anyTextarea = root.querySelector('rs-chat-composer textarea, rs-chat-composer [contenteditable="true"]');
+        if (anyTextarea) return anyTextarea;
+
+        const candidates = root.querySelectorAll('*');
+        for (const el of candidates) {
+            if (el.shadowRoot) {
+                const found = findInShadow(el.shadowRoot);
+                if (found) return found;
+            }
+        }
+        return null;
+    };
+
+    // Search main document
+    const mainResult = findInShadow(document);
+    if (mainResult) return mainResult;
+
+    // Search same-origin iframes (Reddit chat may render inside an iframe)
+    try {
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+                if (iframeDoc) {
+                    const result = findInShadow(iframeDoc);
+                    if (result) return result;
+                }
+            } catch (e) { /* cross-origin iframe, skip */ }
+        }
+    } catch (e) { /* ignore */ }
+
+    return null;
+}
+
+// Standalone helper: verify the open conversation matches the target username
+function verifyConversationUser(targetUser) {
+    const headers = querySelectorDeep('h1, h2, h3, [class*="header"], [class*="title"], [class*="name"]');
+    const normalizedTarget = targetUser.replace(/^u\//, '').toLowerCase();
+    for (const h of headers) {
+        const text = (h.textContent || '').trim().toLowerCase();
+        if (text.includes(normalizedTarget)) return true;
+    }
+    if (window.location.href.toLowerCase().includes(normalizedTarget)) return true;
+    return false;
+}
+
 async function executeTypeMessage(text) {
     if (!isContextValid()) throw new Error('Extension context invalidated');
     console.log('🔍 Looking for chat input...');
-
-    const findChatInput = () => {
-        // Helper to search recursively through Shadow DOMs
-        const findInShadow = (root) => {
-            if (!root) return null;
-
-            // Check current root
-            const textareaByName = root.querySelector('textarea[name="message"]');
-            if (textareaByName) return textareaByName;
-
-            const textareaByAria = root.querySelector('textarea[aria-label="Write message"]');
-            if (textareaByAria) return textareaByAria;
-
-            const contentEditable = root.querySelector('div[contenteditable="true"][role="textbox"]');
-            if (contentEditable) return contentEditable;
-
-            const fallback = root.querySelector('textarea[placeholder="Message"]');
-            if (fallback) return fallback;
-
-            // Recurse into children with shadow roots
-            const candidates = root.querySelectorAll('*');
-            for (const el of candidates) {
-                if (el.shadowRoot) {
-                    const found = findInShadow(el.shadowRoot);
-                    if (found) return found;
-                }
-            }
-            return null;
-        };
-
-        // 1. Search main document
-        const mainDocResult = findInShadow(document);
-        if (mainDocResult) {
-            console.log('✓ Found chat input in main document/shadow tree');
-            return mainDocResult;
-        }
-
-        return null;
-    };
 
     // Use polling instead of MutationObserver since chat input is inside shadow DOM
     // (MutationObserver on document.body cannot observe changes inside shadow roots)
@@ -3699,19 +3802,111 @@ function pollForElement(selectorFn, timeout = 10000, interval = 500) {
 }
 
 async function simulateTyping(element, text) {
+    console.log('⌨️ simulateTyping: element type:', element.tagName, 'contentEditable:', element.isContentEditable, 'shadow:', !!element.getRootNode()?.host);
     element.focus();
+    await new Promise(r => setTimeout(r, 300)); // Let focus settle
 
+    // Ensure cursor is positioned inside the element
+    if (element.isContentEditable) {
+        // Place cursor at end of contenteditable
+        const sel = element.getRootNode().getSelection ? element.getRootNode().getSelection() : window.getSelection();
+        if (sel) {
+            sel.selectAllChildren(element);
+            sel.collapseToEnd();
+        }
+    } else if ('setSelectionRange' in element) {
+        // Place cursor at end of textarea/input
+        const len = (element.value || '').length;
+        element.setSelectionRange(len, len);
+    }
+
+    // Strategy 1: Try execCommand (works for both contenteditable and textarea in Chrome)
+    let execCmdWorked = false;
     if (element.isContentEditable) {
         for (let i = 0; i < text.length; i++) {
             document.execCommand('insertText', false, text[i]);
-            await new Promise(r => setTimeout(r, 100)); // Slower typing
+            await new Promise(r => setTimeout(r, 80));
         }
+        execCmdWorked = (element.textContent || '').length > 0;
+        console.log('⌨️ execCommand contentEditable result:', execCmdWorked, 'text length:', (element.textContent || '').length);
     } else {
-        for (let i = 0; i < text.length; i++) {
-            element.value += text[i];
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            await new Promise(r => setTimeout(r, 100)); // Slower typing
+        // For textarea: try execCommand first
+        const before = element.value || '';
+        document.execCommand('insertText', false, text.charAt(0));
+        await new Promise(r => setTimeout(r, 50));
+        execCmdWorked = (element.value || '') !== before;
+
+        if (execCmdWorked) {
+            // execCommand works for this textarea — type remaining chars
+            console.log('⌨️ execCommand works for textarea, typing remaining chars...');
+            for (let i = 1; i < text.length; i++) {
+                document.execCommand('insertText', false, text[i]);
+                await new Promise(r => setTimeout(r, 80));
+            }
+        } else {
+            console.log('⌨️ execCommand failed for textarea, using native setter approach...');
+            // Strategy 2: Native value setter (bypasses React's override)
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+                HTMLTextAreaElement.prototype, 'value'
+            )?.set || Object.getOwnPropertyDescriptor(
+                HTMLInputElement.prototype, 'value'
+            )?.set;
+
+            if (nativeSetter) {
+                for (let i = 0; i < text.length; i++) {
+                    nativeSetter.call(element, (element.value || '') + text[i]);
+                    element.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
+                        composed: true,
+                        inputType: 'insertText',
+                        data: text[i]
+                    }));
+                    await new Promise(r => setTimeout(r, 80));
+                }
+            } else {
+                // Strategy 3: Direct value + composed events
+                for (let i = 0; i < text.length; i++) {
+                    element.value += text[i];
+                    element.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
+                        composed: true,
+                        inputType: 'insertText',
+                        data: text[i]
+                    }));
+                    await new Promise(r => setTimeout(r, 80));
+                }
+            }
         }
+    }
+
+    await new Promise(r => setTimeout(r, 300));
+
+    // Verify text was entered
+    const currentValue = element.isContentEditable
+        ? (element.textContent || element.innerText || '')
+        : (element.value || '');
+    console.log('⌨️ After typing, input value length:', currentValue.length, 'expected:', text.length);
+
+    if (currentValue.length === 0) {
+        console.warn('⌨️ Text not entered! Trying bulk paste approach...');
+        // Last resort: set the full text at once
+        if (element.isContentEditable) {
+            element.textContent = text;
+            element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+        } else {
+            const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+            if (setter) setter.call(element, text);
+            else element.value = text;
+            element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+        }
+        // Also fire change event
+        element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        await new Promise(r => setTimeout(r, 300));
+
+        const retryValue = element.isContentEditable
+            ? (element.textContent || element.innerText || '')
+            : (element.value || '');
+        console.log('⌨️ After bulk paste, input value length:', retryValue.length);
     }
 
     await new Promise(r => setTimeout(r, 500));
