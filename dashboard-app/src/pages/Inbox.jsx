@@ -222,7 +222,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
           <div>
             <h2 className="text-lg font-semibold text-white">u/{conversation.participantUsername}</h2>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-sm text-[#71717a]">{conversation.totalMessages} messages</span>
+              <span className="text-sm text-[#71717a]">{messages.length || conversation.totalMessages} messages</span>
               <select
                 value={conversation.accountId || ''}
                 onChange={(e) => assignAccount(e.target.value)}

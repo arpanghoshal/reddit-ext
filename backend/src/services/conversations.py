@@ -46,6 +46,7 @@ def transform_conversation(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
 
     return {
         "id": row.get("id"),
+        "teamId": row.get("team_id"),
         "redditConversationId": row.get("reddit_conversation_id"),
         "participantUsername": row.get("participant_username"),
         "accountId": row.get("account_id"),
@@ -207,12 +208,12 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
 
         conversation = transform_conversation(conv_result.data[0])
 
-        # Fetch messages
+        # Fetch messages (include NULL team_id to recover orphaned sync messages)
         msg_query = client.table("messages").select("*").eq(
             "conversation_id", conversation_id
         )
         if team_id:
-            msg_query = msg_query.eq("team_id", team_id)
+            msg_query = msg_query.or_(f"team_id.eq.{team_id},team_id.is.null")
         msg_query = msg_query.order("sent_at")
         msg_result = msg_query.execute()
 
@@ -310,6 +311,14 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
                 print(f"Conversation {conversation_id} not found for team {team_id}")
                 return None
 
+        # If no team_id provided, inherit from the parent conversation
+        if not team_id and conversation_id:
+            conv_lookup = client.table("conversations").select("team_id").eq(
+                "id", conversation_id
+            ).limit(1).execute()
+            if conv_lookup.data and conv_lookup.data[0].get("team_id"):
+                team_id = conv_lookup.data[0]["team_id"]
+
         # Compute fingerprint for deduplication
         fingerprint = create_message_fingerprint(content, direction, sent_at)
 
@@ -354,7 +363,10 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
         if direction == "inbound":
             conv_update["has_reply"] = True
 
-        client.table("conversations").update(conv_update).eq("id", conversation_id).execute()
+        conv_stats_query = client.table("conversations").update(conv_update).eq("id", conversation_id)
+        if team_id:
+            conv_stats_query = conv_stats_query.eq("team_id", team_id)
+        conv_stats_query.execute()
 
         return transform_message(msg_result.data[0])
     except Exception as e:
@@ -450,6 +462,10 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
         await update_conversation(conversation["id"], {"accountId": account_id}, team_id=team_id)
         conversation["accountId"] = account_id
 
+    # Inherit team_id from existing conversation if not provided in request
+    if not team_id and conversation and conversation.get("teamId"):
+        team_id = conversation["teamId"]
+
     if not conversation:
         conversation = await create_conversation({
             "participantUsername": participant_username,
@@ -464,7 +480,7 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
         return await get_conversation(conversation["id"], team_id=team_id)
 
     # Build fingerprint set of existing messages
-    existing_messages = await get_messages(conversation["id"])
+    existing_messages = await get_messages(conversation["id"], team_id=team_id)
     existing_fingerprints: Set[str] = set()
 
     for msg in existing_messages:
@@ -513,7 +529,7 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
 
     # Update total_messages to match actual count
     if added_count > 0:
-        all_messages = await get_messages(conversation["id"])
+        all_messages = await get_messages(conversation["id"], team_id=team_id)
         await update_conversation(conversation["id"], {
             "totalMessages": len(all_messages)
         }, team_id=team_id)
