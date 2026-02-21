@@ -124,6 +124,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
   }
 
+  // Relay queue update from background so dashboard refreshes immediately
+  if (msg.action === 'QUEUE_UPDATED') {
+    window.postMessage({ type: 'RDM_QUEUE_UPDATED' }, '*');
+  }
+
   // Relay bulk sync progress from background to dashboard page
   if (msg.action === 'BULK_SYNC_PROGRESS') {
     window.postMessage({

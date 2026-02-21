@@ -200,10 +200,15 @@ export default function Queue() {
     const onVisible = () => {
       if (document.visibilityState === 'visible') loadData();
     };
+    const onQueueUpdate = (event) => {
+      if (event.data?.type === 'RDM_QUEUE_UPDATED') loadData();
+    };
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('message', onQueueUpdate);
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('message', onQueueUpdate);
     };
   }, [filter, messageType, accountFilter]);
 

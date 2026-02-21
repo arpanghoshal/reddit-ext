@@ -61,6 +61,17 @@ function clearAllTimeouts(tabId) {
     }
 }
 
+// Notify any open dashboard tabs to refresh queue data immediately
+function notifyDashboardQueueUpdate() {
+    chrome.tabs.query({
+        url: ['https://reddit-ext-dashboard.vercel.app/*', 'http://localhost:5173/*', 'http://localhost:3000/*']
+    }, (tabs) => {
+        for (const tab of tabs) {
+            chrome.tabs.sendMessage(tab.id, { action: 'QUEUE_UPDATED' }).catch(() => {});
+        }
+    });
+}
+
 // Poll content script until it responds to PING, confirming it's alive and ready
 async function ensureContentScriptReady(tabId, timeoutMs = 10000, intervalMs = 500) {
     const start = Date.now();
@@ -969,6 +980,8 @@ async function handleStepCompletion(tabId, result) {
                 }
                 // Clear persistent in-progress marker
                 clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
+                // Notify dashboard immediately so queue UI updates without waiting for poll
+                notifyDashboardQueueUpdate();
             }
 
             // Log DM to Supabase (tagged with the current logged-in account)
@@ -1699,38 +1712,87 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // Start bulk sync: find or create a Reddit chat tab, then tell it to sync
     if (request.action === 'TRIGGER_START_BULK_SYNC') {
+        // Helper: create a fresh chat tab and send START_BULK_SYNC once loaded
+        function createChatTabAndSync() {
+            chrome.tabs.create({ url: 'https://www.reddit.com/chat/', active: true }, (newTab) => {
+                const onUpdated = (tabId, changeInfo) => {
+                    if (tabId === newTab.id && changeInfo.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(onUpdated);
+                        // Extra delay for content script injection and chat sidebar to load
+                        setTimeout(() => {
+                            chrome.tabs.sendMessage(newTab.id, { action: 'START_BULK_SYNC' }).catch((err) => {
+                                console.warn('Failed to send START_BULK_SYNC to new tab:', err);
+                            });
+                        }, 3000);
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(onUpdated);
+                setTimeout(() => chrome.tabs.onUpdated.removeListener(onUpdated), 30000);
+            });
+        }
+
         chrome.tabs.query({
             url: ['*://*.reddit.com/chat/*', '*://chat.reddit.com/*']
         }, (tabs) => {
             if (tabs && tabs.length > 0) {
-                // Use existing chat tab
                 const chatTab = tabs[0];
                 chrome.tabs.update(chatTab.id, { active: true });
-                // Send start message after a short delay to ensure content script is ready
+
+                // First try: ping the content script to check if it's alive
                 setTimeout(() => {
-                    chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
-                        console.warn('Failed to send START_BULK_SYNC to existing tab');
-                    });
-                }, 1000);
-            } else {
-                // Create new chat tab and wait for it to load
-                chrome.tabs.create({ url: 'https://www.reddit.com/chat/', active: true }, (newTab) => {
-                    // Wait for the tab to finish loading before sending the message
-                    const onUpdated = (tabId, changeInfo) => {
-                        if (tabId === newTab.id && changeInfo.status === 'complete') {
-                            chrome.tabs.onUpdated.removeListener(onUpdated);
-                            // Extra delay for content script injection and chat sidebar to load
-                            setTimeout(() => {
-                                chrome.tabs.sendMessage(newTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
-                                    console.warn('Failed to send START_BULK_SYNC to new tab');
+                    chrome.tabs.sendMessage(chatTab.id, { action: 'PING' }).then((resp) => {
+                        if (resp && resp.pong) {
+                            // Content script is alive, send the sync command
+                            chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
+                                console.warn('START_BULK_SYNC failed despite PING success, reloading tab');
+                                chrome.tabs.reload(chatTab.id, {}, () => {
+                                    setTimeout(() => {
+                                        chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
+                                            console.warn('START_BULK_SYNC failed after reload too');
+                                        });
+                                    }, 4000);
                                 });
-                            }, 3000);
+                            });
+                        } else {
+                            // Content script not responding, reload the tab
+                            console.log('Chat tab content script not responding, reloading...');
+                            chrome.tabs.reload(chatTab.id, {}, () => {
+                                const onUpdated = (tabId, changeInfo) => {
+                                    if (tabId === chatTab.id && changeInfo.status === 'complete') {
+                                        chrome.tabs.onUpdated.removeListener(onUpdated);
+                                        setTimeout(() => {
+                                            chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
+                                                console.warn('START_BULK_SYNC failed after reload');
+                                            });
+                                        }, 3000);
+                                    }
+                                };
+                                chrome.tabs.onUpdated.addListener(onUpdated);
+                                setTimeout(() => chrome.tabs.onUpdated.removeListener(onUpdated), 30000);
+                            });
                         }
-                    };
-                    chrome.tabs.onUpdated.addListener(onUpdated);
-                    // Safety timeout: remove listener after 30s
-                    setTimeout(() => chrome.tabs.onUpdated.removeListener(onUpdated), 30000);
-                });
+                    }).catch(() => {
+                        // PING failed - content script is dead, reload the tab
+                        console.log('Chat tab PING failed, reloading...');
+                        chrome.tabs.reload(chatTab.id, {}, () => {
+                            const onUpdated = (tabId, changeInfo) => {
+                                if (tabId === chatTab.id && changeInfo.status === 'complete') {
+                                    chrome.tabs.onUpdated.removeListener(onUpdated);
+                                    setTimeout(() => {
+                                        chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
+                                            console.warn('START_BULK_SYNC failed after reload');
+                                        });
+                                    }, 3000);
+                                }
+                            };
+                            chrome.tabs.onUpdated.addListener(onUpdated);
+                            setTimeout(() => chrome.tabs.onUpdated.removeListener(onUpdated), 30000);
+                        });
+                    });
+                }, 500);
+            } else {
+                // No existing chat tab, create one
+                createChatTabAndSync();
             }
         });
         sendResponse({ success: true });

@@ -1440,71 +1440,175 @@ function stopChatSync() {
 // Enumerate all chat entries in the sidebar
 function getAllSidebarRooms() {
     const rooms = [];
+    const seen = new Set(); // Avoid duplicate usernames
+
+    // Strategy 1: rs-rooms-nav-room elements (Reddit chat web components)
     const roomElements = document.querySelectorAll('rs-rooms-nav-room');
+    console.log(`[BulkSync] Found ${roomElements.length} rs-rooms-nav-room elements`);
 
     for (const room of roomElements) {
-        if (!room.shadowRoot) continue;
-
-        const chatLink = room.shadowRoot.querySelector('a[aria-label]');
-        if (!chatLink) continue;
-
-        const ariaLabel = chatLink.getAttribute('aria-label') || '';
-        const match = ariaLabel.match(/Direct chat with (\S+)/i);
-
         let username = null;
-        if (match) {
-            username = match[1];
-        } else {
+        let clickable = null;
+
+        if (room.shadowRoot) {
+            const chatLink = room.shadowRoot.querySelector('a[aria-label]');
+            if (chatLink) {
+                const ariaLabel = chatLink.getAttribute('aria-label') || '';
+                const match = ariaLabel.match(/Direct chat with (\S+)/i);
+                if (match) {
+                    username = match[1];
+                    clickable = chatLink;
+                }
+            }
+
             // Fallback: try room-name text
-            const roomName = room.shadowRoot.querySelector('.room-name') ||
-                             room.shadowRoot.querySelector('[class*="room-name"]');
-            if (roomName) {
-                const candidate = roomName.textContent?.trim();
-                if (candidate && /^[a-zA-Z0-9_-]{3,20}$/.test(candidate)) {
-                    username = candidate;
+            if (!username) {
+                const roomName = room.shadowRoot.querySelector('.room-name') ||
+                                 room.shadowRoot.querySelector('[class*="room-name"]');
+                if (roomName) {
+                    const candidate = roomName.textContent?.trim();
+                    if (candidate && /^[a-zA-Z0-9_-]{3,20}$/.test(candidate)) {
+                        username = candidate;
+                        clickable = room.shadowRoot.querySelector('a') || room;
+                    }
+                }
+            }
+
+            // Fallback: deep text content for username
+            if (!username) {
+                const deepText = getDeepTextContent(room);
+                const chatMatch = deepText.match(/Direct chat with (\S+)/i);
+                if (chatMatch) {
+                    username = chatMatch[1];
+                    clickable = room.shadowRoot.querySelector('a') || room;
+                }
+            }
+        } else {
+            // No shadow root - try direct DOM
+            const ariaLabel = room.getAttribute('aria-label') || '';
+            const match = ariaLabel.match(/Direct chat with (\S+)/i);
+            if (match) {
+                username = match[1];
+                clickable = room;
+            }
+            if (!username) {
+                const text = room.textContent?.trim() || '';
+                const chatMatch = text.match(/Direct chat with (\S+)/i);
+                if (chatMatch) {
+                    username = chatMatch[1];
+                    clickable = room;
                 }
             }
         }
 
-        if (username) {
-            rooms.push({ element: chatLink, username });
+        if (username && clickable && !seen.has(username.toLowerCase())) {
+            seen.add(username.toLowerCase());
+            rooms.push({ element: clickable, roomElement: room, username });
         }
     }
 
+    // Strategy 2: Deep search all shadow DOMs for chat room links
+    if (rooms.length === 0) {
+        console.log('[BulkSync] No rs-rooms-nav-room found, trying deep search...');
+
+        // Look for any chat sidebar navigation
+        const navSelectors = [
+            'rs-rooms-nav',
+            '[class*="rooms-nav"]',
+            '[class*="RoomsList"]',
+            '[class*="conversation-list"]',
+            '[class*="chat-list"]',
+            '[role="navigation"]',
+            '[role="list"]'
+        ];
+
+        let sidebarContainer = null;
+        for (const sel of navSelectors) {
+            sidebarContainer = document.querySelector(sel) || querySelectorOneDeep(sel);
+            if (sidebarContainer) {
+                console.log(`[BulkSync] Found sidebar container via: ${sel}`);
+                break;
+            }
+        }
+
+        if (sidebarContainer) {
+            // Find all clickable items that look like chat entries
+            const clickables = querySelectorDeep('a, [role="listitem"], [role="option"]', sidebarContainer);
+            console.log(`[BulkSync] Found ${clickables.length} clickable items in sidebar`);
+
+            for (const el of clickables) {
+                const ariaLabel = (el.getAttribute('aria-label') || '');
+                const text = (el.textContent || '').trim();
+                const fullText = ariaLabel || text;
+
+                const match = fullText.match(/Direct chat with (\S+)/i);
+                if (match) {
+                    const uname = match[1];
+                    if (!seen.has(uname.toLowerCase())) {
+                        seen.add(uname.toLowerCase());
+                        rooms.push({ element: el, username: uname });
+                    }
+                    continue;
+                }
+
+                // Try to extract a username-like string from short text
+                if (text && /^[a-zA-Z0-9_-]{3,20}$/.test(text) && !seen.has(text.toLowerCase())) {
+                    seen.add(text.toLowerCase());
+                    rooms.push({ element: el, username: text });
+                }
+            }
+        }
+    }
+
+    // Strategy 3: If still nothing, try to find any clickable with "Direct chat" anywhere
+    if (rooms.length === 0) {
+        console.log('[BulkSync] Trying broadest deep search...');
+        const allClickables = querySelectorDeep('a[aria-label], [role="listitem"], [role="option"]');
+        for (const el of allClickables) {
+            const ariaLabel = (el.getAttribute('aria-label') || '');
+            const match = ariaLabel.match(/Direct chat with (\S+)/i);
+            if (match) {
+                const uname = match[1];
+                if (!seen.has(uname.toLowerCase())) {
+                    seen.add(uname.toLowerCase());
+                    rooms.push({ element: el, username: uname });
+                }
+            }
+        }
+    }
+
+    console.log(`[BulkSync] Total rooms found: ${rooms.length}`, rooms.map(r => r.username));
     return rooms;
 }
 
 // Wait for chat messages to load after clicking a sidebar entry
-async function waitForChatLoad(expectedUsername, timeout = 8000) {
+async function waitForChatLoad(expectedUsername, timeout = 3000) {
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
-        // Check if the chat room has loaded with messages
+        // Check multiple container selectors
         const chatContainer = document.querySelector('rs-room') ||
-                             querySelectorOneDeep('rs-room');
+                             querySelectorOneDeep('rs-room') ||
+                             document.querySelector('[data-testid="chat-room"]') ||
+                             querySelectorOneDeep('[class*="ChatRoom"]');
 
         if (chatContainer) {
-            // Look for message elements
-            const messageEls = querySelectorDeep('rs-timeline-event', chatContainer);
-            if (messageEls && messageEls.length > 0) {
-                // Additional short delay to let last messages render
-                await new Promise(r => setTimeout(r, 500));
-                return true;
-            }
-
-            // Fallback: check for any listitem or article roles
-            const fallbackEls = querySelectorDeep('[role="listitem"], [role="article"]', chatContainer);
-            if (fallbackEls && fallbackEls.length > 0) {
-                await new Promise(r => setTimeout(r, 500));
-                return true;
+            // Look for message elements with multiple selectors
+            const messageSelectors = ['rs-timeline-event', 'rs-text-message', '[role="listitem"]', '[role="article"]', '[class*="mx_EventTile"]', '[class*="message"]'];
+            for (const sel of messageSelectors) {
+                const els = querySelectorDeep(sel, chatContainer);
+                if (els && els.length > 0) {
+                    await new Promise(r => setTimeout(r, 300));
+                    return true;
+                }
             }
         }
 
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
     }
 
     // Timeout: proceed anyway (extractChatConversations will handle empty case)
-    console.warn(`Chat load timeout for ${expectedUsername}, proceeding anyway`);
+    console.warn(`[BulkSync] Chat load timeout for ${expectedUsername}, proceeding anyway`);
     return false;
 }
 
@@ -1515,8 +1619,12 @@ async function syncAllChats() {
         return;
     }
 
+    console.log('[BulkSync] syncAllChats called');
+    console.log('[BulkSync] isOnChatPage:', isOnChatPage());
+    console.log('[BulkSync] URL:', window.location.href);
+
     if (!isOnChatPage()) {
-        console.log('Not on chat page, cannot sync all chats');
+        console.log('[BulkSync] Not on chat page, cannot sync all chats');
         safeSendMessage({
             action: 'BULK_SYNC_PROGRESS',
             data: { status: 'error', error: 'Please navigate to Reddit Chat first' }
@@ -1528,10 +1636,28 @@ async function syncAllChats() {
     bulkSyncCancelled = false;
 
     const currentUser = getCurrentUsername();
+    console.log('[BulkSync] Current user:', currentUser);
+
+    // Debug: log what DOM elements exist
+    console.log('[BulkSync] rs-rooms-nav-room count:', document.querySelectorAll('rs-rooms-nav-room').length);
+    console.log('[BulkSync] rs-rooms-nav count:', document.querySelectorAll('rs-rooms-nav').length);
+    const allShadowHosts = [];
+    document.querySelectorAll('*').forEach(el => { if (el.shadowRoot) allShadowHosts.push(el.tagName.toLowerCase()); });
+    console.log('[BulkSync] Elements with shadow roots:', [...new Set(allShadowHosts)]);
 
     // Get all rooms from sidebar
     const rooms = getAllSidebarRooms();
     const total = rooms.length;
+
+    if (total === 0) {
+        console.log('[BulkSync] No rooms found in sidebar. Aborting.');
+        bulkSyncActive = false;
+        safeSendMessage({
+            action: 'BULK_SYNC_PROGRESS',
+            data: { current: 0, total: 0, synced: 0, skipped: 0, failed: 0, currentUser: '', status: 'completed' }
+        });
+        return;
+    }
 
     bulkSyncProgress = { current: 0, total, synced: 0, skipped: 0, failed: 0, currentUser: '' };
 
@@ -1636,7 +1762,7 @@ async function syncAllChats() {
 
         // Rate limiting: wait between chats
         if (i < rooms.length - 1 && !bulkSyncCancelled) {
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 1000));
         }
     }
 
@@ -2350,6 +2476,12 @@ async function executeTypeMessage(text) {
 
         // Type the message
         await simulateTyping(input, text);
+
+        // Abort if automation was stopped during typing
+        if (!isAutomationRunning) {
+            console.log('⛔ Automation stopped during typing, aborting send');
+            return { success: false, error: 'Automation stopped' };
+        }
 
         // Find send button
         const findSendButton = () => {
@@ -3182,9 +3314,9 @@ function renderSubredditInfo(data, container) {
             shadowRoot.appendChild(style);
         }
 
-        // Scroll to load 28 posts first
-        console.log('Scrolling to load 28 posts...');
-        await scrollToLoadPosts(28);
+        // Scroll to load 50 posts first
+        console.log('Scrolling to load 50 posts...');
+        await scrollToLoadPosts(50);
 
         // Scroll back to top after loading posts
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3380,6 +3512,7 @@ function renderRunningState(status) {
     `;
 
     shadowRoot.getElementById('stop-auto-btn').addEventListener('click', () => {
+        isAutomationRunning = false;
         chrome.runtime.sendMessage({ action: 'STOP_AUTOMATION' }, () => {
             showToast('Automation stopped', 'info');
             checkPageStatus();
@@ -3885,11 +4018,12 @@ function formatCategory(category) {
 // --- Extraction Logic ---
 
 // Scroll to load more posts (scrolls past 28 posts to trigger infinite scroll)
-async function scrollToLoadPosts(targetPostCount = 28) {
+async function scrollToLoadPosts(targetPostCount = 50) {
     return new Promise((resolve) => {
         let lastPostCount = 0;
+        let staleCount = 0;
         let scrollAttempts = 0;
-        const maxScrollAttempts = 15; // Prevent infinite scrolling
+        const maxScrollAttempts = 30;
 
         const scrollInterval = setInterval(() => {
             const currentPosts = document.querySelectorAll('shreddit-post');
@@ -3897,9 +4031,16 @@ async function scrollToLoadPosts(targetPostCount = 28) {
 
             console.log(`Scroll attempt ${scrollAttempts + 1}: Found ${currentPostCount} posts`);
 
-            // If we have enough posts or no new posts loaded after scrolling, stop
+            // Track consecutive scrolls with no new posts
+            if (currentPostCount === lastPostCount) {
+                staleCount++;
+            } else {
+                staleCount = 0;
+            }
+
+            // Stop if target reached, stale for 5 attempts, or max attempts hit
             if (currentPostCount >= targetPostCount ||
-                (scrollAttempts > 3 && currentPostCount === lastPostCount) ||
+                staleCount >= 5 ||
                 scrollAttempts >= maxScrollAttempts) {
                 clearInterval(scrollInterval);
                 console.log(`Scrolling complete. Total posts found: ${currentPostCount}`);
@@ -3915,7 +4056,11 @@ async function scrollToLoadPosts(targetPostCount = 28) {
                 top: window.innerHeight * 2,
                 behavior: 'smooth'
             });
-        }, 1000); // Wait 1 second between scrolls for posts to load
+            // Also scroll to absolute bottom as fallback for Reddit's infinite scroll
+            setTimeout(() => {
+                window.scrollTo(0, document.body.scrollHeight);
+            }, 500);
+        }, 1500);
     });
 }
 
@@ -3938,8 +4083,8 @@ async function extractSubredditDataWithScroll() {
     const match = url.match(/\/r\/([^/]+)\/?(?:$|hot|new|top|rising)/);
 
     if (match) {
-        // Scroll to load at least 28 posts
-        await scrollToLoadPosts(28);
+        // Scroll to load at least 50 posts
+        await scrollToLoadPosts(50);
 
         const posts = getPostLinks();
         if (posts.length > 0) {
@@ -4061,6 +4206,25 @@ async function simulateTyping(element, text) {
     element.focus();
     await new Promise(r => setTimeout(r, 300)); // Let focus settle
 
+    // Visibility-aware delay: skip delays when tab is hidden
+    // (browsers throttle setTimeout to ~1s+ in background tabs, freezing typing)
+    let isTabVisible = document.visibilityState === 'visible';
+    let resolveCurrentDelay = null;
+    const onVisChange = () => {
+        isTabVisible = document.visibilityState === 'visible';
+        if (!isTabVisible && resolveCurrentDelay) {
+            resolveCurrentDelay();
+        }
+    };
+    document.addEventListener('visibilitychange', onVisChange);
+    const typingDelay = (ms) => {
+        if (!isTabVisible) return Promise.resolve();
+        return new Promise(r => {
+            resolveCurrentDelay = r;
+            setTimeout(() => { resolveCurrentDelay = null; r(); }, ms);
+        });
+    };
+
     // Ensure cursor is positioned inside the element
     if (element.isContentEditable) {
         // Place cursor at end of contenteditable
@@ -4079,8 +4243,9 @@ async function simulateTyping(element, text) {
     let execCmdWorked = false;
     if (element.isContentEditable) {
         for (let i = 0; i < text.length; i++) {
+            if (!isAutomationRunning) break;
             document.execCommand('insertText', false, text[i]);
-            await new Promise(r => setTimeout(r, 80));
+            await typingDelay(80);
         }
         execCmdWorked = (element.textContent || '').length > 0;
         console.log('⌨️ execCommand contentEditable result:', execCmdWorked, 'text length:', (element.textContent || '').length);
@@ -4088,15 +4253,16 @@ async function simulateTyping(element, text) {
         // For textarea: try execCommand first
         const before = element.value || '';
         document.execCommand('insertText', false, text.charAt(0));
-        await new Promise(r => setTimeout(r, 50));
+        await typingDelay(50);
         execCmdWorked = (element.value || '') !== before;
 
         if (execCmdWorked) {
             // execCommand works for this textarea — type remaining chars
             console.log('⌨️ execCommand works for textarea, typing remaining chars...');
             for (let i = 1; i < text.length; i++) {
+                if (!isAutomationRunning) break;
                 document.execCommand('insertText', false, text[i]);
-                await new Promise(r => setTimeout(r, 80));
+                await typingDelay(80);
             }
         } else {
             console.log('⌨️ execCommand failed for textarea, using native setter approach...');
@@ -4109,6 +4275,7 @@ async function simulateTyping(element, text) {
 
             if (nativeSetter) {
                 for (let i = 0; i < text.length; i++) {
+                    if (!isAutomationRunning) break;
                     nativeSetter.call(element, (element.value || '') + text[i]);
                     element.dispatchEvent(new InputEvent('input', {
                         bubbles: true,
@@ -4116,11 +4283,12 @@ async function simulateTyping(element, text) {
                         inputType: 'insertText',
                         data: text[i]
                     }));
-                    await new Promise(r => setTimeout(r, 80));
+                    await typingDelay(80);
                 }
             } else {
                 // Strategy 3: Direct value + composed events
                 for (let i = 0; i < text.length; i++) {
+                    if (!isAutomationRunning) break;
                     element.value += text[i];
                     element.dispatchEvent(new InputEvent('input', {
                         bubbles: true,
@@ -4128,11 +4296,13 @@ async function simulateTyping(element, text) {
                         inputType: 'insertText',
                         data: text[i]
                     }));
-                    await new Promise(r => setTimeout(r, 80));
+                    await typingDelay(80);
                 }
             }
         }
     }
+
+    document.removeEventListener('visibilitychange', onVisChange);
 
     await new Promise(r => setTimeout(r, 300));
 

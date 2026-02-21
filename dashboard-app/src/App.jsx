@@ -63,7 +63,7 @@ function AppLayout() {
   };
 
   return (
-    <div className="min-h-screen flex bg-[#030303]">
+    <div className="h-screen flex bg-[#030303]">
       {/* Sidebar */}
       <aside className="w-64 bg-[#1a1a1b] text-white flex flex-col border-r border-[#343536]">
         <div className="p-4 border-b border-[#343536]">
