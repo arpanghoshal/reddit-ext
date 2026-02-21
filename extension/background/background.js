@@ -673,6 +673,12 @@ function notifyAutomationProgress(tabId) {
 async function startAutomation(tabId, data) {
     console.log(`Starting automation for user: ${data.targetUser}`);
 
+    // Detect current account so DM logging tags the correct account
+    if (!data.accountId) {
+        const detected = await cookies.detectCurrentAccount();
+        data.accountId = detected.accountId || null;
+    }
+
     activeTasks[tabId] = {
         status: AutomationState.NAVIGATING_PROFILE,
         data: data,
@@ -952,7 +958,13 @@ async function handleStepCompletion(tabId, result) {
             task.retries = 0;
 
             // Record DM sent for rate limiting
-            const currentAccountId = task.data.accountId || cookies.getCurrentAccountId() || null;
+            // Ensure account is detected (covers cold service worker / missing accountId)
+            let currentAccountId = task.data.accountId || cookies.getCurrentAccountId() || null;
+            if (!currentAccountId) {
+                const detected = await cookies.detectCurrentAccount();
+                currentAccountId = detected.accountId || null;
+                if (currentAccountId) task.data.accountId = currentAccountId;
+            }
             recordDMSent(currentAccountId);
 
             // Mark queue item as sent (replies and outreach)

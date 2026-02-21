@@ -450,6 +450,12 @@ export default function Inbox() {
       ]);
       setConversations(convList || []);
       setStats(convStats);
+      // Sync selected conversation with updated data so detail view reflects changes
+      setSelected(prev => {
+        if (!prev) return prev;
+        const updated = (convList || []).find(c => c.id === prev.id);
+        return updated || prev;
+      });
     } catch (err) {
       console.error('Failed to load conversations:', err);
     } finally {
