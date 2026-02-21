@@ -1697,6 +1697,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // Start bulk sync: find or create a Reddit chat tab, then tell it to sync
+    if (request.action === 'TRIGGER_START_BULK_SYNC') {
+        chrome.tabs.query({
+            url: ['*://*.reddit.com/chat/*', '*://chat.reddit.com/*']
+        }, (tabs) => {
+            if (tabs && tabs.length > 0) {
+                // Use existing chat tab
+                const chatTab = tabs[0];
+                chrome.tabs.update(chatTab.id, { active: true });
+                // Send start message after a short delay to ensure content script is ready
+                setTimeout(() => {
+                    chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
+                        console.warn('Failed to send START_BULK_SYNC to existing tab');
+                    });
+                }, 1000);
+            } else {
+                // Create new chat tab and wait for it to load
+                chrome.tabs.create({ url: 'https://www.reddit.com/chat/', active: true }, (newTab) => {
+                    // Wait for the tab to finish loading before sending the message
+                    const onUpdated = (tabId, changeInfo) => {
+                        if (tabId === newTab.id && changeInfo.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(onUpdated);
+                            // Extra delay for content script injection and chat sidebar to load
+                            setTimeout(() => {
+                                chrome.tabs.sendMessage(newTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
+                                    console.warn('Failed to send START_BULK_SYNC to new tab');
+                                });
+                            }, 3000);
+                        }
+                    };
+                    chrome.tabs.onUpdated.addListener(onUpdated);
+                    // Safety timeout: remove listener after 30s
+                    setTimeout(() => chrome.tabs.onUpdated.removeListener(onUpdated), 30000);
+                });
+            }
+        });
+        sendResponse({ success: true });
+        return true;
+    }
+
     // Bulk sync progress relay: forward from content script to dashboard tabs
     if (request.action === 'BULK_SYNC_PROGRESS') {
         chrome.tabs.query({

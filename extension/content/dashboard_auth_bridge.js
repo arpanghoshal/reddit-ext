@@ -64,6 +64,9 @@ window.addEventListener('message', async (event) => {
         bgAction = 'GET_OUTREACH_QUEUE_STATUS';
         break;
       // Bulk chat sync
+      case 'START_BULK_SYNC':
+        bgAction = 'TRIGGER_START_BULK_SYNC';
+        break;
       case 'CANCEL_BULK_SYNC':
         bgAction = 'TRIGGER_CANCEL_BULK_SYNC';
         break;

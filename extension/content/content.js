@@ -1814,6 +1814,10 @@ async function init() {
             // Show automation progress - auto-open sidebar
             ensureSidebarVisible();
             setTimeout(() => renderRunningState(request.status), 300);
+        } else if (request.action === 'START_BULK_SYNC') {
+            console.log('Received START_BULK_SYNC from background');
+            syncAllChats();
+            sendResponse({ success: true });
         } else if (request.action === 'CANCEL_BULK_SYNC') {
             bulkSyncCancelled = true;
             sendResponse({ success: true });
