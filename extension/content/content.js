@@ -16,6 +16,8 @@ function onContextInvalidated() {
     contextInvalidated = true;
     console.log('Reddit Automated DM: Extension updated, cleaning up...');
     stopChatSync();
+    bulkSyncActive = false;
+    bulkSyncCancelled = true;
     // Remove injected UI elements
     if (sidebarContainer) {
         sidebarContainer.remove();
@@ -54,6 +56,11 @@ let isSidebarInjecting = false; // Prevent race condition in sidebar injection
 let isAutomationRunning = false; // Track if automation is running to prevent sidebar toggle
 let lastSyncedMessages = new Set(); // Track already synced messages to avoid duplicates
 let chatSyncInterval = null; // Interval for periodic chat syncing
+
+// --- Bulk Sync State ---
+let bulkSyncActive = false;
+let bulkSyncCancelled = false;
+let bulkSyncProgress = { current: 0, total: 0, synced: 0, skipped: 0, failed: 0, currentUser: '' };
 
 // --- Chat Reply Sync ---
 function isOnChatPage() {
@@ -1094,6 +1101,10 @@ function extractMessagesFromDOM(participantUsername) {
             content = textEl.textContent?.trim() || '';
         }
 
+        // Strip leading timestamps that get merged into content from DOM extraction
+        // e.g. "1:51 PM hey i need your help" → "hey i need your help"
+        content = content.replace(/^\d{1,2}:\d{2}\s*(AM|PM)\s+/i, '').trim();
+
         // Debug: show what we found
         console.log(`  [${index}] Element: ${el.tagName}, hasShadow: ${!!el.shadowRoot}`);
         console.log(`  [${index}] Content preview: "${content?.substring(0, 60)}..."`);
@@ -1268,14 +1279,18 @@ function extractMessagesFromDOM(participantUsername) {
             if (line.toLowerCase() === participantUsername?.toLowerCase()) continue;
             if (currentUser && line.toLowerCase() === currentUser) continue;
 
+            // Strip leading timestamps merged into content
+            const cleanLine = line.replace(/^\d{1,2}:\d{2}\s*(AM|PM)\s+/i, '').trim();
+            if (!cleanLine || cleanLine.length < 2) continue;
+
             // This looks like a message — deduplicate
-            if (seenContent.has(line)) continue;
-            seenContent.add(line);
+            if (seenContent.has(cleanLine)) continue;
+            seenContent.add(cleanLine);
 
             const isOutbound = currentUser && lastAuthor === currentUser;
             messages.push({
                 direction: isOutbound ? 'outbound' : 'inbound',
-                content: line,
+                content: cleanLine,
                 sentAt: new Date().toISOString(),
                 isAiGenerated: false
             });
@@ -1418,6 +1433,236 @@ function stopChatSync() {
         clearInterval(chatSyncInterval);
         chatSyncInterval = null;
     }
+}
+
+// --- Bulk Sync All Chats ---
+
+// Enumerate all chat entries in the sidebar
+function getAllSidebarRooms() {
+    const rooms = [];
+    const roomElements = document.querySelectorAll('rs-rooms-nav-room');
+
+    for (const room of roomElements) {
+        if (!room.shadowRoot) continue;
+
+        const chatLink = room.shadowRoot.querySelector('a[aria-label]');
+        if (!chatLink) continue;
+
+        const ariaLabel = chatLink.getAttribute('aria-label') || '';
+        const match = ariaLabel.match(/Direct chat with (\S+)/i);
+
+        let username = null;
+        if (match) {
+            username = match[1];
+        } else {
+            // Fallback: try room-name text
+            const roomName = room.shadowRoot.querySelector('.room-name') ||
+                             room.shadowRoot.querySelector('[class*="room-name"]');
+            if (roomName) {
+                const candidate = roomName.textContent?.trim();
+                if (candidate && /^[a-zA-Z0-9_-]{3,20}$/.test(candidate)) {
+                    username = candidate;
+                }
+            }
+        }
+
+        if (username) {
+            rooms.push({ element: chatLink, username });
+        }
+    }
+
+    return rooms;
+}
+
+// Wait for chat messages to load after clicking a sidebar entry
+async function waitForChatLoad(expectedUsername, timeout = 8000) {
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+        // Check if the chat room has loaded with messages
+        const chatContainer = document.querySelector('rs-room') ||
+                             querySelectorOneDeep('rs-room');
+
+        if (chatContainer) {
+            // Look for message elements
+            const messageEls = querySelectorDeep('rs-timeline-event', chatContainer);
+            if (messageEls && messageEls.length > 0) {
+                // Additional short delay to let last messages render
+                await new Promise(r => setTimeout(r, 500));
+                return true;
+            }
+
+            // Fallback: check for any listitem or article roles
+            const fallbackEls = querySelectorDeep('[role="listitem"], [role="article"]', chatContainer);
+            if (fallbackEls && fallbackEls.length > 0) {
+                await new Promise(r => setTimeout(r, 500));
+                return true;
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Timeout: proceed anyway (extractChatConversations will handle empty case)
+    console.warn(`Chat load timeout for ${expectedUsername}, proceeding anyway`);
+    return false;
+}
+
+// Main bulk sync orchestration
+async function syncAllChats() {
+    if (bulkSyncActive) {
+        console.log('Bulk sync already in progress');
+        return;
+    }
+
+    if (!isOnChatPage()) {
+        console.log('Not on chat page, cannot sync all chats');
+        safeSendMessage({
+            action: 'BULK_SYNC_PROGRESS',
+            data: { status: 'error', error: 'Please navigate to Reddit Chat first' }
+        });
+        return;
+    }
+
+    bulkSyncActive = true;
+    bulkSyncCancelled = false;
+
+    const currentUser = getCurrentUsername();
+
+    // Get all rooms from sidebar
+    const rooms = getAllSidebarRooms();
+    const total = rooms.length;
+
+    bulkSyncProgress = { current: 0, total, synced: 0, skipped: 0, failed: 0, currentUser: '' };
+
+    // Report initial state
+    safeSendMessage({
+        action: 'BULK_SYNC_PROGRESS',
+        data: { ...bulkSyncProgress, status: 'started' }
+    });
+
+    console.log(`Starting bulk sync of ${total} chats...`);
+
+    let consecutiveAlreadySynced = 0;
+    const ALREADY_SYNCED_THRESHOLD = 3;
+
+    for (let i = 0; i < rooms.length; i++) {
+        if (bulkSyncCancelled) {
+            console.log('Bulk sync cancelled by user');
+            break;
+        }
+
+        const room = rooms[i];
+        bulkSyncProgress.current = i + 1;
+        bulkSyncProgress.currentUser = room.username;
+
+        // Report progress
+        safeSendMessage({
+            action: 'BULK_SYNC_PROGRESS',
+            data: { ...bulkSyncProgress, status: 'syncing' }
+        });
+
+        // Skip if participant is self
+        if (currentUser && room.username.toLowerCase() === currentUser.toLowerCase()) {
+            bulkSyncProgress.skipped++;
+            continue;
+        }
+
+        try {
+            // Click the room to open it
+            room.element.click();
+
+            // Wait for the chat to load
+            await waitForChatLoad(room.username);
+
+            // Extract conversations using existing function
+            const conversations = extractChatConversations();
+
+            if (conversations.length === 0 || conversations[0].messages.length === 0) {
+                console.log(`No messages found for ${room.username}, skipping`);
+                bulkSyncProgress.skipped++;
+                continue;
+            }
+
+            const conv = conversations[0];
+
+            // Sync to backend via background script (with response callback)
+            const response = await new Promise((resolve, reject) => {
+                if (!isContextValid()) {
+                    reject(new Error('Extension context invalidated'));
+                    return;
+                }
+                try {
+                    chrome.runtime.sendMessage({
+                        action: 'SYNC_CHAT_MESSAGES',
+                        data: {
+                            participantUsername: conv.participantUsername,
+                            messages: conv.messages
+                        }
+                    }, (resp) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(resp);
+                        }
+                    });
+                } catch (e) {
+                    reject(e);
+                }
+            });
+
+            // Check if already synced via _syncMeta from backend
+            const syncMeta = response?.data?._syncMeta;
+            if (syncMeta?.alreadySynced) {
+                console.log(`Chat with ${room.username} already synced`);
+                bulkSyncProgress.skipped++;
+                consecutiveAlreadySynced++;
+
+                if (consecutiveAlreadySynced >= ALREADY_SYNCED_THRESHOLD) {
+                    console.log(`${ALREADY_SYNCED_THRESHOLD} consecutive already-synced chats, stopping`);
+                    break;
+                }
+            } else {
+                console.log(`Synced ${syncMeta?.addedCount || '?'} new messages for ${room.username}`);
+                bulkSyncProgress.synced++;
+                consecutiveAlreadySynced = 0; // Reset counter when new data found
+            }
+
+        } catch (err) {
+            console.error(`Failed to sync chat with ${room.username}:`, err);
+            bulkSyncProgress.failed++;
+            // Don't stop on individual failures, continue to next
+        }
+
+        // Rate limiting: wait between chats
+        if (i < rooms.length - 1 && !bulkSyncCancelled) {
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+
+    bulkSyncActive = false;
+
+    // Report completion
+    safeSendMessage({
+        action: 'BULK_SYNC_PROGRESS',
+        data: { ...bulkSyncProgress, status: 'completed' }
+    });
+
+    console.log('Bulk sync completed:', bulkSyncProgress);
+}
+
+// Detect #__rdm_sync_all in URL hash (triggered by dashboard Sync Chats button)
+function checkBulkSyncInstructions() {
+    const hash = window.location.hash;
+    if (!hash || !hash.startsWith('#__rdm_sync_all')) return;
+
+    // Clean the hash from URL
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+
+    console.log('Bulk sync detected from dashboard');
+
+    // Delay to ensure chat page is fully loaded
+    setTimeout(() => syncAllChats(), 3000);
 }
 
 // --- Direct Send from Dashboard ---
@@ -1569,6 +1814,9 @@ async function init() {
             // Show automation progress - auto-open sidebar
             ensureSidebarVisible();
             setTimeout(() => renderRunningState(request.status), 300);
+        } else if (request.action === 'CANCEL_BULK_SYNC') {
+            bulkSyncCancelled = true;
+            sendResponse({ success: true });
         }
     });
 
@@ -1577,6 +1825,9 @@ async function init() {
 
     // Check for cookie capture instructions from dashboard (via URL hash)
     checkCookieCaptureInstructions();
+
+    // Check for bulk sync instructions from dashboard (via URL hash)
+    checkBulkSyncInstructions();
 
     // Check automation status on load
     chrome.runtime.sendMessage({ action: 'GET_AUTOMATION_STATUS' }, (status) => {

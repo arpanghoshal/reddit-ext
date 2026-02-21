@@ -587,6 +587,17 @@ export function triggerExtensionSend(username, message, queueItemId, conversatio
     window.open(url, '_blank');
 }
 
+// Bulk Sync All Chats
+// Opens Reddit chat page with hash trigger for the extension to sync all conversations.
+export function triggerBulkSync() {
+    window.open('https://www.reddit.com/chat/#__rdm_sync_all', '_blank');
+}
+
+// Cancel Bulk Sync via extension bridge
+export function cancelBulkSync() {
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'CANCEL_BULK_SYNC', payload: {} }, '*');
+}
+
 // ============================================================================
 // Automation Stats & Extension Communication
 // ============================================================================

@@ -1670,6 +1670,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (syncData && syncData.participantUsername && syncData.messages) {
             // Auto-detect current logged-in account and tag the sync
             cookies.detectCurrentAccount().then(detected => {
+                // Guard: participant must not be the same as the logged-in account
+                // This happens when getCurrentUsername() fails in the content script
+                // and the user's own name gets picked up as the "participant"
+                if (detected.username &&
+                    syncData.participantUsername.toLowerCase() === detected.username.toLowerCase()) {
+                    console.warn(`⚠️ Skipping sync: participant "${syncData.participantUsername}" is the logged-in account`);
+                    return { skipped: true, reason: 'participant is self' };
+                }
                 return api.syncConversation({
                     participantUsername: syncData.participantUsername,
                     messages: syncData.messages,
@@ -1686,6 +1694,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return true;
         }
         sendResponse({ success: false, error: 'Invalid sync data' });
+        return true;
+    }
+
+    // Bulk sync progress relay: forward from content script to dashboard tabs
+    if (request.action === 'BULK_SYNC_PROGRESS') {
+        chrome.tabs.query({
+            url: ['https://reddit-ext-dashboard.vercel.app/*', 'http://localhost:5173/*', 'http://localhost:3000/*']
+        }, (tabs) => {
+            for (const tab of tabs) {
+                chrome.tabs.sendMessage(tab.id, {
+                    action: 'BULK_SYNC_PROGRESS',
+                    data: request.data
+                }).catch(() => {}); // Ignore if tab not listening
+            }
+        });
+        return;
+    }
+
+    // Cancel bulk sync: forward from dashboard to Reddit chat tabs
+    if (request.action === 'TRIGGER_CANCEL_BULK_SYNC') {
+        chrome.tabs.query({
+            url: ['*://*.reddit.com/chat/*', '*://chat.reddit.com/*']
+        }, (tabs) => {
+            for (const tab of tabs) {
+                chrome.tabs.sendMessage(tab.id, { action: 'CANCEL_BULK_SYNC' }).catch(() => {});
+            }
+        });
+        sendResponse({ success: true });
         return true;
     }
 

@@ -429,6 +429,8 @@ export default function Inbox() {
   const [accountFilter, setAccountFilter] = useState('all');
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncState, setSyncState] = useState(null); // null | 'syncing' | 'completed'
+  const [syncProgress, setSyncProgress] = useState(null);
 
   // Load accounts list for filter dropdown
   useEffect(() => {
@@ -468,6 +470,41 @@ export default function Inbox() {
     };
   }, [filter, accountFilter]);
 
+  // Listen for bulk sync progress from extension bridge
+  useEffect(() => {
+    const handleSyncProgress = (event) => {
+      if (event.data?.type === 'RDM_SYNC_PROGRESS' && event.data.action === 'BULK_SYNC_PROGRESS') {
+        const data = event.data.data;
+        setSyncProgress(data);
+        if (data.status === 'completed') {
+          setSyncState('completed');
+          loadData(); // Refresh conversations on completion
+        } else if (data.status === 'started' || data.status === 'syncing') {
+          setSyncState('syncing');
+          // Refresh periodically during sync (every 3 chats)
+          if (data.synced > 0 && data.current % 3 === 0) loadData();
+        } else if (data.status === 'error') {
+          setSyncState(null);
+          setSyncProgress(null);
+        }
+      }
+    };
+    window.addEventListener('message', handleSyncProgress);
+    return () => window.removeEventListener('message', handleSyncProgress);
+  }, []);
+
+  const handleSyncAllChats = () => {
+    setSyncState('syncing');
+    setSyncProgress(null);
+    api.triggerBulkSync();
+  };
+
+  const handleCancelSync = () => {
+    api.cancelBulkSync();
+    setSyncState(null);
+    setSyncProgress(null);
+  };
+
   const filters = [
     { value: 'all', label: 'All' },
     { value: 'active', label: 'Active', count: stats?.active },
@@ -482,11 +519,73 @@ export default function Inbox() {
       {/* Left Panel - List */}
       <div className="w-80 border-r border-[#23232a] flex flex-col bg-[#141416]">
         <div className="p-4 border-b border-[#23232a]">
-          <h1 className="text-xl font-bold text-white">Inbox</h1>
-          <p className="text-sm text-[#71717a]">
-            {stats?.total || 0} conversations, {stats?.withReplies || 0} with replies
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-xl font-bold text-white">Inbox</h1>
+              <p className="text-sm text-[#71717a]">
+                {stats?.total || 0} conversations, {stats?.withReplies || 0} with replies
+              </p>
+            </div>
+            <button
+              onClick={handleSyncAllChats}
+              disabled={syncState === 'syncing'}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                syncState === 'syncing'
+                  ? 'bg-orange-500/15 text-orange-400 cursor-wait'
+                  : 'bg-[#ff4500]/15 text-[#ff4500] hover:bg-[#ff4500]/25'
+              }`}
+            >
+              <RefreshCw size={14} className={syncState === 'syncing' ? 'animate-spin' : ''} />
+              {syncState === 'syncing' ? 'Syncing...' : 'Sync Chats'}
+            </button>
+          </div>
         </div>
+
+        {/* Sync Progress Banner */}
+        {syncState === 'syncing' && syncProgress && (
+          <div className="px-4 py-2 border-b border-[#23232a] bg-orange-500/5">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-orange-400">
+                Syncing {syncProgress.currentUser ? `u/${syncProgress.currentUser}` : '...'}{' '}
+                ({syncProgress.current}/{syncProgress.total})
+              </span>
+              <button
+                onClick={handleCancelSync}
+                className="text-xs text-red-400 hover:text-red-300"
+              >
+                Cancel
+              </button>
+            </div>
+            <div className="mt-1 h-1 bg-[#23232a] rounded-full overflow-hidden">
+              <div
+                className="h-full bg-orange-500 transition-all duration-300"
+                style={{ width: `${syncProgress.total ? (syncProgress.current / syncProgress.total) * 100 : 0}%` }}
+              />
+            </div>
+            <div className="flex gap-3 mt-1 text-xs text-[#71717a]">
+              <span>{syncProgress.synced} synced</span>
+              <span>{syncProgress.skipped} up-to-date</span>
+              {syncProgress.failed > 0 && <span className="text-red-400">{syncProgress.failed} failed</span>}
+            </div>
+          </div>
+        )}
+
+        {syncState === 'completed' && syncProgress && (
+          <div className="px-4 py-2 border-b border-[#23232a] bg-green-500/5">
+            <div className="flex items-center justify-between text-sm text-green-400">
+              <span>
+                Sync complete: {syncProgress.synced} updated, {syncProgress.skipped} up-to-date
+                {syncProgress.failed > 0 && `, ${syncProgress.failed} failed`}
+              </span>
+              <button
+                onClick={() => { setSyncState(null); setSyncProgress(null); }}
+                className="text-xs text-[#71717a] hover:text-white"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="p-2 border-b border-[#23232a] flex gap-1 overflow-x-auto">

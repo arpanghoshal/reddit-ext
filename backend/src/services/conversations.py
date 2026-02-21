@@ -419,6 +419,13 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
         print("Missing participant username")
         return None
 
+    # Guard: participant must not be the same as the sending account
+    # This happens when the extension's getCurrentUsername() fails and
+    # the logged-in user's own name gets detected as the chat "participant"
+    if account_username and participant_username.lower() == account_username.lower():
+        print(f"Skipping sync: participant '{participant_username}' is the same as account '{account_username}'")
+        return None
+
     # If we have a username but no account_id, try to resolve or auto-create
     if not account_id and account_username:
         client = get_client()
@@ -477,7 +484,15 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
 
     # Early exit if no messages to sync
     if not messages:
-        return await get_conversation(conversation["id"], team_id=team_id)
+        conv = await get_conversation(conversation["id"], team_id=team_id)
+        if conv:
+            conv["_syncMeta"] = {
+                "addedCount": 0,
+                "receivedCount": 0,
+                "existingCount": 0,
+                "alreadySynced": True
+            }
+        return conv
 
     # Build fingerprint set of existing messages
     existing_messages = await get_messages(conversation["id"], team_id=team_id)
@@ -534,8 +549,16 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
             "totalMessages": len(all_messages)
         }, team_id=team_id)
 
-    # Return updated conversation
-    return await get_conversation(conversation["id"], team_id=team_id)
+    # Return updated conversation with sync metadata
+    conv = await get_conversation(conversation["id"], team_id=team_id)
+    if conv:
+        conv["_syncMeta"] = {
+            "addedCount": added_count,
+            "receivedCount": len(messages),
+            "existingCount": len(existing_messages),
+            "alreadySynced": added_count == 0 and len(messages) > 0
+        }
+    return conv
 
 
 async def get_conversation_stats(team_id: Optional[str] = None) -> Dict[str, Any]:

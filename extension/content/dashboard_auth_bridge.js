@@ -63,6 +63,10 @@ window.addEventListener('message', async (event) => {
       case 'GET_OUTREACH_STATUS':
         bgAction = 'GET_OUTREACH_QUEUE_STATUS';
         break;
+      // Bulk chat sync
+      case 'CANCEL_BULK_SYNC':
+        bgAction = 'TRIGGER_CANCEL_BULK_SYNC';
+        break;
       default:
         return;
     }
@@ -115,5 +119,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     setTimeout(announceReady, 300);
     setTimeout(announceReady, 800);
     sendResponse({ ok: true });
+  }
+
+  // Relay bulk sync progress from background to dashboard page
+  if (msg.action === 'BULK_SYNC_PROGRESS') {
+    window.postMessage({
+      type: 'RDM_SYNC_PROGRESS',
+      action: msg.action,
+      data: msg.data
+    }, '*');
   }
 });
