@@ -743,8 +743,8 @@ async function processNextStep(tabId) {
                 extLogInfo('Post loaded. Extracting data and generating DM...', { component: 'background' });
                 task.status = AutomationState.GENERATING_DM;
 
-                // Safety timeout: if DM generation takes too long (30s), fail the step
-                setTrackedTimeout(tabId, () => {
+                // Safety timeout: if classification + DM generation takes too long, fail the step
+                let dmGenSafetyTimeout = setTrackedTimeout(tabId, () => {
                     if (activeTasks[tabId]?.status === AutomationState.GENERATING_DM) {
                         extLogWarn('DM generation timed out after 30s', { component: 'background' });
                         handleStepCompletion(tabId, { success: false, error: 'DM generation timed out' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
@@ -809,6 +809,16 @@ async function processNextStep(tabId) {
                         } catch (classifyErr) {
                             extLogWarn(`Classification failed, continuing without: ${classifyErr?.message}`, { component: 'background', errorName: classifyErr?.name, errorStack: classifyErr?.stack });
                         }
+
+                        // Reset safety timeout: classification done, give DM generation its own full 30s
+                        clearTimeout(dmGenSafetyTimeout);
+                        if (pendingTimeouts[tabId]) pendingTimeouts[tabId].delete(dmGenSafetyTimeout);
+                        dmGenSafetyTimeout = setTrackedTimeout(tabId, () => {
+                            if (activeTasks[tabId]?.status === AutomationState.GENERATING_DM) {
+                                extLogWarn('DM generation timed out after 30s', { component: 'background' });
+                                handleStepCompletion(tabId, { success: false, error: 'DM generation timed out' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
+                            }
+                        }, 30000);
 
                         // Abort if task was stopped during classification
                         if (!activeTasks[tabId]) {
@@ -1073,23 +1083,31 @@ async function handleStepCompletion(tabId, result) {
                 // Check rate limit before continuing
                 canSendDM(currentAccountId).then(result => {
                     if (!result.allowed) {
-                        extLogInfo('Daily limit reached, stopping automation', { component: 'background' });
-                        chrome.tabs.sendMessage(tabId, {
-                            action: 'SHOW_TOAST',
-                            message: result.reason,
-                            type: 'warning'
-                        }).catch(() => {});
+                        const reason = (result.reason || '').toLowerCase();
+                        const isCooldown = reason.includes('cooldown');
 
-                        queue.isActive = false;
-                        if (queue.sessionId) {
-                            api.updateAutomationSession(queue.sessionId, {
-                                status: 'stopped',
-                                processedCount: queue.currentIndex + 1
-                            }).catch(e => extLogError(`Failed to update session: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }));
+                        if (!isCooldown) {
+                            // Hard stop: daily limit, suspended, paused, shadowbanned
+                            extLogInfo(`Cannot send more DMs: ${result.reason}, stopping automation`, { component: 'background' });
+                            chrome.tabs.sendMessage(tabId, {
+                                action: 'SHOW_TOAST',
+                                message: result.reason,
+                                type: 'warning'
+                            }).catch(() => {});
+
+                            queue.isActive = false;
+                            if (queue.sessionId) {
+                                api.updateAutomationSession(queue.sessionId, {
+                                    status: 'stopped',
+                                    processedCount: queue.currentIndex + 1
+                                }).catch(e => extLogError(`Failed to update session: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }));
+                            }
+                            delete activeTasks[tabId];
+                            delete subredditQueues[tabId];
+                            return;
                         }
-                        delete activeTasks[tabId];
-                        delete subredditQueues[tabId];
-                        return;
+                        // Soft stop: cooldown active, fall through to delay path
+                        extLogInfo('Cooldown active, will continue after delay', { component: 'background' });
                     }
 
                     // Get configurable delay
