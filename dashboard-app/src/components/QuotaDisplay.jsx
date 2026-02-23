@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, XCircle, BarChart2, Users, MessageSquare } from 'lucide-react';
 import { getQuotaStatus } from '../api/client';
+import { logError } from '../lib/logger';
 
 /**
  * QuotaDisplay Component
@@ -20,7 +21,7 @@ export default function QuotaDisplay({ compact = false }) {
       const data = await getQuotaStatus();
       setQuotaStatus(data);
     } catch (err) {
-      console.error('Error fetching quota status:', err);
+      logError('Error fetching quota status', { component: 'QuotaDisplay', errorName: err?.name, errorStack: err?.stack });
       setError(err.message);
     } finally {
       setLoading(false);

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { CheckCircle, AlertCircle, Users, LogIn, Eye, EyeOff } from 'lucide-react';
+import { logError } from '../lib/logger';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
@@ -47,7 +48,7 @@ export default function AcceptInvite() {
             });
 
             if (sessionError) {
-              console.error('Failed to set session from hash:', sessionError);
+              logError('Failed to set session from hash', { component: 'AcceptInvite', errorName: sessionError?.name, errorStack: sessionError?.stack });
               setError('Failed to authenticate from email link. Please try logging in.');
             }
 
@@ -57,7 +58,7 @@ export default function AcceptInvite() {
               window.location.pathname + window.location.search
             );
           } catch (err) {
-            console.error('Error processing hash tokens:', err);
+            logError('Error processing hash tokens', { component: 'AcceptInvite', errorName: err?.name, errorStack: err?.stack });
             setError('Failed to process authentication. Please try logging in.');
           }
         }

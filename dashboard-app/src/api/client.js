@@ -4,8 +4,14 @@
  */
 
 import { supabase } from '../lib/supabase';
+import { logError } from '../lib/logger';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
+// Generate a short request ID for cross-component correlation
+function generateRequestId() {
+    return Math.random().toString(36).substring(2, 10);
+}
 
 // Get API key from localStorage or environment (legacy, kept for backwards compatibility)
 function getApiKey() {
@@ -68,8 +74,11 @@ export async function apiRequest(endpoint, options = {}, _retried = false) {
     const teamId = getCurrentTeamId();
     const accessToken = await getAccessToken();
 
+    const requestId = generateRequestId();
+
     const headers = {
         'Content-Type': 'application/json',
+        'X-Request-ID': requestId,
         ...options.headers
     };
 
@@ -117,7 +126,13 @@ export async function apiRequest(endpoint, options = {}, _retried = false) {
 
         return await response.json();
     } catch (error) {
-        console.error(`API request failed: ${endpoint}`, error);
+        logError(`API request failed: ${endpoint}`, {
+            component: 'apiRequest',
+            requestId,
+            errorName: error.name,
+            errorStack: error.stack,
+            metadata: { endpoint, status: error.status },
+        });
         throw error;
     }
 }
@@ -575,6 +590,18 @@ export async function queueWatchLead(watchId, leadId, data) {
 
 export async function dismissWatchLead(watchId, leadId) {
     await apiRequest(`/discovery/watches/${watchId}/leads/${leadId}/dismiss`, { method: 'POST' });
+}
+
+// System Logs
+export async function getSystemLogs(filters = {}) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            params.append(key, value);
+        }
+    });
+    const qs = params.toString();
+    return apiRequest(`/logs${qs ? `?${qs}` : ''}`);
 }
 
 // Extension Direct Send

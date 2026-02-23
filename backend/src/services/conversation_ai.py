@@ -11,6 +11,9 @@ from supabase import create_client, Client
 from . import llm
 from . import intent_detection
 from . import user_analysis
+import logging
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -197,7 +200,7 @@ async def get_conversations_needing_reply(
 
         return needing_reply
     except Exception as e:
-        print(f"Error getting conversations needing reply: {e}")
+        logger.error(f"Error getting conversations needing reply: {e}")
         return []
 
 
@@ -382,7 +385,7 @@ async def close_conversation(conversation_id: str, reason: str = "closed") -> bo
         }).eq("id", conversation_id).execute()
         return True
     except Exception as e:
-        print(f"Error closing conversation: {e}")
+        logger.error(f"Error closing conversation: {e}")
         return False
 
 
@@ -499,7 +502,7 @@ async def get_conversations_needing_follow_up(
 
         return needing_follow_up
     except Exception as e:
-        print(f"Error getting follow-up conversations: {e}")
+        logger.error(f"Error getting follow-up conversations: {e}")
         return []
 
 
@@ -644,7 +647,7 @@ async def queue_follow_up(
 
         return True
     except Exception as e:
-        print(f"Error queuing follow-up: {e}")
+        logger.error(f"Error queuing follow-up: {e}")
         return False
 
 
@@ -727,7 +730,7 @@ async def get_prioritized_conversations(
 
         return prioritized[:limit]
     except Exception as e:
-        print(f"Error getting prioritized conversations: {e}")
+        logger.error(f"Error getting prioritized conversations: {e}")
         return []
 
 
@@ -785,5 +788,5 @@ async def get_conversation_summary(account_id: str = None) -> Dict[str, Any]:
             "hot_conversations": hot_count
         }
     except Exception as e:
-        print(f"Error getting conversation summary: {e}")
+        logger.error(f"Error getting conversation summary: {e}")
         return {"error": str(e)}

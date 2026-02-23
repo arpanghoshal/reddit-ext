@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MessageSquare, RefreshCw, Sparkles, Tag, ChevronRight, Send, Clock, Edit3, Check } from 'lucide-react';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 const STATUS_OPTIONS = ['active', 'interested', 'cold', 'closed', 'converted'];
 
@@ -99,7 +100,7 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       const data = await api.getConversation(conversation.id);
       setMessages(data.messages || []);
     } catch (err) {
-      console.error('Failed to load conversation:', err);
+      logError('Failed to load conversation', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     } finally {
       if (showSpinner) setLoading(false);
     }
@@ -111,7 +112,7 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       const pending = await api.getPendingReplyForConversation(conversation.id);
       setQueuedReply(pending);
     } catch (err) {
-      console.error('Failed to check queued reply:', err);
+      logError('Failed to check queued reply', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -121,7 +122,7 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       const reply = await api.getReplySuggestion(conversation.id);
       setSuggestion(reply);
     } catch (err) {
-      console.error('Failed to generate suggestion:', err);
+      logError('Failed to generate suggestion', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setGeneratingSuggestion(false);
     }
@@ -132,7 +133,7 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       await api.updateConversation(conversation.id, { accountId: accountId || null });
       onUpdate();
     } catch (err) {
-      console.error('Failed to assign account:', err);
+      logError('Failed to assign account', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -141,7 +142,7 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       await api.updateConversation(conversation.id, { status: newStatus });
       onStatusChange(conversation.id, newStatus);
     } catch (err) {
-      console.error('Failed to update status:', err);
+      logError('Failed to update status', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -184,7 +185,7 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       setSuggestion('');
       await checkQueuedReply();
     } catch (err) {
-      console.error('Failed to add to queue:', err);
+      logError('Failed to add to queue', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
       showToast('Failed to add to queue', 'error');
     } finally {
       setIsQueueing(false);
@@ -457,7 +458,7 @@ export default function Inbox() {
         return updated || prev;
       });
     } catch (err) {
-      console.error('Failed to load conversations:', err);
+      logError('Failed to load conversations', { component: 'Inbox', errorName: err?.name, errorStack: err?.stack });
     } finally {
       if (showSpinner) setLoading(false);
     }

@@ -3,8 +3,11 @@ Skipped Posts Service
 Read operations for skipped_posts table
 """
 
+import logging
 from typing import Optional, Dict, List, Any
 from .supabase_service import get_client
+
+logger = logging.getLogger(__name__)
 
 
 def _transform_from_db(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -61,7 +64,7 @@ async def get_skipped_posts(filters: Dict[str, Any] = None, team_id: Optional[st
 
         return [_transform_from_db(row) for row in (result.data or [])]
     except Exception as e:
-        print(f"Failed to get skipped posts: {e}")
+        logger.error(f"Failed to get skipped posts: {e}")
         return []
 
 
@@ -109,7 +112,7 @@ async def get_skip_stats(team_id: Optional[str] = None) -> Dict[str, Any]:
             "bySubreddit": top_subreddits
         }
     except Exception as e:
-        print(f"Failed to get skip stats: {e}")
+        logger.error(f"Failed to get skip stats: {e}")
         return {"total": 0, "byReason": {}, "bySubreddit": {}}
 
 
@@ -140,5 +143,5 @@ async def log_skipped_post(data: Dict[str, Any], team_id: Optional[str] = None) 
         client.table("skipped_posts").insert(db_data).execute()
         return True
     except Exception as e:
-        print(f"Failed to log skipped post: {e}")
+        logger.error(f"Failed to log skipped post: {e}")
         return False

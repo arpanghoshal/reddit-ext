@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, RefreshCw, Shield, AlertTriangle, Trash2, Settings } from 'lucide-react';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 const STATUS_COLORS = {
   active: 'bg-green-500/15 text-green-400',
@@ -31,7 +32,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
       await api.updateAccount(account.id, { warmupMode: !account.warmupMode });
       onUpdate();
     } catch (err) {
-      console.error('Failed to update warmup mode:', err);
+      logError('Failed to update warmup mode', { component: 'AccountCard', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setSaving(false);
     }
@@ -44,7 +45,7 @@ function AccountCard({ account, onCheckShadowban, onDelete, onUpdate }) {
       setEditing(false);
       onUpdate();
     } catch (err) {
-      console.error('Failed to update daily limit:', err);
+      logError('Failed to update daily limit', { component: 'AccountCard', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setSaving(false);
     }
@@ -211,7 +212,7 @@ function AddAccountModal({ isOpen, onClose, onAdd, onRefresh }) {
       setDailyLimit(50);
       onClose();
     } catch (err) {
-      console.error('Failed to add account:', err);
+      logError('Failed to add account', { component: 'AddAccountModal', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setLoading(false);
     }
@@ -400,7 +401,7 @@ export default function Accounts() {
       setAccounts(accountList || []);
       setRotationStatus(rotation);
     } catch (err) {
-      console.error('Failed to load accounts:', err);
+      logError('Failed to load accounts', { component: 'Accounts', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setLoading(false);
     }

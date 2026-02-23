@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { LayoutDashboard, Inbox as InboxIcon, ListChecks, Users, UserCircle, Shield, Settings as SettingsIcon, LogOut, BarChart2, ClipboardList, Search } from 'lucide-react';
+import { LayoutDashboard, Inbox as InboxIcon, ListChecks, Users, UserCircle, Shield, Settings as SettingsIcon, LogOut, BarChart2, ClipboardList, Search, Terminal } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { logError } from './lib/logger';
 import Dashboard from './pages/Dashboard';
 import Queue from './pages/Queue';
 import Inbox from './pages/Inbox';
@@ -14,7 +15,9 @@ import TeamAnalytics from './pages/TeamAnalytics';
 import AuditLog from './pages/AuditLog';
 import AcceptInvite from './pages/AcceptInvite';
 import Discovery from './pages/Discovery';
+import SystemLogs from './pages/SystemLogs';
 import TeamSwitcher from './components/TeamSwitcher';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -50,6 +53,7 @@ function AppLayout() {
     ...(!isPersonal ? [
       { to: '/analytics', icon: BarChart2, label: 'Analytics' },
       { to: '/audit-log', icon: ClipboardList, label: 'Audit Log' },
+      { to: '/system-logs', icon: Terminal, label: 'System Logs' },
     ] : []),
     { to: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
@@ -58,7 +62,7 @@ function AppLayout() {
     try {
       await signOut();
     } catch (err) {
-      console.error('Sign out error:', err);
+      logError('Sign out error', { component: 'App', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -130,6 +134,7 @@ function AppLayout() {
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/analytics" element={isPersonal ? <Navigate to="/" replace /> : <TeamAnalytics />} />
           <Route path="/audit-log" element={isPersonal ? <Navigate to="/" replace /> : <AuditLog />} />
+          <Route path="/system-logs" element={isPersonal ? <Navigate to="/" replace /> : <SystemLogs />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/team-settings" element={<TeamSettings />} />
         </Routes>
@@ -142,6 +147,7 @@ function AppLayout() {
 function App() {
   return (
     <BrowserRouter>
+      <ErrorBoundary>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -157,6 +163,7 @@ function App() {
           />
         </Routes>
       </AuthProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

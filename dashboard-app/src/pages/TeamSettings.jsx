@@ -16,6 +16,7 @@ import {
   AlertCircle,
   X,
 } from 'lucide-react';
+import { logError } from '../lib/logger';
 
 export default function TeamSettings() {
   const { user, teams, currentTeam, switchTeam, refreshTeams } = useAuth();
@@ -70,7 +71,7 @@ export default function TeamSettings() {
         }))
       );
     } catch (err) {
-      console.error('Error fetching members:', err);
+      logError('Error fetching members', { component: 'TeamSettings', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setLoading(false);
     }
@@ -83,7 +84,7 @@ export default function TeamSettings() {
       const { invitations: inviteList } = await apiRequest(`/teams/${currentTeam.id}/invitations`);
       setInvitations(inviteList || []);
     } catch (err) {
-      console.error('Error fetching invitations:', err);
+      logError('Error fetching invitations', { component: 'TeamSettings', errorName: err?.name, errorStack: err?.stack });
     }
   };
 

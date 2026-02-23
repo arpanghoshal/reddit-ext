@@ -6,11 +6,14 @@ Deep profile analysis for hyper-personalized messaging
 import os
 import re
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from collections import Counter
 import httpx
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -479,7 +482,7 @@ async def get_cached_profile(username: str) -> Optional[Dict[str, Any]]:
             "cached": True
         }
     except Exception as e:
-        print(f"Error fetching cached profile: {e}")
+        logger.error(f"Error fetching cached profile: {e}")
         return None
 
 
@@ -508,7 +511,7 @@ async def save_profile(username: str, profile: Dict[str, Any]) -> Optional[Dict[
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error saving profile: {e}")
+        logger.error(f"Error saving profile: {e}")
         return None
 
 
@@ -527,10 +530,10 @@ async def analyze_user(username: str, force_refresh: bool = False) -> Dict[str, 
     if not force_refresh:
         cached = await get_cached_profile(username)
         if cached:
-            print(f"Using cached profile for: {username}")
+            logger.debug(f"Using cached profile for: {username}")
             return cached
 
-    print(f"Analyzing user: {username}")
+    logger.info(f"Analyzing user: {username}")
 
     # Fetch user activity
     posts, comments = await asyncio.gather(

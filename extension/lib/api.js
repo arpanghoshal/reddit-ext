@@ -1,6 +1,8 @@
 // API Client for Reddit Automated DM Backend
 // All API calls go through the backend server
 
+import { extLogWarn, extLogError } from './logger.js';
+
 // Default timeout for API requests (15 seconds - allows for Railway cold starts)
 const DEFAULT_TIMEOUT = 15000;
 
@@ -256,7 +258,7 @@ async function apiRequest(endpoint, options = {}, retries = 0) {
             // Check if retryable
             if (retries < MAX_RETRIES && isRetryableError(null, response)) {
                 const delay = RETRY_DELAY_BASE * Math.pow(2, retries);
-                console.warn(`API request failed with ${response.status}, retrying in ${delay}ms...`);
+                extLogWarn(`API request failed with ${response.status}, retrying in ${delay}ms...`, { component: 'ext-api' });
                 await sleep(delay);
                 return apiRequest(endpoint, options, retries + 1);
             }
@@ -279,7 +281,7 @@ async function apiRequest(endpoint, options = {}, retries = 0) {
         if (error.name === 'AbortError') {
             if (retries < MAX_RETRIES) {
                 const delay = RETRY_DELAY_BASE * Math.pow(2, retries);
-                console.warn(`API request timed out, retrying in ${delay}ms...`);
+                extLogWarn(`API request timed out, retrying in ${delay}ms...`, { component: 'ext-api' });
                 await sleep(delay);
                 return apiRequest(endpoint, options, retries + 1);
             }
@@ -289,12 +291,12 @@ async function apiRequest(endpoint, options = {}, retries = 0) {
         // Handle network errors with retry
         if (error.name === 'TypeError' && retries < MAX_RETRIES) {
             const delay = RETRY_DELAY_BASE * Math.pow(2, retries);
-            console.warn(`Network error, retrying in ${delay}ms...`);
+            extLogWarn(`Network error, retrying in ${delay}ms...`, { component: 'ext-api' });
             await sleep(delay);
             return apiRequest(endpoint, options, retries + 1);
         }
 
-        console.error(`API request failed: ${endpoint}`, error);
+        extLogError(`API request failed: ${endpoint}`, { component: 'ext-api', errorName: error.name, errorStack: error.stack });
         throw error;
     }
 }

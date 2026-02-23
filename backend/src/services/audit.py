@@ -3,11 +3,14 @@ Team Audit Log Service
 Tracks all team actions for accountability and compliance
 """
 
+import logging
 import os
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 from fastapi import Request
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -84,7 +87,7 @@ async def log_action(
     """
     client = get_client()
     if not client:
-        print("Audit logging unavailable - Supabase not configured")
+        logger.warning("Audit logging unavailable - Supabase not configured")
         return None
 
     try:
@@ -114,7 +117,7 @@ async def log_action(
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error logging audit event: {e}")
+        logger.error(f"Error logging audit event: {e}")
         return None
 
 
@@ -172,7 +175,7 @@ async def get_audit_log(
         result = query.execute()
         return result.data or []
     except Exception as e:
-        print(f"Error fetching audit log: {e}")
+        logger.error(f"Error fetching audit log: {e}")
         return []
 
 
@@ -213,7 +216,7 @@ async def get_audit_summary(team_id: str, days: int = 7) -> Dict[str, Any]:
             "most_active_user": max(user_counts, key=user_counts.get) if user_counts else None
         }
     except Exception as e:
-        print(f"Error fetching audit summary: {e}")
+        logger.error(f"Error fetching audit summary: {e}")
         return {}
 
 
@@ -243,7 +246,7 @@ async def get_resource_history(
 
         return result.data or []
     except Exception as e:
-        print(f"Error fetching resource history: {e}")
+        logger.error(f"Error fetching resource history: {e}")
         return []
 
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, RefreshCw, X, ChevronDown, ChevronUp, MessageSquare, Send, ExternalLink, Clock, Users, TrendingUp, AlertTriangle, Flame, Thermometer, Snowflake, History, Play, Square, Zap, Wifi, WifiOff, ListChecks, Ban, Eye, EyeOff, Radar, Plus, Pause, Trash2, ArrowLeft, Calendar, BarChart3 } from 'lucide-react';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 // ============================================================================
 // Tier badge component
@@ -57,7 +58,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
         }
       }
     } catch (err) {
-      console.error('Failed to generate message:', err);
+      logError('Failed to generate message', { component: 'LeadCard', errorName: err?.name, errorStack: err?.stack });
     }
     setGenerating(false);
   };
@@ -73,7 +74,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
       });
       onQueue(lead.id);
     } catch (err) {
-      console.error('Failed to queue lead:', err);
+      logError('Failed to queue lead', { component: 'LeadCard', errorName: err?.name, errorStack: err?.stack });
     }
     setQueueing(false);
   };
@@ -336,7 +337,7 @@ function DiscoveryInput({ onStart, loading }) {
         setPersona(settings.persona || '');
       }
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      logError('Failed to load settings', { component: 'DiscoveryInput', errorName: err?.name, errorStack: err?.stack });
     }
     setPrefilling(false);
   };
@@ -647,7 +648,7 @@ function AutomationSendControls({ sessionId }) {
       setStats(s);
       setQueueStatus(qs);
     } catch (err) {
-      console.error('Failed to load automation stats:', err);
+      logError('Failed to load automation stats', { component: 'AutomationSendControls', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -886,7 +887,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
         setBulkAccount(accountsData[0].id);
       }
     } catch (err) {
-      console.error('Failed to load discovery results:', err);
+      logError('Failed to load discovery results', { component: 'DiscoveryResults', errorName: err?.name, errorStack: err?.stack });
     }
     setLoading(false);
   };
@@ -900,7 +901,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
       await api.dismissLead(sessionId, leadId);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'dismissed' } : l));
     } catch (err) {
-      console.error('Failed to dismiss lead:', err);
+      logError('Failed to dismiss lead', { component: 'DiscoveryResults', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -921,7 +922,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
       // Refresh leads to update statuses
       await loadData();
     } catch (err) {
-      console.error('Bulk queue failed:', err);
+      logError('Bulk queue failed', { component: 'DiscoveryResults', errorName: err?.name, errorStack: err?.stack });
       setBulkProgress(prev => prev ? { ...prev, failed: prev.total } : null);
     }
     setBulkQueueing(false);
@@ -1181,7 +1182,7 @@ function DiscoveryResults({ session, onNewSearch, sessionId }) {
                         await api.dismissLead(lead.session_id, leadId);
                         setPreviouslyFound(prev => prev.filter(l => l.id !== leadId));
                       } catch (err) {
-                        console.error('Failed to dismiss lead:', err);
+                        logError('Failed to dismiss lead', { component: 'DiscoveryResults', errorName: err?.name, errorStack: err?.stack });
                       }
                     }}
                     onGenerateMessage={() => {}}
@@ -1300,7 +1301,7 @@ function WatchList() {
       const data = await api.getWatches();
       setWatches(data || []);
     } catch (err) {
-      console.error('Failed to load watches:', err);
+      logError('Failed to load watches', { component: 'WatchList', errorName: err?.name, errorStack: err?.stack });
     }
     setLoading(false);
   };
@@ -1316,7 +1317,7 @@ function WatchList() {
         setNewSubreddit('');
       }
     } catch (err) {
-      console.error('Failed to create watch:', err);
+      logError('Failed to create watch', { component: 'WatchList', errorName: err?.name, errorStack: err?.stack });
     }
     setAdding(false);
   };
@@ -1342,7 +1343,7 @@ function WatchList() {
       // Safety timeout
       setTimeout(() => { clearInterval(poll); setRefreshingId(null); loadWatches(); }, 60000);
     } catch (err) {
-      console.error('Failed to refresh watch:', err);
+      logError('Failed to refresh watch', { component: 'WatchList', errorName: err?.name, errorStack: err?.stack });
       setRefreshingId(null);
     }
   };
@@ -1367,7 +1368,7 @@ function WatchList() {
       }, 5000);
       setTimeout(() => { clearInterval(poll); setRefreshingAll(false); loadWatches(); }, 120000);
     } catch (err) {
-      console.error('Failed to refresh all:', err);
+      logError('Failed to refresh all', { component: 'WatchList', errorName: err?.name, errorStack: err?.stack });
       setRefreshingAll(false);
     }
   };
@@ -1380,7 +1381,7 @@ function WatchList() {
         setWatches(prev => prev.map(w => w.id === watch.id ? updated : w));
       }
     } catch (err) {
-      console.error('Failed to update watch:', err);
+      logError('Failed to update watch', { component: 'WatchList', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -1389,7 +1390,7 @@ function WatchList() {
       await api.deleteWatch(watchId);
       setWatches(prev => prev.filter(w => w.id !== watchId));
     } catch (err) {
-      console.error('Failed to delete watch:', err);
+      logError('Failed to delete watch', { component: 'WatchList', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -1567,7 +1568,7 @@ function WatchLeads({ watch, onBack }) {
       setLeads(leadsData || []);
       setAccounts(accountsData || []);
     } catch (err) {
-      console.error('Failed to load watch leads:', err);
+      logError('Failed to load watch leads', { component: 'WatchLeads', errorName: err?.name, errorStack: err?.stack });
     }
     setLoading(false);
   };
@@ -1581,7 +1582,7 @@ function WatchLeads({ watch, onBack }) {
       await api.dismissWatchLead(watch.id, leadId);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'dismissed' } : l));
     } catch (err) {
-      console.error('Failed to dismiss lead:', err);
+      logError('Failed to dismiss lead', { component: 'WatchLeads', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -1785,7 +1786,7 @@ export default function Discovery() {
         startPolling(running.id);
       }
     } catch (err) {
-      console.error('Failed to load sessions:', err);
+      logError('Failed to load sessions', { component: 'Discovery', errorName: err?.name, errorStack: err?.stack });
     }
   };
 
@@ -1808,7 +1809,7 @@ export default function Discovery() {
           loadSessions(); // refresh list
         }
       } catch (err) {
-        console.error('Polling failed:', err);
+        logError('Polling failed', { component: 'Discovery', errorName: err?.name, errorStack: err?.stack });
       }
     }, 3000);
   };
@@ -1839,7 +1840,7 @@ export default function Discovery() {
       setActiveSessionId(null);
       loadSessions();
     } catch (err) {
-      console.error('Failed to cancel:', err);
+      logError('Failed to cancel', { component: 'Discovery', errorName: err?.name, errorStack: err?.stack });
     }
   };
 

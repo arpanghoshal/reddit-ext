@@ -4,10 +4,13 @@ Manages conversation threads and messages for the inbox
 """
 
 import os
+import logging
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -105,7 +108,7 @@ async def create_conversation(conversation_data: Dict[str, Any], team_id: Option
     """Create a new conversation"""
     client = get_client()
     if not client:
-        print("Supabase not configured")
+        logger.warning("supabase_not_configured")
         return None
 
     try:
@@ -132,7 +135,7 @@ async def create_conversation(conversation_data: Dict[str, Any], team_id: Option
 
         return transform_conversation(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error creating conversation: {e}")
+        logger.error(f"Error creating conversation: {e}")
         return None
 
 
@@ -182,7 +185,7 @@ async def get_conversations(filters: Dict[str, Any] = None, team_id: Optional[st
         result = query.execute()
         return [transform_conversation(row) for row in result.data] if result.data else []
     except Exception as e:
-        print(f"Error fetching conversations: {e}")
+        logger.error(f"Error fetching conversations: {e}")
         return []
 
 
@@ -224,7 +227,7 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
 
         return {**conversation, "messages": messages}
     except Exception as e:
-        print(f"Error fetching conversation: {e}")
+        logger.error(f"Error fetching conversation: {e}")
         return None
 
 
@@ -247,7 +250,7 @@ async def get_conversation_by_participant(username: str, team_id: Optional[str] 
         return transform_conversation(result.data[0]) if result.data else None
     except Exception as e:
         if "PGRST116" not in str(e):
-            print(f"Error fetching conversation: {e}")
+            logger.error(f"Error fetching conversation: {e}")
         return None
 
 
@@ -286,7 +289,7 @@ async def update_conversation(conversation_id: str, updates: Dict[str, Any], tea
 
         return transform_conversation(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error updating conversation: {e}")
+        logger.error(f"Error updating conversation: {e}")
         return None
 
 
@@ -308,7 +311,7 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
                 "id", conversation_id
             ).eq("team_id", team_id).limit(1).execute()
             if not ownership_check.data:
-                print(f"Conversation {conversation_id} not found for team {team_id}")
+                logger.warning(f"Conversation {conversation_id} not found for team {team_id}")
                 return None
 
         # If no team_id provided, inherit from the parent conversation
@@ -342,13 +345,13 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
                 on_conflict="conversation_id,fingerprint"
             ).execute()
         except Exception as upsert_err:
-            print(f"Upsert failed (fingerprint dedup), falling back to insert: {upsert_err}")
+            logger.warning(f"Upsert failed (fingerprint dedup), falling back to insert: {upsert_err}")
             # Fallback: insert without fingerprint (migration 011 may not be applied)
             insert_data.pop("fingerprint", None)
             try:
                 msg_result = client.table("messages").insert(insert_data).execute()
             except Exception as insert_err:
-                print(f"Insert fallback also failed: {insert_err}")
+                logger.error(f"Insert fallback also failed: {insert_err}")
                 return None
 
         if not msg_result or not msg_result.data:
@@ -370,7 +373,7 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
 
         return transform_message(msg_result.data[0])
     except Exception as e:
-        print(f"Error adding message: {e}")
+        logger.error(f"Error adding message: {e}")
         return None
 
 
@@ -397,7 +400,7 @@ async def get_messages(conversation_id: str, options: Dict[str, Any] = None, tea
         result = query.execute()
         return [transform_message(row) for row in result.data] if result.data else []
     except Exception as e:
-        print(f"Error fetching messages: {e}")
+        logger.error(f"Error fetching messages: {e}")
         return []
 
 
@@ -416,14 +419,14 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
     account_username = sync_data.get("accountUsername")
 
     if not participant_username:
-        print("Missing participant username")
+        logger.warning("Missing participant username for sync")
         return None
 
     # Guard: participant must not be the same as the sending account
     # This happens when the extension's getCurrentUsername() fails and
     # the logged-in user's own name gets detected as the chat "participant"
     if account_username and participant_username.lower() == account_username.lower():
-        print(f"Skipping sync: participant '{participant_username}' is the same as account '{account_username}'")
+        logger.info(f"Skipping sync: participant '{participant_username}' is the same as account '{account_username}'")
         return None
 
     # If we have a username but no account_id, try to resolve or auto-create
@@ -439,7 +442,7 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
                 acct_result = acct_result.limit(1).execute()
                 if acct_result.data:
                     account_id = acct_result.data[0]["id"]
-                    print(f"Resolved account '{account_username}' to id {account_id}")
+                    logger.info(f"Resolved account '{account_username}' to id {account_id}")
                 else:
                     # Auto-create the Reddit account
                     new_account = {
@@ -452,9 +455,9 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
                     create_result = client.table("reddit_accounts").insert(new_account).execute()
                     if create_result.data:
                         account_id = create_result.data[0]["id"]
-                        print(f"Auto-created account '{account_username}' with id {account_id}")
+                        logger.info(f"Auto-created account '{account_username}' with id {account_id}")
             except Exception as e:
-                print(f"Failed to resolve/create account by username: {e}")
+                logger.error(f"Failed to resolve/create account by username: {e}")
 
     # Get or create conversation
     # First try scoped to the specific account
@@ -539,8 +542,7 @@ async def sync_conversation(sync_data: Dict[str, Any], team_id: Optional[str] = 
         if result:
             added_count += 1
 
-    print(f"Sync for {participant_username}: {added_count} new messages added "
-          f"(received {len(messages)}, existing {len(existing_messages)})")
+    logger.info(f"Sync for {participant_username}: {added_count} new messages added (received {len(messages)}, existing {len(existing_messages)})")
 
     # Update total_messages to match actual count
     if added_count > 0:
@@ -611,7 +613,7 @@ async def get_conversation_stats(team_id: Optional[str] = None) -> Dict[str, Any
             "replyRate": round((with_replies / total) * 100) if total > 0 else 0
         }
     except Exception as e:
-        print(f"Error fetching conversation stats: {e}")
+        logger.error(f"Error fetching conversation stats: {e}")
         return {}
 
 
@@ -631,5 +633,5 @@ async def search_conversations(query: str, team_id: Optional[str] = None) -> Lis
 
         return [transform_conversation(row) for row in result.data] if result.data else []
     except Exception as e:
-        print(f"Error searching conversations: {e}")
+        logger.error(f"Error searching conversations: {e}")
         return []

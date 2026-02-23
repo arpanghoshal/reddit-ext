@@ -6,10 +6,13 @@ Evaluates Reddit user profiles for outreach suitability
 import os
 import re
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -107,7 +110,7 @@ async def get_cached_qualification(username: str) -> Optional[Dict[str, Any]]:
             "qualifiedAt": data.get("qualified_at")
         }
     except Exception as e:
-        print(f"Error fetching cached qualification: {e}")
+        logger.error(f"Error fetching cached qualification: {e}")
         return None
 
 
@@ -151,7 +154,7 @@ async def save_qualification(
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error saving qualification: {e}")
+        logger.error(f"Error saving qualification: {e}")
         return None
 
 
@@ -355,7 +358,7 @@ async def qualify_user(username: str, options: Dict[str, Any] = None) -> Dict[st
     # Check cache first
     cached = await get_cached_qualification(username)
     if cached:
-        print(f"Using cached qualification for: {username}")
+        logger.debug(f"Using cached qualification for: {username}")
         return cached
 
     # Fetch user data from Reddit
@@ -475,7 +478,7 @@ async def qualify_batch(usernames: List[str], options: Dict[str, Any] = None) ->
             # Add delay to avoid rate limiting
             await asyncio.sleep(1.0)
         except Exception as e:
-            print(f"Error qualifying user {username}: {e}")
+            logger.error(f"Error qualifying user {username}: {e}")
             results.append({
                 "username": username,
                 "isQualified": False,
@@ -509,5 +512,5 @@ async def get_qualification_stats() -> Dict[str, int]:
             "bots": len([d for d in data if d.get("is_bot_likely")])
         }
     except Exception as e:
-        print(f"Error fetching qualification stats: {e}")
+        logger.error(f"Error fetching qualification stats: {e}")
         return {"total": 0, "qualified": 0, "disqualified": 0, "bots": 0}

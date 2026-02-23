@@ -1,9 +1,29 @@
 // --- Import API Client (ES Module) ---
 import * as api from '../lib/api.js';
 import * as cookies from '../lib/cookies.js';
+import { extLogInfo, extLogError, extLogWarn, extLogDebug } from '../lib/logger.js';
 
-console.log('Reddit Automated DM: Background service worker loaded');
-console.log('API module loaded:', Object.keys(api));
+extLogInfo('Background service worker loaded', { component: 'background' });
+extLogDebug('API module loaded', { component: 'background', metadata: { keys: Object.keys(api) } });
+
+// --- Global Error Handlers ---
+self.addEventListener('error', (event) => {
+    extLogError(`Unhandled error: ${event.message}`, {
+        component: 'background',
+        errorName: 'UncaughtError',
+        errorStack: `${event.filename}:${event.lineno}:${event.colno}`,
+        url: event.filename
+    });
+});
+
+self.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    extLogError(`Unhandled promise rejection: ${reason?.message || reason}`, {
+        component: 'background',
+        errorName: reason?.name || 'UnhandledRejection',
+        errorStack: reason?.stack
+    });
+});
 
 // --- Automation State Management ---
 const AutomationState = {
@@ -93,21 +113,21 @@ async function sendCommandWithReadinessCheck(tabId, message, expectedState, step
     try {
         const ready = await ensureContentScriptReady(tabId);
         if (!ready) {
-            console.error(`Content script not ready for ${stepName}`);
+            extLogError(`Content script not ready for ${stepName}`, { component: 'background' });
             delete commandInFlight[tabId];
             handleStepCompletion(tabId, { success: false, error: 'Content script not ready', step: stepName });
             return;
         }
         // Verify state hasn't changed during the wait
         if (!activeTasks[tabId] || activeTasks[tabId].status !== expectedState) {
-            console.log(`State changed during readiness wait for ${stepName}, aborting`);
+            extLogDebug(`State changed during readiness wait for ${stepName}, aborting`, { component: 'background' });
             delete commandInFlight[tabId];
             return;
         }
         await chrome.tabs.sendMessage(tabId, message);
         delete commandInFlight[tabId];
     } catch (err) {
-        console.error(`Failed to send ${stepName}:`, err);
+        extLogError(`Failed to send ${stepName}: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
         delete commandInFlight[tabId];
         handleStepCompletion(tabId, { success: false, error: 'Message send failed', step: stepName });
     }
@@ -118,7 +138,7 @@ function cleanupTask(tabId) {
     clearAllTimeouts(tabId);
     delete commandInFlight[tabId];
     if (activeTasks[tabId]) {
-        console.log(`Cleaning up task for closed tab ${tabId}`);
+        extLogDebug(`Cleaning up task for closed tab ${tabId}`, { component: 'background' });
         // Release queue processing locks if this was a queued task
         if (activeTasks[tabId].data?.isReply) replyQueueProcessing = false;
         if (activeTasks[tabId].data?.isOutreach) outreachQueueProcessing = false;
@@ -177,10 +197,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // Keep channel open for async response
     }
 
+    // Relay log entries from content scripts / popup through the background logger
+    if (request.action === 'CLIENT_LOG') {
+        const { level, message, opts } = request.data || {};
+        const fn = level === 'error' ? extLogError
+            : level === 'warn' ? extLogWarn
+            : level === 'debug' ? extLogDebug
+            : extLogInfo;
+        fn(message, opts || {});
+        return;
+    }
+
     if (request.action === 'START_AUTOMATION') {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
         if (!tabId) {
-            console.error('No tab ID found for automation');
+            extLogError('No tab ID found for automation', { component: 'background' });
             return;
         }
         startAutomation(tabId, request.data);
@@ -191,11 +222,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // with #__rdm_send= hash. The tab is already on the chat page.
         const tabId = sender.tab?.id;
         if (!tabId) {
-            console.error('No tab ID for DIRECT_SEND_REPLY');
+            extLogError('No tab ID for DIRECT_SEND_REPLY', { component: 'background' });
             return;
         }
         const { targetUser, message, queueItemId, conversationId, accountId } = request.data;
-        console.log(`Direct send reply for u/${targetUser} on tab ${tabId}${accountId ? ` via account ${accountId}` : ''}`);
+        extLogInfo(`Direct send reply for u/${targetUser} on tab ${tabId}${accountId ? ` via account ${accountId}` : ''}`, { component: 'background' });
 
         // Detect current account and warn if mismatched
         const doSend = async () => {
@@ -206,7 +237,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (accountId && detected.accountId && accountId !== detected.accountId) {
                 // Wrong account logged in — warn but still send (user might know what they're doing)
                 const check = await cookies.checkAccountMatch(accountId);
-                console.warn('Account mismatch:', check.reason);
+                extLogWarn(`Account mismatch: ${check.reason}`, { component: 'background' });
                 chrome.tabs.sendMessage(tabId, {
                     action: 'SHOW_TOAST',
                     message: check.reason || 'Wrong Reddit account logged in for this DM.',
@@ -247,7 +278,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Validate queue data
         if (!request.data || !Array.isArray(request.data.posts) || request.data.posts.length === 0) {
-            console.error('Invalid subreddit automation data: posts array is missing or empty');
+            extLogError('Invalid subreddit automation data: posts array is missing or empty', { component: 'background' });
             chrome.tabs.sendMessage(tabId, {
                 action: 'SHOW_TOAST',
                 message: 'No posts found to automate',
@@ -265,7 +296,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         );
 
         if (validPosts.length === 0) {
-            console.error('No valid post URLs found');
+            extLogError('No valid post URLs found', { component: 'background' });
             chrome.tabs.sendMessage(tabId, {
                 action: 'SHOW_TOAST',
                 message: 'No valid post URLs found',
@@ -275,7 +306,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return;
         }
 
-        console.log(`Starting subreddit automation for tab ${tabId} with ${validPosts.length} posts`);
+        extLogInfo(`Starting subreddit automation for tab ${tabId} with ${validPosts.length} posts`, { component: 'background' });
 
         // Start Supabase automation session
         (async () => {
@@ -301,7 +332,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'AUTOMATION_STEP_COMPLETE') {
         const tabId = sender.tab?.id ?? request.tabId;
         handleStepCompletion(tabId, request.result).catch(err => {
-            console.error('handleStepCompletion error:', err);
+            extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
         });
     }
 
@@ -322,7 +353,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'STOP_AUTOMATION') {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
-        console.log(`Stopping automation for tab ${tabId}`);
+        extLogInfo(`Stopping automation for tab ${tabId}`, { component: 'background' });
 
         // Cancel all pending timeouts and in-flight commands for this tab
         clearAllTimeouts(tabId);
@@ -345,7 +376,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     successCount: queue.successCount || 0,
                     failedCount: queue.failedCount || 0,
                     status: 'stopped'
-                }).catch(e => console.error('Failed to update session:', e));
+                }).catch(e => extLogError(`Failed to update session: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }));
             }
 
             queue.isActive = false;
@@ -368,14 +399,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
         const context = request.context || {};
 
-        console.log(`Retrying automation for tab ${tabId}`);
+        extLogInfo(`Retrying automation for tab ${tabId}`, { component: 'background' });
 
         const task = activeTasks[tabId];
         if (task) {
             task.retries = (task.retries || 0) + 1;
 
             if (task.retries > RETRY_CONFIG.maxRetries) {
-                console.log('Max retries exceeded, notifying content script');
+                extLogWarn('Max retries exceeded, notifying content script', { component: 'background' });
                 chrome.tabs.sendMessage(tabId, {
                     action: 'AUTOMATION_ERROR',
                     error: { message: 'Max retries exceeded. Please try again later.' },
@@ -385,7 +416,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
 
             const delay = getRetryDelay(task.retries - 1);
-            console.log(`Retry ${task.retries}/${RETRY_CONFIG.maxRetries} after ${delay}ms delay`);
+            extLogInfo(`Retry ${task.retries}/${RETRY_CONFIG.maxRetries} after ${delay}ms delay`, { component: 'background' });
 
             chrome.tabs.sendMessage(tabId, {
                 action: 'SHOW_TOAST',
@@ -410,7 +441,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'SKIP_AND_CONTINUE') {
         const tabId = sender.tab ? sender.tab.id : request.tabId;
 
-        console.log(`Skipping current item for tab ${tabId}`);
+        extLogInfo(`Skipping current item for tab ${tabId}`, { component: 'background' });
 
         const task = activeTasks[tabId];
         const queue = subredditQueues[tabId];
@@ -428,7 +459,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     source: 'error_recovery',
                     error: request.context?.error || null
                 }
-            }).catch(err => console.error('Failed to log skipped post:', err));
+            }).catch(err => extLogError(`Failed to log skipped post: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
         }
 
         if (queue && queue.isActive) {
@@ -465,7 +496,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const task = activeTasks[tabId];
 
         if (task && task.status === AutomationState.AWAITING_CONFIRMATION) {
-            console.log('DM confirmed, proceeding to send...');
+            extLogInfo('DM confirmed, proceeding to send...', { component: 'background' });
 
             // Update message if user edited it
             if (request.editedMessage) {
@@ -491,7 +522,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const task = activeTasks[tabId];
 
         if (task && task.status === AutomationState.AWAITING_CONFIRMATION) {
-            console.log('DM skipped by user');
+            extLogInfo('DM skipped by user', { component: 'background' });
 
             const queue = subredditQueues[tabId];
 
@@ -505,7 +536,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     sessionId: queue ? queue.sessionId : null,
                     skipReason: 'user_skipped',
                     skipDetails: { source: 'dm_confirmation' }
-                }).catch(err => console.error('Failed to log skipped post:', err));
+                }).catch(err => extLogError(`Failed to log skipped post: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
             }
 
             if (queue && queue.isActive) {
@@ -548,7 +579,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         if (chatWaitingTabId !== null && activeTasks[chatWaitingTabId]) {
             const task = activeTasks[chatWaitingTabId];
             if (task.status === AutomationState.WAITING_FOR_CHAT) {
-                console.log(`Chat tab detected! Tab ${tabId}, transferring task from ${chatWaitingTabId}`);
+                extLogInfo(`Chat tab detected! Tab ${tabId}, transferring task from ${chatWaitingTabId}`, { component: 'background' });
 
                 task.data.onChatTab = true; // Mark as transferred to a separate chat tab
                 activeTasks[tabId] = task;
@@ -569,7 +600,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             // or it's retrying). Transfer if the task hasn't moved past typing.
             if (originTask.status === AutomationState.WAITING_FOR_CHAT ||
                 originTask.status === AutomationState.TYPING_MESSAGE) {
-                console.log(`Late chat tab ${tabId} detected! Transferring task from origin ${chatOriginTabId}`);
+                extLogInfo(`Late chat tab ${tabId} detected! Transferring task from origin ${chatOriginTabId}`, { component: 'background' });
 
                 originTask.status = AutomationState.WAITING_FOR_CHAT;
                 originTask.retries = 0;
@@ -586,7 +617,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
     // Regular tab update handling
     if (changeInfo.status === 'complete' && activeTasks[tabId]) {
-        console.log(`Tab ${tabId} updated. Current state: ${activeTasks[tabId].status}`);
+        extLogDebug(`Tab ${tabId} updated. Current state: ${activeTasks[tabId].status}`, { component: 'background' });
 
         // If we were waiting for a post to load, process it
         if (activeTasks[tabId].status === AutomationState.WAITING_FOR_POST) {
@@ -605,7 +636,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // 3. New Tab Created Handler (for chat.reddit.com opening in new tab)
 chrome.tabs.onCreated.addListener((tab) => {
-    console.log('New tab created:', tab.id, tab.pendingUrl || tab.url);
+    extLogDebug(`New tab created: ${tab.id} ${tab.pendingUrl || tab.url}`, { component: 'background' });
 
     // Only handle if we have a specific tab waiting for chat (prevents race condition)
     if (chatWaitingTabId !== null && activeTasks[chatWaitingTabId]) {
@@ -613,7 +644,7 @@ chrome.tabs.onCreated.addListener((tab) => {
         if (task.status === AutomationState.WAITING_FOR_CHAT) {
             const pendingUrl = tab.pendingUrl || tab.url || '';
             if (pendingUrl.includes('chat.reddit.com')) {
-                console.log(`Chat tab opened! Transferring task from tab ${chatWaitingTabId} to ${tab.id}`);
+                extLogInfo(`Chat tab opened! Transferring task from tab ${chatWaitingTabId} to ${tab.id}`, { component: 'background' });
 
                 // Transfer task to new tab
                 task.data.onChatTab = true;
@@ -627,7 +658,7 @@ chrome.tabs.onCreated.addListener((tab) => {
             } else if (!pendingUrl) {
                 // URL not yet available (Chrome hasn't resolved it).
                 // Store this tab ID so onUpdated can check it when the URL resolves.
-                console.log(`New tab ${tab.id} has no URL yet, will check in onUpdated`);
+                extLogDebug(`New tab ${tab.id} has no URL yet, will check in onUpdated`, { component: 'background' });
                 // onUpdated handler already checks for chat.reddit.com tabs via
                 // chatWaitingTabId and chatOriginTabId, so this will be caught there.
             }
@@ -645,7 +676,7 @@ chrome.action.onClicked.addListener(async (tab) => {
         chrome.tabs.sendMessage(tab.id, {
             action: 'TOGGLE_SIDEBAR',
             isOpen: newState
-        }).catch(() => console.log('Could not send message to tab ' + tab.id));
+        }).catch(() => extLogDebug('Could not send message to tab ' + tab.id, { component: 'background' }));
     }
 });
 
@@ -671,7 +702,7 @@ function notifyAutomationProgress(tabId) {
 }
 
 async function startAutomation(tabId, data) {
-    console.log(`Starting automation for user: ${data.targetUser}`);
+    extLogInfo(`Starting automation for user: ${data.targetUser}`, { component: 'background' });
 
     // Detect current account so DM logging tags the correct account
     if (!data.accountId) {
@@ -702,29 +733,29 @@ async function processNextStep(tabId) {
 
     // Guard: prevent overlapping processNextStep calls for the same tab
     if (commandInFlight[tabId]) {
-        console.log(`processNextStep: command already in-flight for tab ${tabId}, skipping`);
+        extLogDebug(`processNextStep: command already in-flight for tab ${tabId}, skipping`, { component: 'background' });
         return;
     }
 
     try {
         switch (task.status) {
             case AutomationState.WAITING_FOR_POST:
-                console.log('Post loaded. Extracting data and generating DM...');
+                extLogInfo('Post loaded. Extracting data and generating DM...', { component: 'background' });
                 task.status = AutomationState.GENERATING_DM;
 
                 // Safety timeout: if DM generation takes too long (30s), fail the step
                 setTrackedTimeout(tabId, () => {
                     if (activeTasks[tabId]?.status === AutomationState.GENERATING_DM) {
-                        console.warn('DM generation timed out after 30s');
-                        handleStepCompletion(tabId, { success: false, error: 'DM generation timed out' }).catch(err => console.error('handleStepCompletion error:', err));
+                        extLogWarn('DM generation timed out after 30s', { component: 'background' });
+                        handleStepCompletion(tabId, { success: false, error: 'DM generation timed out' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
                     }
                 }, 30000);
 
                 // 1. Get Post Data
                 chrome.tabs.sendMessage(tabId, { action: 'GET_POST_DATA' }, async (postData) => {
                     if (!postData || !postData.valid) {
-                        console.warn('Invalid post data, skipping...');
-                        handleStepCompletion(tabId, { success: false, error: 'Invalid post' }).catch(err => console.error('handleStepCompletion error:', err));
+                        extLogWarn('Invalid post data, skipping...', { component: 'background' });
+                        handleStepCompletion(tabId, { success: false, error: 'Invalid post' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
                         return;
                     }
 
@@ -733,7 +764,7 @@ async function processNextStep(tabId) {
                         try {
                             const contactCheck = await api.checkRecipientContacted(postData.author);
                             if (contactCheck && contactCheck.contacted) {
-                                console.log(`u/${postData.author} already contacted (source: ${contactCheck.source}), skipping`);
+                                extLogInfo(`u/${postData.author} already contacted (source: ${contactCheck.source}), skipping`, { component: 'background' });
                                 const skipQueue = subredditQueues[tabId];
                                 api.logSkippedPost({
                                     postUrl: postData.url || '',
@@ -743,18 +774,18 @@ async function processNextStep(tabId) {
                                     sessionId: skipQueue ? skipQueue.sessionId : null,
                                     skipReason: 'already_contacted',
                                     skipDetails: { source: contactCheck.source }
-                                }).catch(err => console.error('Failed to log skipped post:', err));
-                                handleStepCompletion(tabId, { success: false, error: 'Already contacted' }).catch(err => console.error('handleStepCompletion error:', err));
+                                }).catch(err => extLogError(`Failed to log skipped post: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
+                                handleStepCompletion(tabId, { success: false, error: 'Already contacted' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
                                 return;
                             }
                         } catch (err) {
-                            console.warn('Contact check failed, proceeding:', err.message);
+                            extLogWarn(`Contact check failed, proceeding: ${err.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                         }
                     }
 
                     // Abort if task was stopped during contact check
                     if (!activeTasks[tabId]) {
-                        console.log('Task cancelled during contact check, aborting');
+                        extLogDebug('Task cancelled during contact check, aborting', { component: 'background' });
                         return;
                     }
 
@@ -766,7 +797,7 @@ async function processNextStep(tabId) {
                         // Classify post first to determine usefulness
                         let classification = null;
                         try {
-                            console.log('Classifying post...');
+                            extLogDebug('Classifying post...', { component: 'background' });
                             classification = await api.classifyPost({
                                 url: postData.url,
                                 title: postData.title,
@@ -774,14 +805,14 @@ async function processNextStep(tabId) {
                                 subreddit: postData.subreddit,
                                 author: postData.author
                             }, settings);
-                            console.log('Classification result:', classification);
+                            extLogDebug(`Classification result: ${JSON.stringify(classification)}`, { component: 'background' });
                         } catch (classifyErr) {
-                            console.warn('Classification failed, continuing without:', classifyErr);
+                            extLogWarn(`Classification failed, continuing without: ${classifyErr?.message}`, { component: 'background', errorName: classifyErr?.name, errorStack: classifyErr?.stack });
                         }
 
                         // Abort if task was stopped during classification
                         if (!activeTasks[tabId]) {
-                            console.log('Task cancelled during classification, aborting');
+                            extLogDebug('Task cancelled during classification, aborting', { component: 'background' });
                             return;
                         }
 
@@ -790,11 +821,11 @@ async function processNextStep(tabId) {
 
                         // Abort if task was stopped during DM generation
                         if (!activeTasks[tabId]) {
-                            console.log('Task cancelled during DM generation, aborting');
+                            extLogDebug('Task cancelled during DM generation, aborting', { component: 'background' });
                             return;
                         }
 
-                        console.log('DM Generated:', message);
+                        extLogInfo(`DM Generated: ${message}`, { component: 'background' });
 
                         // 3. Update task data with the new user, message, and classification
                         // Use Object.assign to preserve existing fields (isReply, isOutreach, queueItemId, accountId, etc.)
@@ -818,7 +849,7 @@ async function processNextStep(tabId) {
                             // Safety timeout: auto-skip if user doesn't respond in 5 minutes
                             setTrackedTimeout(tabId, () => {
                                 if (activeTasks[tabId]?.status === AutomationState.AWAITING_CONFIRMATION) {
-                                    console.warn('Confirmation timed out after 5 minutes, auto-skipping');
+                                    extLogWarn('Confirmation timed out after 5 minutes, auto-skipping', { component: 'background' });
                                     const q = subredditQueues[tabId];
                                     if (q && q.isActive) {
                                         q.currentIndex++;
@@ -840,7 +871,7 @@ async function processNextStep(tabId) {
                                     classification: classification
                                 }
                             }).catch(err => {
-                                console.error('Failed to show confirmation dialog:', err);
+                                extLogError(`Failed to show confirmation dialog: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                             });
                         } else {
                             // Auto mode - proceed directly
@@ -851,14 +882,14 @@ async function processNextStep(tabId) {
                         }
 
                     } catch (err) {
-                        console.error('Generation failed:', err);
-                        handleStepCompletion(tabId, { success: false, error: 'Generation failed' }).catch(err => console.error('handleStepCompletion error:', err));
+                        extLogError(`Generation failed: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
+                        handleStepCompletion(tabId, { success: false, error: 'Generation failed' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
                     }
                 });
                 break;
 
             case AutomationState.WAITING_FOR_PROFILE:
-                console.log('Profile loaded. Attempting to find and click Chat button...');
+                extLogInfo('Profile loaded. Attempting to find and click Chat button...', { component: 'background' });
                 task.status = AutomationState.CLICKING_CHAT;
 
                 // Wait for content script readiness, then send command
@@ -872,7 +903,7 @@ async function processNextStep(tabId) {
             case AutomationState.WAITING_FOR_CHAT:
                 // Always find the target user's conversation first to avoid typing
                 // into the wrong chat (popup may show most recent conversation)
-                console.log(`Chat ready. Finding ${task.data.targetUser}'s conversation before typing...`);
+                extLogInfo(`Chat ready. Finding ${task.data.targetUser}'s conversation before typing...`, { component: 'background' });
                 task.status = AutomationState.TYPING_MESSAGE;
                 commandInFlight[tabId] = true;
 
@@ -886,7 +917,7 @@ async function processNextStep(tabId) {
 
         }
     } catch (error) {
-        console.error('Automation Error:', error);
+        extLogError(`Automation Error: ${error?.message}`, { component: 'background', errorName: error?.name, errorStack: error?.stack });
     }
 }
 
@@ -894,12 +925,12 @@ async function handleStepCompletion(tabId, result) {
     const task = activeTasks[tabId];
     if (!task) return;
 
-    console.log(`Step complete for tab ${tabId}:`, result);
+    extLogDebug(`Step complete for tab ${tabId}: ${JSON.stringify(result)}`, { component: 'background' });
 
     if (result.success) {
         if (task.status === AutomationState.CLICKING_CHAT) {
             // Chat button clicked - could open as popup overlay or new tab
-            console.log('Chat button clicked. Setting up to wait for chat...');
+            extLogInfo('Chat button clicked. Setting up to wait for chat...', { component: 'background' });
 
             // Set this tab as waiting for chat (in case a new tab opens)
             chatWaitingTabId = tabId;
@@ -921,7 +952,7 @@ async function handleStepCompletion(tabId, result) {
                         const chatTabs = await chrome.tabs.query({ url: '*://chat.reddit.com/*' });
                         const chatTab = chatTabs.find(t => t.id !== tabId);
                         if (chatTab) {
-                            console.log(`Found chat tab ${chatTab.id} during timeout, transferring task from ${tabId}`);
+                            extLogInfo(`Found chat tab ${chatTab.id} during timeout, transferring task from ${tabId}`, { component: 'background' });
                             activeTasks[tabId].data.onChatTab = true;
                             activeTasks[chatTab.id] = activeTasks[tabId];
                             delete activeTasks[tabId];
@@ -935,10 +966,10 @@ async function handleStepCompletion(tabId, result) {
                             return;
                         }
                     } catch (e) {
-                        console.error('Error checking for chat tabs:', e);
+                        extLogError(`Error checking for chat tabs: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack });
                     }
 
-                    console.log(`Chat popup detected (same tab). Finding ${task.data.targetUser}'s conversation...`);
+                    extLogInfo(`Chat popup detected (same tab). Finding ${task.data.targetUser}'s conversation...`, { component: 'background' });
                     chatWaitingTabId = null;
                     activeTasks[tabId].status = AutomationState.TYPING_MESSAGE;
 
@@ -952,7 +983,7 @@ async function handleStepCompletion(tabId, result) {
             }, 5500);
 
         } else if (task.status === AutomationState.TYPING_MESSAGE) {
-            console.log('🎉 Single Automation Complete!');
+            extLogInfo('Single Automation Complete!', { component: 'background' });
 
             // Reset retry count on success
             task.retries = 0;
@@ -969,7 +1000,7 @@ async function handleStepCompletion(tabId, result) {
 
             // Mark queue item as sent (replies and outreach)
             if (task.data.queueItemId) {
-                console.log('Marking queue item as sent:', task.data.queueItemId);
+                extLogInfo(`Marking queue item as sent: ${task.data.queueItemId}`, { component: 'background' });
 
                 let markedSent = false;
                 for (let attempt = 0; attempt < 3 && !markedSent; attempt++) {
@@ -977,18 +1008,18 @@ async function handleStepCompletion(tabId, result) {
                         await api.markQueueItemSent(task.data.queueItemId);
                         markedSent = true;
                     } catch (err) {
-                        console.error(`Failed to mark queue item as sent (attempt ${attempt + 1}/3):`, err);
+                        extLogError(`Failed to mark queue item as sent (attempt ${attempt + 1}/3): ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                         if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
                     }
                 }
                 if (!markedSent) {
                     // Last resort: store locally so we don't re-send
-                    console.error('Could not mark queue item as sent after 3 attempts, storing locally');
+                    extLogError('Could not mark queue item as sent after 3 attempts, storing locally', { component: 'background' });
                     try {
                         const { sentQueueItems = [] } = await chrome.storage.local.get('sentQueueItems');
                         sentQueueItems.push(task.data.queueItemId);
                         await chrome.storage.local.set({ sentQueueItems: sentQueueItems.slice(-100) }); // keep last 100
-                    } catch (e) { console.error('Failed to store sent item locally:', e); }
+                    } catch (e) { extLogError(`Failed to store sent item locally: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }); }
                 }
                 // Clear persistent in-progress marker
                 clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
@@ -1012,7 +1043,7 @@ async function handleStepCompletion(tabId, result) {
                     accountId: task.data.accountId || cookies.getCurrentAccountId() || null
                 });
             } catch (err) {
-                console.error('Failed to log DM:', err);
+                extLogError(`Failed to log DM: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
             }
 
             // Show success toast
@@ -1035,14 +1066,14 @@ async function handleStepCompletion(tabId, result) {
                             failedCount: queue.failedCount
                         });
                     } catch (err) {
-                        console.error('Failed to update automation session:', err);
+                        extLogError(`Failed to update automation session: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                     }
                 }
 
                 // Check rate limit before continuing
                 canSendDM(currentAccountId).then(result => {
                     if (!result.allowed) {
-                        console.log('Daily limit reached, stopping automation');
+                        extLogInfo('Daily limit reached, stopping automation', { component: 'background' });
                         chrome.tabs.sendMessage(tabId, {
                             action: 'SHOW_TOAST',
                             message: result.reason,
@@ -1054,7 +1085,7 @@ async function handleStepCompletion(tabId, result) {
                             api.updateAutomationSession(queue.sessionId, {
                                 status: 'stopped',
                                 processedCount: queue.currentIndex + 1
-                            }).catch(e => console.error('Failed to update session:', e));
+                            }).catch(e => extLogError(`Failed to update session: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }));
                         }
                         delete activeTasks[tabId];
                         delete subredditQueues[tabId];
@@ -1063,7 +1094,7 @@ async function handleStepCompletion(tabId, result) {
 
                     // Get configurable delay
                     getDelayBetweenDMs().then(delay => {
-                        console.log(`Waiting ${Math.round(delay / 1000)} seconds before next item...`);
+                        extLogDebug(`Waiting ${Math.round(delay / 1000)} seconds before next item...`, { component: 'background' });
 
                         chrome.tabs.sendMessage(tabId, {
                             action: 'SHOW_TOAST',
@@ -1072,17 +1103,17 @@ async function handleStepCompletion(tabId, result) {
                         }).catch(() => {});
 
                         setTrackedTimeout(tabId, () => {
-                            console.log('Moving to next item in queue...');
+                            extLogDebug('Moving to next item in queue...', { component: 'background' });
                             queue.currentIndex++;
                             processNextQueueItem(tabId);
                         }, delay);
                     }).catch(err => {
-                        console.error('Failed to get delay:', err);
+                        extLogError(`Failed to get delay: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                         queue.currentIndex++;
                         processNextQueueItem(tabId);
                     });
                 }).catch(err => {
-                    console.error('Rate limit check failed:', err);
+                    extLogError(`Rate limit check failed: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                     // Continue anyway to avoid stuck state
                     queue.currentIndex++;
                     processNextQueueItem(tabId);
@@ -1099,7 +1130,7 @@ async function handleStepCompletion(tabId, result) {
             }
         }
     } else {
-        console.error('Step failed:', result.error);
+        extLogError(`Step failed: ${result.error}`, { component: 'background' });
 
         // Initialize retry count if not set
         task.retries = task.retries || 0;
@@ -1120,10 +1151,10 @@ async function handleStepCompletion(tabId, result) {
                 context: errorContext
             }).catch(() => {});
 
-            console.log(`Error shown to user. Retries: ${task.retries}/${RETRY_CONFIG.maxRetries}`);
+            extLogDebug(`Error shown to user. Retries: ${task.retries}/${RETRY_CONFIG.maxRetries}`, { component: 'background' });
         } else {
             // Max retries exceeded - log failure and move on
-            console.log('Max retries exceeded, moving to next item');
+            extLogWarn('Max retries exceeded, moving to next item', { component: 'background' });
 
             if (queue && queue.isActive) {
                 queue.failedCount++;
@@ -1142,7 +1173,7 @@ async function handleStepCompletion(tabId, result) {
                             sessionId: queue.sessionId
                         });
                     } catch (err) {
-                        console.error('Failed to log DM:', err);
+                        extLogError(`Failed to log DM: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                     }
 
                     // Log as skipped post too
@@ -1161,7 +1192,7 @@ async function handleStepCompletion(tabId, result) {
                             }
                         });
                     } catch (err) {
-                        console.error('Failed to log skipped post:', err);
+                        extLogError(`Failed to log skipped post: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                     }
                 }
 
@@ -1174,7 +1205,7 @@ async function handleStepCompletion(tabId, result) {
                             failedCount: queue.failedCount
                         });
                     } catch (err) {
-                        console.error('Failed to update automation session:', err);
+                        extLogError(`Failed to update automation session: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                     }
                 }
 
@@ -1197,7 +1228,7 @@ async function handleStepCompletion(tabId, result) {
                 // Mark queue item as failed in backend so it doesn't get re-processed
                 if (task.data?.queueItemId) {
                     api.markQueueItemFailed(task.data.queueItemId, result.error || 'Max retries exceeded').catch(err => {
-                        console.error('Failed to mark queue item as failed:', err);
+                        extLogError(`Failed to mark queue item as failed: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                     });
                     clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
                 }
@@ -1219,7 +1250,7 @@ async function processNextQueueItem(tabId) {
     if (!queue || !queue.isActive) return;
 
     if (queue.currentIndex >= queue.urls.length) {
-        console.log('Queue finished!');
+        extLogInfo('Queue finished!', { component: 'background' });
         queue.isActive = false;
 
         // Mark Supabase session as completed
@@ -1229,7 +1260,7 @@ async function processNextQueueItem(tabId) {
                 successCount: queue.successCount,
                 failedCount: queue.failedCount,
                 status: 'completed'
-            }).catch(e => console.error('Failed to update session:', e));
+            }).catch(e => extLogError(`Failed to update session: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }));
         }
 
         delete activeTasks[tabId];
@@ -1238,7 +1269,7 @@ async function processNextQueueItem(tabId) {
     }
 
     const nextUrl = queue.urls[queue.currentIndex];
-    console.log(`Processing item ${queue.currentIndex + 1}/${queue.urls.length}: ${nextUrl}`);
+    extLogInfo(`Processing item ${queue.currentIndex + 1}/${queue.urls.length}: ${nextUrl}`, { component: 'background' });
 
     // Initialize task for this item
     activeTasks[tabId] = {
@@ -1266,7 +1297,7 @@ async function generateQuestion(inputData) {
         const message = await api.generateQuestion(post, settings);
         return message;
     } catch (error) {
-        console.error('LLM Generation Error:', error);
+        extLogError(`LLM Generation Error: ${error?.message}`, { component: 'background', errorName: error?.name, errorStack: error?.stack });
         throw error;
     }
 }
@@ -1306,7 +1337,7 @@ async function canSendDM(accountId = null) {
             }
             if (result && result.allowed) return { allowed: true };
         } catch (err) {
-            console.warn('Backend limit check failed, using local fallback:', err.message);
+            extLogWarn(`Backend limit check failed, using local fallback: ${err.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
         }
     }
 
@@ -1351,7 +1382,7 @@ initRateLimiter();
 // --- Keyboard Commands ---
 
 chrome.commands.onCommand.addListener(async (command) => {
-    console.log('Command received:', command);
+    extLogDebug(`Command received: ${command}`, { component: 'background' });
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.url || !tab.url.includes('reddit.com')) {
@@ -1366,7 +1397,7 @@ chrome.commands.onCommand.addListener(async (command) => {
         chrome.tabs.sendMessage(tab.id, {
             action: 'TOGGLE_SIDEBAR',
             isOpen: newState
-        }).catch(() => console.log('Could not send toggle message'));
+        }).catch(() => extLogDebug('Could not send toggle message', { component: 'background' }));
     }
 
     if (command === 'stop-automation') {
@@ -1389,7 +1420,7 @@ chrome.commands.onCommand.addListener(async (command) => {
                     successCount: queue.successCount || 0,
                     failedCount: queue.failedCount || 0,
                     status: 'stopped'
-                }).catch(e => console.error('Failed to update session:', e));
+                }).catch(e => extLogError(`Failed to update session: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }));
             }
             queue.isActive = false;
             delete subredditQueues[tab.id];
@@ -1408,7 +1439,7 @@ chrome.commands.onCommand.addListener(async (command) => {
             action: 'AUTOMATION_STOPPED'
         }).catch(() => {});
 
-        console.log('Automation stopped via keyboard shortcut');
+        extLogInfo('Automation stopped via keyboard shortcut', { component: 'background' });
     }
 });
 
@@ -1459,7 +1490,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         (async () => {
             const tab = await chrome.tabs.create({ url: 'https://reddit-ext-dashboard.vercel.app' });
             await chrome.storage.local.set({ dashboardTabId: tab.id });
-            console.log('[Sync] Opened dashboard tab and saved ID:', tab.id);
+            extLogDebug(`[Sync] Opened dashboard tab and saved ID: ${tab.id}`, { component: 'background' });
             sendResponse({ success: true, tabId: tab.id });
         })();
         return true;
@@ -1472,7 +1503,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const tabId = sender?.tab?.id;
         if (tabId) {
             chrome.storage.local.set({ dashboardTabId: tabId });
-            console.log('[Sync] Dashboard content script registered tab:', tabId);
+            extLogDebug(`[Sync] Dashboard content script registered tab: ${tabId}`, { component: 'background' });
         }
         sendResponse({ ok: true });
         return true;
@@ -1489,7 +1520,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // Step 1: Check if we already have valid tokens in storage
                 const existing = await chrome.storage.local.get(['accessToken', 'expiresAt', 'userEmail', 'teamId', 'teams']);
                 if (existing.accessToken && existing.expiresAt && (Date.now() / 1000 < existing.expiresAt)) {
-                    console.log('[Sync] Already have valid tokens, skipping sync');
+                    extLogDebug('[Sync] Already have valid tokens, skipping sync', { component: 'background' });
                     sendResponse({ success: true, email: existing.userEmail, teams: existing.teams || [], teamId: existing.teamId });
                     return;
                 }
@@ -1504,10 +1535,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         const tab = await chrome.tabs.get(stored.dashboardTabId);
                         if (tab && !tab.discarded) {
                             tabId = tab.id;
-                            console.log('[Sync] Using registered dashboard tab:', tabId);
+                            extLogDebug(`[Sync] Using registered dashboard tab: ${tabId}`, { component: 'background' });
                         }
                     } catch (e) {
-                        console.log('[Sync] Registered tab gone:', e.message);
+                        extLogDebug(`[Sync] Registered tab gone: ${e.message}`, { component: 'background' });
                         await chrome.storage.local.remove('dashboardTabId');
                     }
                 }
@@ -1524,7 +1555,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     );
                     if (dashTabs.length) {
                         tabId = dashTabs[0].id;
-                        console.log('[Sync] Found dashboard tab by URL:', tabId);
+                        extLogDebug(`[Sync] Found dashboard tab by URL: ${tabId}`, { component: 'background' });
                     }
                 }
 
@@ -1536,9 +1567,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // Step 3: Ask the content script to trigger the React app's auth broadcast
                 try {
                     await chrome.tabs.sendMessage(tabId, { action: 'REQUEST_AUTH_FROM_PAGE' });
-                    console.log('[Sync] Sent REQUEST_AUTH_FROM_PAGE to tab', tabId);
+                    extLogDebug(`[Sync] Sent REQUEST_AUTH_FROM_PAGE to tab ${tabId}`, { component: 'background' });
                 } catch (e) {
-                    console.warn('[Sync] Failed to message content script:', e.message);
+                    extLogWarn(`[Sync] Failed to message content script: ${e.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack });
                     sendResponse({ success: false, error: 'Dashboard tab not ready. Try refreshing the dashboard page.' });
                     return;
                 }
@@ -1553,7 +1584,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await new Promise(r => setTimeout(r, interval));
                     const data = await chrome.storage.local.get(['accessToken', 'expiresAt', 'userEmail', 'teamId', 'teams']);
                     if (data.accessToken && data.expiresAt && (Date.now() / 1000 < data.expiresAt)) {
-                        console.log('[Sync] Tokens arrived via bridge after', Date.now() - start, 'ms');
+                        extLogDebug(`[Sync] Tokens arrived via bridge after ${Date.now() - start}ms`, { component: 'background' });
                         sendResponse({ success: true, email: data.userEmail, teams: data.teams || [], teamId: data.teamId });
                         return;
                     }
@@ -1636,7 +1667,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'SETTINGS_UPDATED') {
-        console.log('Settings updated:', request.settings);
+        extLogInfo(`Settings updated: ${JSON.stringify(request.settings)}`, { component: 'background' });
         // Reset API config cache so new settings are used
         api.resetApiConfig();
         // Re-initialize rate limiter with new settings
@@ -1704,7 +1735,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // and the user's own name gets picked up as the "participant"
                 if (resolvedUsername &&
                     syncData.participantUsername.toLowerCase() === resolvedUsername.toLowerCase()) {
-                    console.warn(`⚠️ Skipping sync: participant "${syncData.participantUsername}" is the logged-in account`);
+                    extLogWarn(`Skipping sync: participant "${syncData.participantUsername}" is the logged-in account`, { component: 'background' });
                     return { skipped: true, reason: 'participant is self' };
                 }
                 return api.syncConversation({
@@ -1714,10 +1745,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     accountUsername: resolvedUsername
                 });
             }).then(result => {
-                console.log('Chat sync completed:', result);
+                extLogDebug(`Chat sync completed: ${JSON.stringify(result)}`, { component: 'background' });
                 sendResponse({ success: true, data: result });
             }).catch(err => {
-                console.error('Chat sync failed:', err);
+                extLogError(`Chat sync failed: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                 sendResponse({ success: false, error: err.message });
             });
             return true;
@@ -1737,7 +1768,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         // Extra delay for content script injection and chat sidebar to load
                         setTimeout(() => {
                             chrome.tabs.sendMessage(newTab.id, { action: 'START_BULK_SYNC' }).catch((err) => {
-                                console.warn('Failed to send START_BULK_SYNC to new tab:', err);
+                                extLogWarn(`Failed to send START_BULK_SYNC to new tab: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                             });
                         }, 3000);
                     }
@@ -1760,25 +1791,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         if (resp && resp.pong) {
                             // Content script is alive, send the sync command
                             chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
-                                console.warn('START_BULK_SYNC failed despite PING success, reloading tab');
+                                extLogWarn('START_BULK_SYNC failed despite PING success, reloading tab', { component: 'background' });
                                 chrome.tabs.reload(chatTab.id, {}, () => {
                                     setTimeout(() => {
                                         chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
-                                            console.warn('START_BULK_SYNC failed after reload too');
+                                            extLogWarn('START_BULK_SYNC failed after reload too', { component: 'background' });
                                         });
                                     }, 4000);
                                 });
                             });
                         } else {
                             // Content script not responding, reload the tab
-                            console.log('Chat tab content script not responding, reloading...');
+                            extLogDebug('Chat tab content script not responding, reloading...', { component: 'background' });
                             chrome.tabs.reload(chatTab.id, {}, () => {
                                 const onUpdated = (tabId, changeInfo) => {
                                     if (tabId === chatTab.id && changeInfo.status === 'complete') {
                                         chrome.tabs.onUpdated.removeListener(onUpdated);
                                         setTimeout(() => {
                                             chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
-                                                console.warn('START_BULK_SYNC failed after reload');
+                                                extLogWarn('START_BULK_SYNC failed after reload', { component: 'background' });
                                             });
                                         }, 3000);
                                     }
@@ -1789,14 +1820,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         }
                     }).catch(() => {
                         // PING failed - content script is dead, reload the tab
-                        console.log('Chat tab PING failed, reloading...');
+                        extLogDebug('Chat tab PING failed, reloading...', { component: 'background' });
                         chrome.tabs.reload(chatTab.id, {}, () => {
                             const onUpdated = (tabId, changeInfo) => {
                                 if (tabId === chatTab.id && changeInfo.status === 'complete') {
                                     chrome.tabs.onUpdated.removeListener(onUpdated);
                                     setTimeout(() => {
                                         chrome.tabs.sendMessage(chatTab.id, { action: 'START_BULK_SYNC' }).catch(() => {
-                                            console.warn('START_BULK_SYNC failed after reload');
+                                            extLogWarn('START_BULK_SYNC failed after reload', { component: 'background' });
                                         });
                                     }, 3000);
                                 }
@@ -1914,11 +1945,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         api.addAccount({ username, cookies: capturedCookies })
             .then(result => {
-                console.log(`Account u/${username} registered via API`);
+                extLogInfo(`Account u/${username} registered via API`, { component: 'background' });
                 sendResponse({ success: true, data: result });
             })
             .catch(err => {
-                console.error(`Failed to register account u/${username}:`, err);
+                extLogError(`Failed to register account u/${username}: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
                 sendResponse({ success: false, error: err.message });
             });
         return true;
@@ -1972,21 +2003,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== REPLY_QUEUE_ALARM_NAME) return;
 
     if (replyQueueProcessing) {
-        console.log('Reply queue: already processing, skipping poll');
+        extLogDebug('Reply queue: already processing, skipping poll', { component: 'background' });
         return;
     }
 
     // Backoff: skip polls when backend is repeatedly failing
     if (replyQueuePollSkips > 0) {
         replyQueuePollSkips--;
-        console.log(`Reply queue: backing off, skipping poll (${replyQueuePollSkips} skips remaining)`);
+        extLogDebug(`Reply queue: backing off, skipping poll (${replyQueuePollSkips} skips remaining)`, { component: 'background' });
         return;
     }
 
     // Check if still authenticated before polling
     const authed = await api.isAuthenticated();
     if (!authed) {
-        console.log('Reply queue: not authenticated, stopping polling');
+        extLogInfo('Reply queue: not authenticated, stopping polling', { component: 'background' });
         stopReplyQueuePolling();
         return;
     }
@@ -1994,7 +2025,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // Check if daily limit allows sending
     const limitCheck = await canSendDM();
     if (!limitCheck.allowed) {
-        console.log('Reply queue: daily limit reached, skipping poll');
+        extLogDebug('Reply queue: daily limit reached, skipping poll', { component: 'background' });
         return;
     }
 
@@ -2005,14 +2036,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         if (nextReply) {
             // Skip if this item is already being processed (persists across SW restarts)
             if (await isQueueItemInProgress(nextReply.id)) {
-                console.log('Reply queue: item already in progress, skipping:', nextReply.id);
+                extLogDebug(`Reply queue: item already in progress, skipping: ${nextReply.id}`, { component: 'background' });
                 return;
             }
             // Skip if this item was already sent locally but API failed to update
             try {
                 const { sentQueueItems = [] } = await chrome.storage.local.get('sentQueueItems');
                 if (sentQueueItems.includes(nextReply.id)) {
-                    console.log('Reply queue: item already sent locally, retrying API mark:', nextReply.id);
+                    extLogDebug(`Reply queue: item already sent locally, retrying API mark: ${nextReply.id}`, { component: 'background' });
                     api.markQueueItemSent(nextReply.id).then(() => {
                         const updated = sentQueueItems.filter(id => id !== nextReply.id);
                         chrome.storage.local.set({ sentQueueItems: updated });
@@ -2020,7 +2051,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
                     return;
                 }
             } catch (e) { /* ignore storage errors */ }
-            console.log('Found approved reply to send:', nextReply.id);
+            extLogInfo(`Found approved reply to send: ${nextReply.id}`, { component: 'background' });
             replyQueueProcessing = true;
             await markQueueItemInProgress(nextReply.id);
             await processReplyQueueItem(nextReply);
@@ -2039,9 +2070,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         }
 
         if (replyQueueConsecutiveFailures >= 5) {
-            console.error(`Reply queue poll error (${replyQueueConsecutiveFailures} consecutive failures):`, err.message);
+            extLogError(`Reply queue poll error (${replyQueueConsecutiveFailures} consecutive failures): ${err.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
         } else {
-            console.warn(`Reply queue poll error (${replyQueueConsecutiveFailures}):`, err.message);
+            extLogWarn(`Reply queue poll error (${replyQueueConsecutiveFailures}): ${err.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
         }
     }
 });
@@ -2049,11 +2080,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function startReplyQueuePolling() {
     const existing = await chrome.alarms.get(REPLY_QUEUE_ALARM_NAME);
     if (existing) {
-        console.log('Reply queue polling already active');
+        extLogDebug('Reply queue polling already active', { component: 'background' });
         return;
     }
 
-    console.log('Starting reply queue polling (chrome.alarms)...');
+    extLogInfo('Starting reply queue polling (chrome.alarms)...', { component: 'background' });
     chrome.alarms.create(REPLY_QUEUE_ALARM_NAME, {
         delayInMinutes: 0.08, // Fire first alarm almost immediately (~5s)
         periodInMinutes: REPLY_QUEUE_POLL_INTERVAL_MINUTES
@@ -2066,9 +2097,9 @@ async function startReplyQueuePolling() {
             const nextReply = await api.getNextReplyToSend();
             if (nextReply) {
                 if (await isQueueItemInProgress(nextReply.id)) {
-                    console.log('Reply queue: item already in progress (immediate), skipping:', nextReply.id);
+                    extLogDebug(`Reply queue: item already in progress (immediate), skipping: ${nextReply.id}`, { component: 'background' });
                 } else {
-                    console.log('Found approved reply to send (immediate):', nextReply.id);
+                    extLogInfo(`Found approved reply to send (immediate): ${nextReply.id}`, { component: 'background' });
                     replyQueueProcessing = true;
                     await markQueueItemInProgress(nextReply.id);
                     await processReplyQueueItem(nextReply);
@@ -2076,26 +2107,26 @@ async function startReplyQueuePolling() {
                 }
             }
         } else {
-            console.log('Reply queue: daily limit reached at startup');
+            extLogDebug('Reply queue: daily limit reached at startup', { component: 'background' });
         }
     } catch (err) {
-        console.error('Reply queue immediate check error:', err);
+        extLogError(`Reply queue immediate check error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
     }
 }
 
 async function stopReplyQueuePolling() {
-    console.log('Stopping reply queue polling...');
+    extLogInfo('Stopping reply queue polling...', { component: 'background' });
     await chrome.alarms.clear(REPLY_QUEUE_ALARM_NAME);
 }
 
 async function processReplyQueueItem(item) {
-    console.log(`Processing reply queue item: ${item.id} to u/${item.recipientUsername}`);
+    extLogInfo(`Processing reply queue item: ${item.id} to u/${item.recipientUsername}`, { component: 'background' });
 
     // Detect current account and warn if mismatched with the assigned account
     const detected = await cookies.detectCurrentAccount(true);
     if (item.accountId && detected.accountId && item.accountId !== detected.accountId) {
         const check = await cookies.checkAccountMatch(item.accountId);
-        console.warn('Reply queue account mismatch:', check.reason);
+        extLogWarn(`Reply queue account mismatch: ${check.reason}`, { component: 'background' });
 
         // Notify user via browser notification
         chrome.notifications.create(`account-mismatch-${item.id}`, {
@@ -2127,14 +2158,14 @@ async function processReplyQueueItem(item) {
 
     if (!tabId && tabs.length > 0) {
         // All Reddit tabs have active tasks — defer instead of overwriting
-        console.log('Reply queue: all Reddit tabs busy, deferring');
+        extLogDebug('Reply queue: all Reddit tabs busy, deferring', { component: 'background' });
         await clearQueueItemInProgress(item.id);
         replyQueueProcessing = false;
         return;
     }
 
     if (!tabId) {
-        console.log('No Reddit tab found - creating one for reply automation');
+        extLogInfo('No Reddit tab found - creating one for reply automation', { component: 'background' });
         const newTab = await chrome.tabs.create({
             url: `https://www.reddit.com/user/${item.recipientUsername}/`,
             active: false
@@ -2215,7 +2246,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== OUTREACH_QUEUE_ALARM_NAME) return;
 
     if (outreachQueueProcessing) {
-        console.log('Outreach queue: already processing, skipping poll');
+        extLogDebug('Outreach queue: already processing, skipping poll', { component: 'background' });
         return;
     }
 
@@ -2228,7 +2259,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
     const authed = await api.isAuthenticated();
     if (!authed) {
-        console.log('Outreach queue: not authenticated, stopping polling');
+        extLogInfo('Outreach queue: not authenticated, stopping polling', { component: 'background' });
         stopOutreachQueuePolling();
         return;
     }
@@ -2236,7 +2267,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // Check if daily limit allows sending (skip this poll, don't stop entirely)
     const limitCheck = await canSendDM();
     if (!limitCheck.allowed) {
-        console.log('Outreach queue: daily limit reached, skipping this poll');
+        extLogDebug('Outreach queue: daily limit reached, skipping this poll', { component: 'background' });
         return;
     }
 
@@ -2244,10 +2275,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         const nextItem = await api.getNextQueueItem(null, 'outreach');
         if (nextItem) {
             if (await isQueueItemInProgress(nextItem.id)) {
-                console.log('Outreach queue: item already in progress, skipping:', nextItem.id);
+                extLogDebug(`Outreach queue: item already in progress, skipping: ${nextItem.id}`, { component: 'background' });
                 return;
             }
-            console.log('Found approved outreach item to send:', nextItem.id);
+            extLogInfo(`Found approved outreach item to send: ${nextItem.id}`, { component: 'background' });
             outreachQueueProcessing = true;
             await markQueueItemInProgress(nextItem.id);
             await processOutreachQueueItem(nextItem);
@@ -2255,11 +2286,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
             // outreachQueueProcessing stays true until automation completes
         } else {
             // No more items - stop polling
-            console.log('Outreach queue: no more approved items, stopping');
+            extLogInfo('Outreach queue: no more approved items, stopping', { component: 'background' });
             stopOutreachQueuePolling();
         }
     } catch (err) {
-        console.error('Outreach queue poll error:', err);
+        extLogError(`Outreach queue poll error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
         outreachQueueProcessing = false;
     }
 });
@@ -2267,11 +2298,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function startOutreachQueuePolling() {
     const existing = await chrome.alarms.get(OUTREACH_QUEUE_ALARM_NAME);
     if (existing) {
-        console.log('Outreach queue polling already active');
+        extLogDebug('Outreach queue polling already active', { component: 'background' });
         return;
     }
 
-    console.log('Starting outreach queue polling (chrome.alarms)...');
+    extLogInfo('Starting outreach queue polling (chrome.alarms)...', { component: 'background' });
     chrome.alarms.create(OUTREACH_QUEUE_ALARM_NAME, {
         delayInMinutes: 0.08,
         periodInMinutes: OUTREACH_QUEUE_POLL_INTERVAL_MINUTES
@@ -2284,9 +2315,9 @@ async function startOutreachQueuePolling() {
             const nextItem = await api.getNextQueueItem(null, 'outreach');
             if (nextItem) {
                 if (await isQueueItemInProgress(nextItem.id)) {
-                    console.log('Outreach queue: item already in progress (immediate), skipping:', nextItem.id);
+                    extLogDebug(`Outreach queue: item already in progress (immediate), skipping: ${nextItem.id}`, { component: 'background' });
                 } else {
-                    console.log('Found approved outreach item (immediate):', nextItem.id);
+                    extLogInfo(`Found approved outreach item (immediate): ${nextItem.id}`, { component: 'background' });
                     outreachQueueProcessing = true;
                     await markQueueItemInProgress(nextItem.id);
                     await processOutreachQueueItem(nextItem);
@@ -2295,26 +2326,26 @@ async function startOutreachQueuePolling() {
                 }
             }
         } else {
-            console.log('Outreach queue: daily limit reached at startup');
+            extLogDebug('Outreach queue: daily limit reached at startup', { component: 'background' });
         }
     } catch (err) {
-        console.error('Outreach queue immediate check error:', err);
+        extLogError(`Outreach queue immediate check error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
     }
 }
 
 async function stopOutreachQueuePolling() {
-    console.log('Stopping outreach queue polling...');
+    extLogInfo('Stopping outreach queue polling...', { component: 'background' });
     await chrome.alarms.clear(OUTREACH_QUEUE_ALARM_NAME);
 }
 
 async function processOutreachQueueItem(item) {
-    console.log(`Processing outreach queue item: ${item.id} to u/${item.recipientUsername}`);
+    extLogInfo(`Processing outreach queue item: ${item.id} to u/${item.recipientUsername}`, { component: 'background' });
 
     // Account mismatch check
     const detected = await cookies.detectCurrentAccount(true);
     if (item.accountId && detected.accountId && item.accountId !== detected.accountId) {
         const check = await cookies.checkAccountMatch(item.accountId);
-        console.warn('Outreach queue account mismatch:', check.reason);
+        extLogWarn(`Outreach queue account mismatch: ${check.reason}`, { component: 'background' });
 
         chrome.notifications.create(`account-mismatch-outreach-${item.id}`, {
             type: 'basic',
@@ -2343,14 +2374,14 @@ async function processOutreachQueueItem(item) {
 
     if (!tabId && tabs.length > 0) {
         // All Reddit tabs have active tasks — defer instead of overwriting
-        console.log('Outreach queue: all Reddit tabs busy, deferring');
+        extLogDebug('Outreach queue: all Reddit tabs busy, deferring', { component: 'background' });
         await clearQueueItemInProgress(item.id);
         outreachQueueProcessing = false;
         return;
     }
 
     if (!tabId) {
-        console.log('No Reddit tab found - creating one for outreach automation');
+        extLogInfo('No Reddit tab found - creating one for outreach automation', { component: 'background' });
         const newTab = await chrome.tabs.create({
             url: `https://www.reddit.com/user/${item.recipientUsername}/`,
             active: false
@@ -2422,13 +2453,13 @@ async function processOutreachQueueItem(item) {
     try {
         const authed = await api.isAuthenticated();
         if (authed) {
-            console.log('User authenticated on worker start - auto-starting reply queue polling');
+            extLogInfo('User authenticated on worker start - auto-starting reply queue polling', { component: 'background' });
             startReplyQueuePolling();
         } else {
-            console.log('User not authenticated on worker start - reply queue polling not started');
+            extLogDebug('User not authenticated on worker start - reply queue polling not started', { component: 'background' });
         }
     } catch (err) {
-        console.error('Error checking auth on worker start:', err);
+        extLogError(`Error checking auth on worker start: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
     }
 })();
 

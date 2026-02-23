@@ -66,7 +66,7 @@ async def get_cached_classification(post_url: str) -> Optional[Dict[str, Any]]:
             "classifiedAt": data.get("classified_at")
         }
     except Exception as e:
-        print(f"Error fetching cached classification: {e}")
+        logger.error(f"Error fetching cached classification: {e}")
         return None
 
 
@@ -97,7 +97,7 @@ async def save_classification(post: Dict[str, Any], classification: Dict[str, An
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error saving classification: {e}")
+        logger.error(f"Error saving classification: {e}")
         return None
 
 
@@ -209,7 +209,7 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
     # Check cache first
     cached = await get_cached_classification(post.get("url", ""))
     if cached:
-        print(f"Using cached classification for: {post.get('url')}")
+        logger.debug(f"Using cached classification for: {post.get('url')}")
         return cached
 
     # Classify using title+body only — comments are fetched later for top posts in comment mining
@@ -444,5 +444,5 @@ async def get_classification_stats() -> Dict[str, int]:
             "notRelevant": len([d for d in data if d.get("category") == "not_relevant"])
         }
     except Exception as e:
-        print(f"Error fetching classification stats: {e}")
+        logger.error(f"Error fetching classification stats: {e}")
         return {"total": 0, "strongMatch": 0, "weakMatch": 0, "notRelevant": 0}

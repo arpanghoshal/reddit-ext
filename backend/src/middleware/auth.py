@@ -4,6 +4,7 @@ Validates API key in request headers for all protected routes
 Supports multiple hardcoded API keys with user info
 """
 
+import logging
 import os
 import secrets
 from fastapi import Request, HTTPException
@@ -12,6 +13,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from src.config.api_keys import get_api_key_info, is_valid_api_key, VALID_API_KEYS
+
+logger = logging.getLogger(__name__)
 
 # API key header name
 API_KEY_HEADER = "X-API-Key"
@@ -85,7 +88,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         # If no API keys configured at all, allow all requests (development mode)
         if not has_hardcoded_keys and not has_env_key:
-            print("WARNING: No API keys configured - API authentication disabled")
+            logger.warning("No API keys configured - API authentication disabled")
             request.state.user = {
                 "user_id": "anonymous",
                 "name": "Anonymous",

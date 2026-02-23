@@ -3,6 +3,7 @@ A/B Testing Service
 Systematic experimentation framework for message optimization
 """
 
+import logging
 import os
 import uuid
 import math
@@ -10,6 +11,8 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -87,7 +90,7 @@ async def create_experiment(
             result = client.table("ab_experiments").insert(experiment).execute()
             return result.data[0] if result.data else experiment
         except Exception as e:
-            print(f"Error creating experiment: {e}")
+            logger.error(f"Error creating experiment: {e}")
             return experiment
 
     return experiment
@@ -106,7 +109,7 @@ async def get_experiment(experiment_id: str) -> Optional[Dict[str, Any]]:
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error fetching experiment: {e}")
+        logger.error(f"Error fetching experiment: {e}")
         return None
 
 
@@ -123,7 +126,7 @@ async def get_active_experiments() -> List[Dict[str, Any]]:
 
         return result.data if result.data else []
     except Exception as e:
-        print(f"Error fetching active experiments: {e}")
+        logger.error(f"Error fetching active experiments: {e}")
         return []
 
 
@@ -143,7 +146,7 @@ async def update_experiment(
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error updating experiment: {e}")
+        logger.error(f"Error updating experiment: {e}")
         return None
 
 
@@ -266,7 +269,7 @@ async def record_impression(experiment_id: str, variant_id: str) -> bool:
 
         return True
     except Exception as e:
-        print(f"Error recording impression: {e}")
+        logger.error(f"Error recording impression: {e}")
         return False
 
 
@@ -325,7 +328,7 @@ async def record_outcome(
 
         return True
     except Exception as e:
-        print(f"Error recording outcome: {e}")
+        logger.error(f"Error recording outcome: {e}")
         return False
 
 
@@ -468,7 +471,7 @@ async def check_and_complete_experiment(experiment_id: str) -> bool:
                 "completed_at": datetime.utcnow().isoformat()
             })
 
-            print(f"Experiment {experiment_id} completed. Winner: {winner['variant_name']}")
+            logger.info(f"Experiment {experiment_id} completed. Winner: {winner['variant_name']}")
             return True
 
     return False

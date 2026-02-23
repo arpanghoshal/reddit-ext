@@ -65,7 +65,7 @@ async def add_to_queue(item: Dict[str, Any], team_id: Optional[str] = None) -> O
     """Add item to queue"""
     client = get_client()
     if not client:
-        print("Supabase not configured - cannot add to queue")
+        logger.warning("Supabase not configured - cannot add to queue")
         return None
 
     # Dedup check: block if recipient was already contacted (skip for replies)
@@ -122,7 +122,7 @@ async def add_to_queue(item: Dict[str, Any], team_id: Optional[str] = None) -> O
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error adding to queue: {e}")
+        logger.error(f"Error adding to queue: {e}")
         return None
 
 
@@ -180,7 +180,7 @@ async def get_queue(filters: Dict[str, Any] = None, team_id: Optional[str] = Non
         result = query.execute()
         return [transform_queue_item(row) for row in result.data] if result.data else []
     except Exception as e:
-        print(f"Error fetching queue: {e}")
+        logger.error(f"Error fetching queue: {e}")
         return []
 
 
@@ -197,7 +197,7 @@ async def get_queue_item(item_id: str, team_id: Optional[str] = None) -> Optiona
         result = query.execute()
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error fetching queue item: {e}")
+        logger.error(f"Error fetching queue item: {e}")
         return None
 
 
@@ -225,7 +225,7 @@ async def update_queue_item(item_id: str, updates: Dict[str, Any], team_id: Opti
         result = query.execute()
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error updating queue item: {e}")
+        logger.error(f"Error updating queue item: {e}")
         return None
 
 
@@ -242,7 +242,7 @@ async def delete_queue_item(item_id: str, team_id: Optional[str] = None) -> bool
         query.execute()
         return True
     except Exception as e:
-        print(f"Error deleting queue item: {e}")
+        logger.error(f"Error deleting queue item: {e}")
         return False
 
 
@@ -265,7 +265,7 @@ async def approve_queue_item(item_id: str, approved_by: Optional[str] = None, te
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error approving queue item: {e}")
+        logger.error(f"Error approving queue item: {e}")
         return None
 
 
@@ -287,7 +287,7 @@ async def reject_queue_item(item_id: str, reason: Optional[str] = None, team_id:
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error rejecting queue item: {e}")
+        logger.error(f"Error rejecting queue item: {e}")
         return None
 
 
@@ -311,7 +311,7 @@ async def bulk_approve(ids: List[str], approved_by: Optional[str] = None, team_i
         success_count = len(result.data) if result.data else 0
         return {"success": success_count, "failed": len(ids) - success_count}
     except Exception as e:
-        print(f"Error bulk approving: {e}")
+        logger.error(f"Error bulk approving: {e}")
         return {"success": 0, "failed": len(ids)}
 
 
@@ -334,7 +334,7 @@ async def bulk_reject(ids: List[str], reason: Optional[str] = None, team_id: Opt
         success_count = len(result.data) if result.data else 0
         return {"success": success_count, "failed": len(ids) - success_count}
     except Exception as e:
-        print(f"Error bulk rejecting: {e}")
+        logger.error(f"Error bulk rejecting: {e}")
         return {"success": 0, "failed": len(ids)}
 
 
@@ -364,7 +364,7 @@ async def get_next_to_send(account_id: Optional[str] = None, message_type: Optio
     except Exception as e:
         # PGRST116 = no rows found
         if "PGRST116" not in str(e):
-            print(f"Error getting next to send: {e}")
+            logger.error(f"Error getting next to send: {e}")
         return None
 
 
@@ -404,7 +404,7 @@ async def mark_as_sent(item_id: str, team_id: Optional[str] = None) -> Optional[
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error marking as sent: {e}")
+        logger.error(f"Error marking as sent: {e}")
         return None
 
 
@@ -429,7 +429,7 @@ async def mark_as_failed(item_id: str, reason: str, team_id: Optional[str] = Non
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error marking as failed: {e}")
+        logger.error(f"Error marking as failed: {e}")
         return None
 
 
@@ -467,7 +467,7 @@ async def get_queue_stats(message_type: Optional[str] = None, team_id: Optional[
             "total": len(data)
         }
     except Exception as e:
-        print(f"Error fetching queue stats: {e}")
+        logger.error(f"Error fetching queue stats: {e}")
         return {"pending": 0, "approved": 0, "sent": 0, "failed": 0, "rejected": 0}
 
 
@@ -491,5 +491,5 @@ async def get_pending_reply_for_conversation(conversation_id: str, team_id: Opti
 
         return transform_queue_item(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error checking pending reply: {e}")
+        logger.error(f"Error checking pending reply: {e}")
         return None

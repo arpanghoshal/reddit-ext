@@ -3,10 +3,13 @@ Team Quotas Service
 Manages team usage limits and quota enforcement
 """
 
+import logging
 import os
 from datetime import datetime, date
 from typing import Dict, Any, Optional
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -34,7 +37,7 @@ async def get_team_quota(team_id: str) -> Optional[Dict[str, Any]]:
             return result.data[0]
         return None
     except Exception as e:
-        print(f"Error fetching team quota: {e}")
+        logger.error(f"Error fetching team quota: {e}")
         return None
 
 
@@ -61,7 +64,7 @@ async def get_today_usage(team_id: str) -> Optional[Dict[str, Any]]:
 
         return create_result.data[0] if create_result.data else None
     except Exception as e:
-        print(f"Error fetching today's usage: {e}")
+        logger.error(f"Error fetching today's usage: {e}")
         return None
 
 
@@ -109,7 +112,7 @@ async def check_quota(team_id: str, resource: str) -> Dict[str, Any]:
             "message": f"Quota exceeded for {resource}" if not allowed else None
         }
     except Exception as e:
-        print(f"Error checking quota: {e}")
+        logger.error(f"Error checking quota: {e}")
         return {"allowed": True, "message": f"Quota check error: {e}"}
 
 
@@ -123,7 +126,7 @@ async def increment_usage(team_id: str, metric: str, amount: int = 1) -> Optiona
         # Valid metrics
         valid_metrics = ["dms_sent", "dms_received", "accounts_active", "api_calls"]
         if metric not in valid_metrics:
-            print(f"Invalid metric: {metric}")
+            logger.warning(f"Invalid metric: {metric}")
             return None
 
         # Use atomic RPC function to avoid read-then-write race condition
@@ -149,7 +152,7 @@ async def increment_usage(team_id: str, metric: str, amount: int = 1) -> Optiona
 
             return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error incrementing usage: {e}")
+        logger.error(f"Error incrementing usage: {e}")
         return None
 
 
@@ -192,7 +195,7 @@ async def get_usage_summary(team_id: str, days: int = 7) -> Dict[str, Any]:
             }
         }
     except Exception as e:
-        print(f"Error fetching usage summary: {e}")
+        logger.error(f"Error fetching usage summary: {e}")
         return {}
 
 
@@ -217,7 +220,7 @@ async def update_quota(team_id: str, updates: Dict[str, int]) -> Optional[Dict[s
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error updating quota: {e}")
+        logger.error(f"Error updating quota: {e}")
         return None
 
 
@@ -264,5 +267,5 @@ async def get_quota_status(team_id: str) -> Dict[str, Any]:
             }
         }
     except Exception as e:
-        print(f"Error fetching quota status: {e}")
+        logger.error(f"Error fetching quota status: {e}")
         return {}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { XCircle, RefreshCw, ExternalLink, Filter } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 const REASON_COLORS = {
   'not_relevant': '#6b7280',
@@ -126,7 +127,7 @@ export default function Skipped() {
       setPosts(postsData || []);
       setStats(statsData || { total: 0, byReason: {}, bySubreddit: {} });
     } catch (err) {
-      console.error('Failed to load skipped posts:', err);
+      logError('Failed to load skipped posts', { component: 'Skipped', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setLoading(false);
     }

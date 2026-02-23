@@ -3,6 +3,7 @@ Account Rotation Service
 Selects the best account for sending DMs based on various factors
 """
 
+import logging
 import os
 import random
 from datetime import datetime
@@ -10,6 +11,8 @@ from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
 from . import accounts
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -46,7 +49,7 @@ async def get_subreddit_accounts(subreddit: str) -> List[Dict[str, Any]]:
             for d in result.data if d.get("reddit_accounts")
         ]
     except Exception as e:
-        print(f"Error fetching subreddit accounts: {e}")
+        logger.error(f"Error fetching subreddit accounts: {e}")
         return []
 
 
@@ -104,7 +107,7 @@ async def select_account_for_subreddit(subreddit: str) -> Optional[Dict[str, Any
 
     if not assignments:
         # Fall back to any available account
-        print(f"No accounts assigned to r/{subreddit}, selecting any available")
+        logger.warning(f"No accounts assigned to r/{subreddit}, selecting any available")
         return await select_any_available_account()
 
     # Filter to available accounts
@@ -135,7 +138,7 @@ async def select_account_for_subreddit(subreddit: str) -> Optional[Dict[str, Any
             })
 
     if not available_accounts:
-        print(f"No available accounts for r/{subreddit}")
+        logger.warning(f"No available accounts for r/{subreddit}")
         return None
 
     # Sort by score (descending)
@@ -148,7 +151,7 @@ async def select_account_for_subreddit(subreddit: str) -> Optional[Dict[str, Any
     for account in available_accounts:
         rand -= account["score"]
         if rand <= 0:
-            print(f"Selected account {account['username']} for r/{subreddit} (score: {account['score']})")
+            logger.info(f"Selected account {account['username']} for r/{subreddit} (score: {account['score']})")
             return account
 
     # Fallback to highest scored
@@ -299,5 +302,5 @@ async def rebalance_assignments() -> Dict[str, Any]:
 
         return {"success": True, "stats": stats, "recommendation": recommendation}
     except Exception as e:
-        print(f"Error rebalancing: {e}")
+        logger.error(f"Error rebalancing: {e}")
         return {"success": False, "reason": str(e)}

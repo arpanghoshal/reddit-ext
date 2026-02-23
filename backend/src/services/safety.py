@@ -11,6 +11,9 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from supabase import create_client, Client
+import logging
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -80,7 +83,7 @@ async def log_safety_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Log a safety event"""
     client = get_client()
     if not client:
-        print(f"Safety event (not logged): {event}")
+        logger.warning(f"Safety event (not logged): {event.get('eventType', 'unknown')}")
         return None
 
     try:
@@ -92,7 +95,7 @@ async def log_safety_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error logging safety event: {e}")
+        logger.error(f"Error logging safety event: {e}")
         return None
 
 
@@ -122,7 +125,7 @@ async def get_safety_events(filters: Dict[str, Any] = None) -> List[Dict[str, An
         result = query.execute()
         return result.data if result.data else []
     except Exception as e:
-        print(f"Error fetching safety events: {e}")
+        logger.error(f"Error fetching safety events: {e}")
         return []
 
 
@@ -338,7 +341,7 @@ async def get_account_health(account_id: str) -> Dict[str, Any]:
 
         return {"warnings": warnings, "status": status, "recentEvents": events[:10]}
     except Exception as e:
-        print(f"Error getting account health: {e}")
+        logger.error(f"Error getting account health: {e}")
         return {"warnings": [], "status": "unknown", "error": str(e)}
 
 
@@ -381,7 +384,7 @@ async def get_recent_dm_activity(account_id: str, hours: int = 24) -> Dict[str, 
             "rejected_count": len([d for d in dms if d.get("status") == "rejected"])
         }
     except Exception as e:
-        print(f"Error getting recent DM activity: {e}")
+        logger.error(f"Error getting recent DM activity: {e}")
         return {"dms": [], "count": 0}
 
 
@@ -719,7 +722,7 @@ async def check_duplicate_recipient(
             "reason": f"User was contacted {len(result.data)} time(s) in the last {lookback_days} days"
         }
     except Exception as e:
-        print(f"Error checking duplicate recipient: {e}")
+        logger.error(f"Error checking duplicate recipient: {e}")
         return {"is_duplicate": False, "error": str(e)}
 
 
@@ -785,7 +788,7 @@ async def check_message_similarity(
 
         return {"is_similar": False}
     except Exception as e:
-        print(f"Error checking message similarity: {e}")
+        logger.error(f"Error checking message similarity: {e}")
         return {"is_similar": False, "error": str(e)}
 
 

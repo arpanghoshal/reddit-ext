@@ -5,6 +5,7 @@ import {
   Target, Shield, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { getAuditLog } from '../api/client';
+import { logError } from '../lib/logger';
 
 /**
  * AuditLog Page
@@ -47,7 +48,7 @@ export default function AuditLog() {
         hasMore: (data.data || []).length === prev.limit
       }));
     } catch (err) {
-      console.error('Error fetching audit log:', err);
+      logError('Error fetching audit log', { component: 'AuditLog', errorName: err?.name, errorStack: err?.stack });
       setError(err.message);
     } finally {
       setLoading(false);

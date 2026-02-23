@@ -5,11 +5,13 @@ Main entry point
 
 import os
 import logging
-import traceback
+import time
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -20,17 +22,40 @@ from .routes import quotas as quotas_routes
 from .routes import audit as audit_routes
 from .routes import team_analytics as team_analytics_routes
 from .routes import discovery as discovery_routes
+from .routes import logs as logs_routes
 from .middleware.supabase_auth import SupabaseAuthMiddleware
+from .config.logging_config import (
+    setup_logging,
+    request_id_var,
+    team_id_var,
+    user_id_var,
+)
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure structured logging (replaces basicConfig)
+setup_logging()
 logger = logging.getLogger(__name__)
+
+# Initialize Sentry (if configured)
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            integrations=[FastApiIntegration()],
+            traces_sample_rate=0.1,
+            environment=os.getenv("ENVIRONMENT", "development"),
+            release="reddit-ext-backend@0.0.1",
+            send_default_pii=False,
+        )
+        logger.info("Sentry initialized")
+    except Exception as e:
+        logger.warning(f"Sentry init failed: {e}")
 
 
 def validate_required_env_vars():
@@ -105,11 +130,47 @@ app.add_middleware(
     allow_origin_regex=r"^chrome-extension://.*$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Team-ID"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Team-ID", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 
-# Supabase JWT Authentication Middleware
+
+# Request context middleware — generates/reads X-Request-ID and logs request lifecycle
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
+        request_id_var.set(req_id)
+
+        start = time.time()
+        response = await call_next(request)
+        duration_ms = round((time.time() - start) * 1000, 2)
+
+        # Read team/user context set by SupabaseAuthMiddleware
+        team_id_var.set(getattr(request.state, "team_id", "") or "")
+        user_id_var.set(getattr(request.state, "user_id", "") or "")
+
+        response.headers["X-Request-ID"] = req_id
+
+        # Log request completion (skip noisy health checks)
+        if request.url.path != "/health":
+            logger.info(
+                "request_completed",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": response.status_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+
+        return response
+
+
+# Middleware order: added last = runs first
+# 1. RequestContextMiddleware (outermost — sets request_id)
+# 2. SupabaseAuthMiddleware (inner — sets team_id/user_id on request.state)
 app.add_middleware(SupabaseAuthMiddleware)
+app.add_middleware(RequestContextMiddleware)
 
 # Health check endpoint (public, no auth required)
 @app.get("/health")
@@ -128,6 +189,8 @@ app.include_router(quotas_routes.router, prefix="/api")
 app.include_router(audit_routes.router, prefix="/api")
 app.include_router(team_analytics_routes.router, prefix="/api")
 app.include_router(discovery_routes.router, prefix="/api")
+app.include_router(logs_routes.router, prefix="/api")
+
 
 # Global error handler - sanitized for security
 @app.exception_handler(Exception)
@@ -136,26 +199,45 @@ async def global_exception_handler(request: Request, exc: Exception):
     Global exception handler that logs full errors internally
     but returns sanitized messages to clients
     """
-    # Generate a unique error ID for correlation
-    import uuid
     error_id = str(uuid.uuid4())[:8]
+    req_id = request_id_var.get("")
 
-    # Log the full error with stack trace internally
+    # Enrich Sentry context if available
+    if _sentry_dsn:
+        try:
+            import sentry_sdk
+
+            sentry_sdk.set_tag("error_id", error_id)
+            sentry_sdk.set_tag("request_id", req_id)
+            sentry_sdk.set_context(
+                "request",
+                {
+                    "path": request.url.path,
+                    "method": request.method,
+                    "team_id": getattr(request.state, "team_id", None),
+                },
+            )
+        except Exception:
+            pass
+
     logger.error(
-        f"Unhandled exception [error_id={error_id}] "
-        f"path={request.url.path} method={request.method}",
-        exc_info=True
+        "unhandled_exception",
+        extra={
+            "error_id": error_id,
+            "request_id": req_id,
+            "path": request.url.path,
+            "method": request.method,
+        },
+        exc_info=True,
     )
 
-    # Return sanitized error to client
-    # Never expose internal error details, stack traces, or sensitive information
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal server error",
             "error_id": error_id,
-            "message": "An unexpected error occurred. Please try again or contact support with the error_id."
-        }
+            "message": "An unexpected error occurred. Please try again or contact support with the error_id.",
+        },
     )
 
 

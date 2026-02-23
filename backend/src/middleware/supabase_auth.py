@@ -4,6 +4,7 @@ Validates Supabase JWT tokens for protected routes
 Supports both HS256 (JWT secret) and ES256 (JWKS public key) verification
 """
 
+import logging
 import os
 import time
 from typing import Optional, Dict, Any
@@ -12,6 +13,8 @@ from jwt import PyJWKClient
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 # Public endpoints that don't require authentication
@@ -59,9 +62,9 @@ def get_jwks_client() -> Optional[PyJWKClient]:
         try:
             _jwks_client = PyJWKClient(jwks_url)
             _jwks_cache_time = current_time
-            print(f"JWKS client initialized from {jwks_url}")
+            logger.info(f"JWKS client initialized from {jwks_url}")
         except Exception as e:
-            print(f"Failed to create JWKS client: {e}")
+            logger.error(f"Failed to create JWKS client: {e}")
             return None
 
     return _jwks_client
@@ -96,13 +99,13 @@ def decode_supabase_jwt(token: str) -> Optional[Dict[str, Any]]:
             )
             return payload
         except jwt.ExpiredSignatureError:
-            print("JWT token expired")
+            logger.warning("JWT token expired (ES256)")
             return None
         except jwt.InvalidTokenError as e:
-            print(f"ES256 JWT validation failed: {e}")
+            logger.debug(f"ES256 JWT validation failed: {e}")
             # Fall through to try HS256
         except Exception as e:
-            print(f"JWKS verification error: {e}")
+            logger.warning(f"JWKS verification error: {e}")
             # Fall through to try HS256
 
     # Fallback to HS256 with secret (older Supabase projects)
@@ -117,13 +120,13 @@ def decode_supabase_jwt(token: str) -> Optional[Dict[str, Any]]:
             )
             return payload
         except jwt.ExpiredSignatureError:
-            print("JWT token expired")
+            logger.warning("JWT token expired (HS256)")
             return None
         except jwt.InvalidTokenError as e:
-            print(f"HS256 JWT validation failed: {e}")
+            logger.warning(f"HS256 JWT validation failed: {e}")
             return None
 
-    print("WARNING: No JWT verification method available (set SUPABASE_URL or SUPABASE_JWT_SECRET)")
+    logger.warning("No JWT verification method available (set SUPABASE_URL or SUPABASE_JWT_SECRET)")
     return None
 
 
@@ -146,7 +149,7 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
 
         # Check if auth is configured
         if not is_auth_configured():
-            print("WARNING: Auth not configured - running in dev mode")
+            logger.warning("Auth not configured - running in dev mode")
             request.state.user_id = None
             request.state.team_id = None
             request.state.user = {

@@ -4,12 +4,15 @@ Database operations for DM history, automation logs, settings, and analytics
 """
 
 import os
+import logging
 import random
 import string
 import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -46,7 +49,7 @@ async def log_dm(data: Dict[str, Any], team_id: Optional[str] = None) -> Optiona
     """Log a DM to the database and create a conversation"""
     client = get_client()
     if not client:
-        print("Supabase not configured - skipping DM logging")
+        logger.warning("Supabase not configured - skipping DM logging")
         return None
 
     try:
@@ -69,7 +72,7 @@ async def log_dm(data: Dict[str, Any], team_id: Optional[str] = None) -> Optiona
 
         if result.data:
             dm_record = result.data[0]
-            print(f"DM logged to Supabase: {dm_record}")
+            logger.info(f"DM logged: {dm_record.get('id', 'unknown')}")
 
             # Auto-create conversation for this DM
             recipient = data.get("recipientUsername", "").lower()
@@ -88,7 +91,7 @@ async def log_dm(data: Dict[str, Any], team_id: Optional[str] = None) -> Optiona
             return dm_record
         return None
     except Exception as e:
-        print(f"Failed to log DM: {e}")
+        logger.error(f"Failed to log DM: {e}")
         return None
 
 
@@ -140,7 +143,7 @@ async def _create_or_update_conversation(
             conv_result = client.table("conversations").insert(conv_insert).execute()
             if conv_result.data:
                 conversation_id = conv_result.data[0]["id"]
-                print(f"Conversation created for {recipient}")
+                logger.info(f"Conversation created for {recipient}")
 
         # Add the message to the messages table (with fingerprint dedup)
         if conversation_id and data.get("messageContent"):
@@ -169,13 +172,13 @@ async def _create_or_update_conversation(
                 ).execute()
                 msg_ok = True
             except Exception as upsert_err:
-                print(f"Message upsert failed, trying insert without fingerprint: {upsert_err}")
+                logger.warning(f"Message upsert failed, trying insert without fingerprint: {upsert_err}")
                 msg_insert.pop("fingerprint", None)
                 try:
                     client.table("messages").insert(msg_insert).execute()
                     msg_ok = True
                 except Exception as insert_err:
-                    print(f"Message insert fallback also failed: {insert_err}")
+                    logger.error(f"Message insert fallback also failed: {insert_err}")
 
             if msg_ok:
                 # Update total_messages based on actual count
@@ -186,10 +189,10 @@ async def _create_or_update_conversation(
                 client.table("conversations").update({
                     "total_messages": actual_count
                 }).eq("id", conversation_id).execute()
-                print(f"Message added to conversation {conversation_id} (total: {actual_count})")
+                logger.info(f"Message added to conversation {conversation_id} (total: {actual_count})")
 
     except Exception as e:
-        print(f"Failed to create/update conversation: {e}")
+        logger.error(f"Failed to create/update conversation: {e}")
 
 
 async def get_dm_history(limit: int = 50, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -214,7 +217,7 @@ async def get_dm_history(limit: int = 50, team_id: Optional[str] = None) -> List
             row["account_username"] = account.get("username") if account else None
         return result.data
     except Exception as e:
-        print(f"Failed to get DM history: {e}")
+        logger.error(f"Failed to get DM history: {e}")
         return []
 
 
@@ -226,7 +229,7 @@ async def start_automation_session(data: Dict[str, Any], team_id: Optional[str] 
     session_id = generate_session_id()
 
     if not client:
-        print("Supabase not configured - skipping session logging")
+        logger.warning("Supabase not configured - skipping session logging")
         return {"sessionId": session_id, "record": None}
 
     try:
@@ -244,11 +247,11 @@ async def start_automation_session(data: Dict[str, Any], team_id: Optional[str] 
         result = client.table("automation_logs").insert(insert_data).execute()
 
         if result.data:
-            print(f"Automation session started: {result.data[0]}")
+            logger.info(f"Automation session started: {session_id}")
             return {"sessionId": session_id, "record": result.data[0]}
         return {"sessionId": session_id, "record": None}
     except Exception as e:
-        print(f"Failed to start automation session: {e}")
+        logger.error(f"Failed to start automation session: {e}")
         return {"sessionId": session_id, "record": None}
 
 
@@ -280,11 +283,11 @@ async def update_automation_session(session_id: str, data: Dict[str, Any], team_
         result = query.execute()
 
         if result.data:
-            print(f"Automation session updated: {result.data[0]}")
+            logger.info(f"Automation session updated: {session_id}")
             return result.data[0]
         return None
     except Exception as e:
-        print(f"Failed to update automation session: {e}")
+        logger.error(f"Failed to update automation session: {e}")
         return None
 
 
@@ -304,7 +307,7 @@ async def get_automation_logs(limit: int = 20, team_id: Optional[str] = None) ->
 
         return result.data if result.data else []
     except Exception as e:
-        print(f"Failed to get automation logs: {e}")
+        logger.error(f"Failed to get automation logs: {e}")
         return []
 
 
@@ -314,7 +317,7 @@ async def save_settings(settings: Dict[str, Any], team_id: Optional[str] = None)
     """Save user settings"""
     client = get_client()
     if not client:
-        print("Supabase not configured - settings saved locally only")
+        logger.warning("Supabase not configured - settings saved locally only")
         return None
 
     try:
@@ -339,11 +342,11 @@ async def save_settings(settings: Dict[str, Any], team_id: Optional[str] = None)
             result = client.table("user_settings").insert(settings_data).execute()
 
         if result.data:
-            print(f"Settings saved to Supabase: {result.data[0]}")
+            logger.info("Settings saved to Supabase")
             return result.data[0]
         return None
     except Exception as e:
-        print(f"Failed to save settings: {e}")
+        logger.error(f"Failed to save settings: {e}")
         return None
 
 
@@ -365,7 +368,7 @@ async def get_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]
     except Exception as e:
         # PGRST116 = no rows found
         if "PGRST116" not in str(e):
-            print(f"Failed to get settings: {e}")
+            logger.error(f"Failed to get settings: {e}")
         return None
 
 
@@ -426,7 +429,7 @@ async def get_analytics(team_id: Optional[str] = None) -> Dict[str, Any]:
             "weekCount": len(week_dms)
         }
     except Exception as e:
-        print(f"Failed to get analytics: {e}")
+        logger.error(f"Failed to get analytics: {e}")
         return {"totalDMs": 0, "successRate": 0, "todayCount": 0, "weekCount": 0}
 
 
@@ -458,5 +461,5 @@ async def get_dms_by_subreddit(limit: int = 10, team_id: Optional[str] = None) -
         sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
         return [{"subreddit": sub, "count": count} for sub, count in sorted_items[:limit]]
     except Exception as e:
-        print(f"Failed to get DMs by subreddit: {e}")
+        logger.error(f"Failed to get DMs by subreddit: {e}")
         return []

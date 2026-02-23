@@ -3,10 +3,13 @@ Lead Scoring Service
 Multi-factor lead scoring for intelligent targeting
 """
 
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -133,7 +136,7 @@ async def get_interaction_history_score(username: str) -> float:
         return 40
 
     except Exception as e:
-        print(f"Error getting interaction history: {e}")
+        logger.error(f"Error getting interaction history: {e}")
         return 50
 
 
@@ -306,7 +309,7 @@ async def score_batch(
                 "lead_score": score
             })
         except Exception as e:
-            print(f"Error scoring lead: {e}")
+            logger.error(f"Error scoring lead: {e}")
             results.append({
                 "post": lead.get("post"),
                 "lead_score": {"error": str(e)}
@@ -367,7 +370,7 @@ async def get_lead_score_stats(days: int = 7) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        print(f"Error getting lead score stats: {e}")
+        logger.error(f"Error getting lead score stats: {e}")
         return {"error": str(e)}
 
 

@@ -2,6 +2,10 @@
 // Lightweight content script injected only on the dashboard domain.
 // Relays auth events from the dashboard page to the extension background.
 
+function reportLog(level, message, opts = {}) {
+    try { chrome.runtime.sendMessage({ action: 'CLIENT_LOG', data: { level, message, opts } }); } catch {}
+}
+
 const ALLOWED_ORIGINS = [
   'https://reddit-ext-dashboard.vercel.app',
   'http://localhost:5173',
@@ -116,7 +120,7 @@ sendToBackground({ action: 'DASHBOARD_TAB_READY' }).catch(() => {});
 // the current session via the normal postMessage bridge flow.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'REQUEST_AUTH_FROM_PAGE') {
-    console.log('[Auth Bridge] Received REQUEST_AUTH_FROM_PAGE, re-announcing ready');
+    reportLog('debug', 'Received REQUEST_AUTH_FROM_PAGE, re-announcing ready', { component: 'auth-bridge' });
     announceReady();
     // Also announce again after a short delay in case React hasn't mounted yet
     setTimeout(announceReady, 300);

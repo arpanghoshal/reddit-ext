@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Zap, RefreshCw, Save, Check } from 'lucide-react';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 const TONE_OPTIONS = ['Curious', 'Helpful', 'Casual', 'Professional', 'Friendly', 'Direct'];
 
@@ -80,7 +81,7 @@ export default function Settings() {
         setAutomationSettings(prev => ({ ...prev, ...autoSettings }));
       }
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      logError('Failed to load settings', { component: 'Settings', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setLoading(false);
     }
@@ -98,7 +99,7 @@ export default function Settings() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      logError('Failed to save settings', { component: 'Settings', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setSaving(false);
     }

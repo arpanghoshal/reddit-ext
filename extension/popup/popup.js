@@ -1,5 +1,9 @@
 // Popup Script for Reddit Automated DM Extension
 
+function reportLog(level, message, opts = {}) {
+    try { chrome.runtime.sendMessage({ action: 'CLIENT_LOG', data: { level, message, opts } }); } catch {}
+}
+
 const DEFAULT_DASHBOARD_URL = 'https://reddit-ext-dashboard.vercel.app';
 const DEFAULT_BACKEND_URL = 'https://backend-production-423ef.up.railway.app';
 
@@ -41,7 +45,7 @@ async function checkAuthState() {
 
         try {
             const syncResult = await chrome.runtime.sendMessage({ action: 'SYNC_FROM_DASHBOARD' });
-            console.log('[Popup] SYNC_FROM_DASHBOARD result:', syncResult);
+            reportLog('info', 'SYNC_FROM_DASHBOARD result: ' + JSON.stringify(syncResult), { component: 'popup' });
             if (syncResult && syncResult.success) {
                 setSyncStatus('');
                 showMainSection(syncResult.email);
@@ -50,9 +54,9 @@ async function checkAuthState() {
                 await checkConnection();
                 return;
             }
-            console.log('[Popup] Sync not ready:', syncResult?.error);
+            reportLog('info', 'Sync not ready: ' + (syncResult?.error || 'unknown'), { component: 'popup' });
         } catch (err) {
-            console.warn('[Popup] Sync error:', err.message);
+            reportLog('warn', 'Sync error: ' + err.message, { component: 'popup' });
         }
 
         setSyncStatus('');
@@ -126,7 +130,7 @@ async function loadStats() {
             document.getElementById('stat-replies').textContent = convResponse.withReplies || 0;
         }
     } catch (error) {
-        console.error('Failed to load stats:', error);
+        reportLog('error', 'Failed to load stats: ' + error.message, { component: 'popup' });
         const localData = await chrome.storage.local.get(['rateLimitState']);
         if (localData.rateLimitState) {
             document.getElementById('stat-today').textContent = localData.rateLimitState.dailyCount || 0;

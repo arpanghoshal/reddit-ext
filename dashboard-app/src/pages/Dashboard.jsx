@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MessageCircle, TrendingUp, CheckCircle, Users, RefreshCw, AlertTriangle, ChevronRight, Activity } from 'lucide-react';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 function StatCard({ title, value, subtitle, icon: Icon, accent }) {
   return (
@@ -155,7 +156,7 @@ export default function Dashboard() {
       setRotationStatus(rotData);
     } catch (err) {
       setError('Failed to load dashboard data');
-      console.error(err);
+      logError(err.message || 'Failed to load dashboard data', { component: 'Dashboard', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setLoading(false);
     }

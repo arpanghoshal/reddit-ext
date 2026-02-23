@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Check, X, Edit2, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Send, Inbox } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import * as api from '../api/client';
+import { logError } from '../lib/logger';
 
 function QueueItem({ item, onApprove, onReject, onSelect, isSelected, isReplyQueue, onSend }) {
   const [expanded, setExpanded] = useState(false);
@@ -186,7 +187,7 @@ export default function Queue() {
       setItems(queueItems || []);
       setStats(queueStats);
     } catch (err) {
-      console.error('Failed to load queue:', err);
+      logError('Failed to load queue', { component: 'Queue', errorName: err?.name, errorStack: err?.stack });
       setError('Failed to load queue data');
     } finally {
       if (showSpinner) setLoading(false);
@@ -217,7 +218,7 @@ export default function Queue() {
       await api.approveQueueItem(id);
       loadData();
     } catch (err) {
-      console.error('Failed to approve:', err);
+      logError('Failed to approve', { component: 'Queue', errorName: err?.name, errorStack: err?.stack });
       setError('Failed to approve item');
     }
   };
@@ -227,7 +228,7 @@ export default function Queue() {
       await api.rejectQueueItem(id);
       loadData();
     } catch (err) {
-      console.error('Failed to reject:', err);
+      logError('Failed to reject', { component: 'Queue', errorName: err?.name, errorStack: err?.stack });
       setError('Failed to reject item');
     }
   };
@@ -239,7 +240,7 @@ export default function Queue() {
       setSelectedIds(new Set());
       loadData();
     } catch (err) {
-      console.error('Failed to bulk approve:', err);
+      logError('Failed to bulk approve', { component: 'Queue', errorName: err?.name, errorStack: err?.stack });
       setError('Failed to bulk approve');
     }
   };
@@ -251,7 +252,7 @@ export default function Queue() {
       setSelectedIds(new Set());
       loadData();
     } catch (err) {
-      console.error('Failed to bulk reject:', err);
+      logError('Failed to bulk reject', { component: 'Queue', errorName: err?.name, errorStack: err?.stack });
       setError('Failed to bulk reject');
     }
   };

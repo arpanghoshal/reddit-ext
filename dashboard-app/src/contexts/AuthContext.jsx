@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { logError, logWarn } from '../lib/logger';
 
 const AuthContext = createContext({});
 
@@ -73,7 +74,7 @@ export function AuthProvider({ children }) {
     // Safety timeout - never stay loading forever
     const timeout = setTimeout(() => {
       if (mounted && loading) {
-        console.warn('[AuthContext] Init timeout - forcing loading=false');
+        logWarn('Init timeout - forcing loading=false', { component: 'AuthContext' });
         setLoading(false);
       }
     }, 5000);
@@ -210,7 +211,7 @@ export function AuthProvider({ children }) {
         });
       }
     } catch (error) {
-      console.error('Error fetching teams:', error);
+      logError('Error fetching teams', { component: 'AuthContext', errorName: error?.name, errorStack: error?.stack });
       // Still broadcast auth tokens even if team fetch failed, so the
       // extension at least gets authenticated (without team context).
       const s = sessionRef.current;

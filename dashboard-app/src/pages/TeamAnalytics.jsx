@@ -4,6 +4,7 @@ import {
   ArrowUp, ArrowDown, RefreshCw, Download
 } from 'lucide-react';
 import { getTeamAnalytics } from '../api/client';
+import { logError } from '../lib/logger';
 
 /**
  * TeamAnalytics Page
@@ -25,7 +26,7 @@ export default function TeamAnalytics() {
       const data = await getTeamAnalytics(period);
       setAnalytics(data);
     } catch (err) {
-      console.error('Error fetching analytics:', err);
+      logError('Error fetching analytics', { component: 'TeamAnalytics', errorName: err?.name, errorStack: err?.stack });
       setError(err.message);
     } finally {
       setLoading(false);

@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from collections import Counter
 from supabase import create_client, Client
+import logging
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -82,7 +85,7 @@ async def log_funnel_event(
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error logging funnel event: {e}")
+        logger.error(f"Error logging funnel event: {e}")
         return None
 
 
@@ -181,7 +184,7 @@ async def get_funnel_metrics(
         }
 
     except Exception as e:
-        print(f"Error getting funnel metrics: {e}")
+        logger.error(f"Error getting funnel metrics: {e}")
         return {"error": str(e)}
 
 
@@ -325,7 +328,7 @@ async def get_roi_metrics(
         }
 
     except Exception as e:
-        print(f"Error calculating ROI metrics: {e}")
+        logger.error(f"Error calculating ROI metrics: {e}")
         return {"error": str(e)}
 
 
@@ -373,7 +376,7 @@ async def log_conversion(
 
         return result.data[0] if result.data else None
     except Exception as e:
-        print(f"Error logging conversion: {e}")
+        logger.error(f"Error logging conversion: {e}")
         return None
 
 
@@ -449,7 +452,7 @@ async def get_performance_by_subreddit(
         return performance[:limit]
 
     except Exception as e:
-        print(f"Error getting subreddit performance: {e}")
+        logger.error(f"Error getting subreddit performance: {e}")
         return []
 
 
@@ -510,7 +513,7 @@ async def get_performance_by_day(
         return performance
 
     except Exception as e:
-        print(f"Error getting daily performance: {e}")
+        logger.error(f"Error getting daily performance: {e}")
         return []
 
 

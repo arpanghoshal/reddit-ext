@@ -1,5 +1,18 @@
 console.log('Reddit Automated DM: Content script loaded');
 
+// --- Lightweight Logger Relay (sends to background service worker) ---
+function reportToBackground(level, message, opts = {}) {
+    if (!isContextValid()) return;
+    try {
+        chrome.runtime.sendMessage({
+            action: 'CLIENT_LOG',
+            data: { level, message, opts: { ...opts, url: window.location.href } }
+        });
+    } catch {
+        // Extension context invalidated - ignore
+    }
+}
+
 // --- Extension Context Validity ---
 let contextInvalidated = false;
 
@@ -14,7 +27,7 @@ function isContextValid() {
 function onContextInvalidated() {
     if (contextInvalidated) return;
     contextInvalidated = true;
-    console.log('Reddit Automated DM: Extension updated, cleaning up...');
+    reportToBackground('info', 'Extension updated, cleaning up...', { component: 'content' });
     stopChatSync();
     bulkSyncActive = false;
     bulkSyncCancelled = true;
@@ -42,7 +55,7 @@ function safeSendMessage(message) {
         if (e.message?.includes('Extension context invalidated')) {
             onContextInvalidated();
         } else {
-            console.error('safeSendMessage error:', e);
+            reportToBackground('error', 'safeSendMessage error', { component: 'content', errorName: e?.name || e?.constructor?.name, errorStack: e?.stack });
         }
     }
 }
@@ -96,7 +109,7 @@ async function syncChatMessages() {
     // Allow sync on dedicated chat page OR when chat panel is open on any Reddit page
     if (!isOnChatPage() && !isChatPanelOpen()) return;
 
-    console.log('🔄 Syncing chat messages...');
+    reportToBackground('debug', 'Syncing chat messages...', { component: 'content' });
 
     try {
         // Find all chat conversations on the page
@@ -121,13 +134,13 @@ async function syncChatMessages() {
                     }
                 });
                 lastSyncedMessages.add(syncKey);
-                console.log(`✅ Synced conversation with ${conv.participantUsername}: ${conv.messages.length} messages`);
+                reportToBackground('info', `Synced conversation with ${conv.participantUsername}: ${conv.messages.length} messages`, { component: 'content' });
             } catch (err) {
-                console.warn('Failed to sync conversation:', err);
+                reportToBackground('warn', 'Failed to sync conversation', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
             }
         }
     } catch (err) {
-        console.error('Chat sync error:', err);
+        reportToBackground('error', 'Chat sync error', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
     }
 }
 
@@ -196,7 +209,7 @@ function getCurrentUsername() {
         // Check display-name attribute FIRST (this is what Reddit uses!)
         const displayName = rsCurrentUser.getAttribute('display-name');
         if (displayName && /^[a-zA-Z0-9_-]{3,20}$/.test(displayName)) {
-            console.log('👤 Current user from rs-current-user display-name:', displayName);
+            reportToBackground('debug', `Current user from rs-current-user display-name: ${displayName}`, { component: 'content' });
             return displayName.toLowerCase();
         }
 
@@ -205,7 +218,7 @@ function getCurrentUsername() {
         for (const attr of attrs) {
             const val = rsCurrentUser.getAttribute(attr);
             if (val && /^[a-zA-Z0-9_-]{3,20}$/.test(val)) {
-                console.log('👤 Current user from rs-current-user attr:', val);
+                reportToBackground('debug', `Current user from rs-current-user attr: ${val}`, { component: 'content' });
                 return val.toLowerCase();
             }
         }
@@ -216,14 +229,14 @@ function getCurrentUsername() {
             if (userEl) {
                 const match = userEl.href.match(/\/user\/([^\/\?]+)/);
                 if (match) {
-                    console.log('👤 Current user from rs-current-user shadow:', match[1]);
+                    reportToBackground('debug', `Current user from rs-current-user shadow: ${match[1]}`, { component: 'content' });
                     return match[1].toLowerCase();
                 }
             }
         }
 
         // Log attributes for debugging if we still didn't find it
-        console.log('🔍 rs-current-user found but username not extracted');
+        reportToBackground('debug', 'rs-current-user found but username not extracted', { component: 'content' });
     }
 
     // Strategy 1: Reddit's user dropdown/menu (most reliable on main Reddit)
@@ -233,7 +246,7 @@ function getCurrentUsername() {
         if (nameEl?.textContent) {
             const username = nameEl.textContent.trim();
             if (username && /^[a-zA-Z0-9_-]{3,20}$/.test(username)) {
-                console.log('👤 Current user from dropdown:', username);
+                reportToBackground('debug', `Current user from dropdown: ${username}`, { component: 'content' });
                 return username.toLowerCase();
             }
         }
@@ -245,7 +258,7 @@ function getCurrentUsername() {
         const currentUserAttr = shredditApp.getAttribute('user') ||
                                 shredditApp.getAttribute('data-user');
         if (currentUserAttr) {
-            console.log('👤 Current user from shreddit-app:', currentUserAttr);
+            reportToBackground('debug', `Current user from shreddit-app: ${currentUserAttr}`, { component: 'content' });
             return currentUserAttr.toLowerCase();
         }
     }
@@ -256,7 +269,7 @@ function getCurrentUsername() {
         const content = script.textContent || '';
         const usernameMatch = content.match(/"(?:username|userName|logged)":\s*"([a-zA-Z0-9_-]{3,20})"/i);
         if (usernameMatch) {
-            console.log('👤 Current user from script data:', usernameMatch[1]);
+            reportToBackground('debug', `Current user from script data: ${usernameMatch[1]}`, { component: 'content' });
             return usernameMatch[1].toLowerCase();
         }
     }
@@ -271,7 +284,7 @@ function getCurrentUsername() {
         if (isProfileLink) {
             const match = link.href.match(/\/user\/([^\/\?]+)/);
             if (match && match[1]) {
-                console.log('👤 Current user from profile link:', match[1]);
+                reportToBackground('debug', `Current user from profile link: ${match[1]}`, { component: 'content' });
                 return match[1].toLowerCase();
             }
         }
@@ -281,7 +294,7 @@ function getCurrentUsername() {
     try {
         const redditData = window.__REDDIT__;
         if (redditData?.config?.user?.name) {
-            console.log('👤 Current user from __REDDIT__:', redditData.config.user.name);
+            reportToBackground('debug', `Current user from __REDDIT__: ${redditData.config.user.name}`, { component: 'content' });
             return redditData.config.user.name.toLowerCase();
         }
     } catch (e) {}
@@ -289,7 +302,7 @@ function getCurrentUsername() {
     // Strategy 6: Reddit's r.config (old Reddit)
     try {
         if (window.r?.config?.logged) {
-            console.log('👤 Current user from r.config:', window.r.config.logged);
+            reportToBackground('debug', `Current user from r.config: ${window.r.config.logged}`, { component: 'content' });
             return window.r.config.logged.toLowerCase();
         }
     } catch (e) {}
@@ -303,7 +316,7 @@ function getCurrentUsername() {
                 if (value) {
                     const match = value.match(/"?(?:name|username)"?\s*[:=]\s*"?([a-zA-Z0-9_-]{3,20})"?/i);
                     if (match) {
-                        console.log('👤 Current user from localStorage:', match[1]);
+                        reportToBackground('debug', `Current user from localStorage: ${match[1]}`, { component: 'content' });
                         return match[1].toLowerCase();
                     }
                 }
@@ -331,14 +344,14 @@ function getCurrentUsername() {
             if (userLink) {
                 const match = userLink.href.match(/\/user\/([^\/\?]+)/);
                 if (match && match[1]) {
-                    console.log('👤 Current user from right-aligned message:', match[1]);
+                    reportToBackground('debug', `Current user from right-aligned message: ${match[1]}`, { component: 'content' });
                     return match[1].toLowerCase();
                 }
             }
         }
     }
 
-    console.log('⚠️ Could not determine current username');
+    reportToBackground('warn', 'Could not determine current username', { component: 'content' });
     return null;
 }
 
@@ -349,21 +362,21 @@ function extractChatConversations() {
 
     // Get current user to filter out from participant detection
     const currentUser = getCurrentUsername();
-    console.log('👤 Current logged-in user:', currentUser);
+    reportToBackground('debug', `Current logged-in user: ${currentUser}`, { component: 'content' });
 
     // Helper to validate participant is not current user
     const isValidParticipant = (username) => {
         if (!username) return false;
         const normalized = username.toLowerCase().trim();
         if (currentUser && normalized === currentUser) {
-            console.log('⚠️ Skipping current user as participant:', username);
+            reportToBackground('debug', `Skipping current user as participant: ${username}`, { component: 'content' });
             return false;
         }
         return true;
     };
 
     // Debug: Log available elements to help identify correct selectors
-    console.log('🔍 Debugging chat DOM (with Shadow DOM support)...');
+    reportToBackground('debug', 'Debugging chat DOM (with Shadow DOM support)...', { component: 'content' });
 
     // PRIORITY Strategy: Look for the chat room header title
     // In a DM, the header shows ONLY the other person's name, never your own
@@ -392,13 +405,13 @@ function extractChatConversations() {
         }
     });
     if (rsElements.length > 0) {
-        console.log('🔍 Found Reddit custom elements (rs-*):', [...new Set(rsElements)]);
+        reportToBackground('debug', `Found Reddit custom elements (rs-*): ${[...new Set(rsElements)]}`, { component: 'content' });
     }
 
     for (const selector of roomHeaderSelectors) {
         let header = document.querySelector(selector) || querySelectorOneDeep(selector);
         if (header) {
-            console.log('📍 Found room header with selector:', selector);
+            reportToBackground('debug', `Found room header with selector: ${selector}`, { component: 'content' });
 
             // Check shadow root if exists
             const root = header.shadowRoot || header;
@@ -406,7 +419,7 @@ function extractChatConversations() {
             // Debug: log shadow root contents
             if (header.shadowRoot) {
                 const shadowHTML = header.shadowRoot.innerHTML?.substring(0, 500);
-                console.log('🔍 Shadow DOM preview:', shadowHTML);
+                reportToBackground('debug', `Shadow DOM preview: ${shadowHTML}`, { component: 'content' });
             }
 
             // Look for the room name/title element - try many selectors
@@ -424,7 +437,7 @@ function extractChatConversations() {
             for (const ts of titleSelectors) {
                 titleEl = root.querySelector(ts);
                 if (titleEl) {
-                    console.log('📍 Found title element with selector:', ts);
+                    reportToBackground('debug', `Found title element with selector: ${ts}`, { component: 'content' });
                     break;
                 }
             }
@@ -446,10 +459,10 @@ function extractChatConversations() {
 
                 if (candidate && /^[a-zA-Z0-9_-]{3,20}$/.test(candidate) && isValidParticipant(candidate)) {
                     participantUsername = candidate;
-                    console.log('✓ Found participant from room header:', participantUsername);
+                    reportToBackground('debug', `Found participant from room header: ${participantUsername}`, { component: 'content' });
                     break;
                 } else if (candidate && !isValidParticipant(candidate)) {
-                    console.log('⚠️ Room header returned current user, skipping:', candidate);
+                    reportToBackground('debug', `Room header returned current user, skipping: ${candidate}`, { component: 'content' });
                 }
             }
         }
@@ -463,7 +476,7 @@ function extractChatConversations() {
         const redditorMatch = allText.match(/([a-zA-Z0-9_-]{3,20})\s*Redditor for/i);
         if (redditorMatch && isValidParticipant(redditorMatch[1])) {
             participantUsername = redditorMatch[1];
-            console.log('✓ Found participant from "Redditor for" pattern:', participantUsername);
+            reportToBackground('debug', `Found participant from "Redditor for" pattern: ${participantUsername}`, { component: 'content' });
         }
 
         // Strategy B: Look for elements that show user karma
@@ -478,7 +491,7 @@ function extractChatConversations() {
                         const match = userLink.href.match(/\/user\/([^\/\?]+)/);
                         if (match && match[1] && /^[a-zA-Z0-9_-]{3,20}$/.test(match[1]) && isValidParticipant(match[1])) {
                             participantUsername = match[1];
-                            console.log('✓ Found participant from karma area:', participantUsername);
+                            reportToBackground('debug', `Found participant from karma area: ${participantUsername}`, { component: 'content' });
                             break;
                         }
                     }
@@ -492,7 +505,7 @@ function extractChatConversations() {
     const roomsNav = document.querySelector('rs-rooms-nav[activeroom]');
     if (roomsNav) {
         const activeRoomId = roomsNav.getAttribute('activeroom');
-        console.log('📍 Found rs-rooms-nav with activeroom:', activeRoomId);
+        reportToBackground('debug', `Found rs-rooms-nav with activeroom: ${activeRoomId}`, { component: 'content' });
 
         // Find the room element with this room ID
         const activeRoom = document.querySelector(`rs-rooms-nav-room[room="${activeRoomId}"]`);
@@ -500,11 +513,11 @@ function extractChatConversations() {
             const chatLink = activeRoom.shadowRoot.querySelector('a[aria-label]');
             if (chatLink) {
                 const ariaLabel = chatLink.getAttribute('aria-label');
-                console.log('📍 Found aria-label from activeroom:', ariaLabel);
+                reportToBackground('debug', `Found aria-label from activeroom: ${ariaLabel}`, { component: 'content' });
                 const match = ariaLabel?.match(/Direct chat with ([^\s]+)/i);
                 if (match && isValidParticipant(match[1])) {
                     participantUsername = match[1];
-                    console.log('✓ Found username from activeroom:', participantUsername);
+                    reportToBackground('debug', `Found username from activeroom: ${participantUsername}`, { component: 'content' });
                 }
             }
             if (!participantUsername) {
@@ -513,7 +526,7 @@ function extractChatConversations() {
                     const candidate = roomName.textContent?.trim();
                     if (isValidParticipant(candidate)) {
                         participantUsername = candidate;
-                        console.log('✓ Found username from activeroom .room-name:', participantUsername);
+                        reportToBackground('debug', `Found username from activeroom .room-name: ${participantUsername}`, { component: 'content' });
                     }
                 }
             }
@@ -525,19 +538,19 @@ function extractChatConversations() {
     if (!participantUsername) {
         const selectedRoom = document.querySelector('rs-rooms-nav-room[selected]');
         if (selectedRoom) {
-            console.log('✓ Found selected rs-rooms-nav-room element');
+            reportToBackground('debug', 'Found selected rs-rooms-nav-room element', { component: 'content' });
 
             // Try to get username from aria-label on the link inside shadow root
             if (selectedRoom.shadowRoot) {
                 const chatLink = selectedRoom.shadowRoot.querySelector('a[aria-label]');
                 if (chatLink) {
                     const ariaLabel = chatLink.getAttribute('aria-label');
-                    console.log('📍 Found aria-label:', ariaLabel);
+                    reportToBackground('debug', `Found aria-label: ${ariaLabel}`, { component: 'content' });
                     // Pattern: "Direct chat with {username}"
                     const match = ariaLabel.match(/Direct chat with ([^\s]+)/i);
                     if (match && isValidParticipant(match[1])) {
                         participantUsername = match[1];
-                        console.log('✓ Found username from aria-label:', participantUsername);
+                        reportToBackground('debug', `Found username from aria-label: ${participantUsername}`, { component: 'content' });
                     }
                 }
 
@@ -548,7 +561,7 @@ function extractChatConversations() {
                         const candidate = roomName.textContent?.trim();
                         if (isValidParticipant(candidate)) {
                             participantUsername = candidate;
-                            console.log('✓ Found username from .room-name:', participantUsername);
+                            reportToBackground('debug', `Found username from .room-name: ${participantUsername}`, { component: 'content' });
                         }
                     }
                 }
@@ -559,7 +572,7 @@ function extractChatConversations() {
     // Strategy 1b: Find any rs-rooms-nav-room and check for selected or first one
     if (!participantUsername) {
         const allRooms = document.querySelectorAll('rs-rooms-nav-room');
-        console.log('🔍 Found', allRooms.length, 'rs-rooms-nav-room elements');
+        reportToBackground('debug', `Found ${allRooms.length} rs-rooms-nav-room elements`, { component: 'content' });
 
         for (const room of allRooms) {
             if (room.shadowRoot) {
@@ -575,7 +588,7 @@ function extractChatConversations() {
                                           room.shadowRoot.querySelector('.selected');
                         if (isSelected) {
                             participantUsername = match[1];
-                            console.log('✓ Found username from rs-rooms-nav-room (selected):', participantUsername);
+                            reportToBackground('debug', `Found username from rs-rooms-nav-room (selected): ${participantUsername}`, { component: 'content' });
                             break;
                         }
                     }
@@ -589,7 +602,7 @@ function extractChatConversations() {
     if (!participantUsername) {
         const roomUrlMatch = window.location.href.match(/\/room\/([^\/\?]+)/);
         if (roomUrlMatch) {
-            console.log('📍 Found room ID in URL:', roomUrlMatch[1]);
+            reportToBackground('debug', `Found room ID in URL: ${roomUrlMatch[1]}`, { component: 'content' });
             const roomId = decodeURIComponent(roomUrlMatch[1]);
             // Find the matching room in the nav by room attribute
             const matchingRoom = document.querySelector(`rs-rooms-nav-room[room="${roomId}"]`);
@@ -600,7 +613,7 @@ function extractChatConversations() {
                     const match = ariaLabel?.match(/Direct chat with ([^\s]+)/i);
                     if (match && isValidParticipant(match[1])) {
                         participantUsername = match[1];
-                        console.log('✓ Found username from room URL match:', participantUsername);
+                        reportToBackground('debug', `Found username from room URL match: ${participantUsername}`, { component: 'content' });
                     }
                 }
                 // Try .room-name as fallback
@@ -610,7 +623,7 @@ function extractChatConversations() {
                         const candidate = roomName.textContent?.trim();
                         if (isValidParticipant(candidate)) {
                             participantUsername = candidate;
-                            console.log('✓ Found username from .room-name (URL match):', participantUsername);
+                            reportToBackground('debug', `Found username from .room-name (URL match): ${participantUsername}`, { component: 'content' });
                         }
                     }
                 }
@@ -621,7 +634,7 @@ function extractChatConversations() {
     // Strategy 1d: URL-based detection (channel format)
     const urlMatch = window.location.href.match(/\/channel\/(\d+_\d+)/);
     if (urlMatch) {
-        console.log('📍 Found channel ID in URL:', urlMatch[1]);
+        reportToBackground('debug', `Found channel ID in URL: ${urlMatch[1]}`, { component: 'content' });
     }
 
     // Strategy 2: Look for the conversation header/title area (with Shadow DOM support)
@@ -651,7 +664,7 @@ function extractChatConversations() {
         // Search in regular DOM and all shadow roots
         const header = querySelectorOneDeep(selector);
         if (header) {
-            console.log('✓ Found header with selector:', selector, 'Content:', header.textContent?.substring(0, 100));
+            reportToBackground('debug', `Found header with selector: ${selector} Content: ${header.textContent?.substring(0, 100)}`, { component: 'content' });
 
             // Look for username link (also search in shadow DOM)
             const usernameLink = header.querySelector('a[href*="/user/"]') || querySelectorOneDeep('a[href*="/user/"]', header);
@@ -659,7 +672,7 @@ function extractChatConversations() {
                 const match = usernameLink.href.match(/\/user\/([^\/\?]+)/);
                 if (match && isValidParticipant(match[1])) {
                     participantUsername = match[1];
-                    console.log('✓ Found username from link:', participantUsername);
+                    reportToBackground('debug', `Found username from link: ${participantUsername}`, { component: 'content' });
                     break;
                 }
             }
@@ -669,7 +682,7 @@ function extractChatConversations() {
             const uMatch = headerText.match(/u\/(\w+)/);
             if (uMatch && isValidParticipant(uMatch[1])) {
                 participantUsername = uMatch[1];
-                console.log('✓ Found username from u/ pattern:', participantUsername);
+                reportToBackground('debug', `Found username from u/ pattern: ${participantUsername}`, { component: 'content' });
                 break;
             }
 
@@ -678,7 +691,7 @@ function extractChatConversations() {
             const cleanText = header.textContent?.trim();
             if (cleanText && /^[a-zA-Z0-9_-]{3,20}$/.test(cleanText) && isValidParticipant(cleanText)) {
                 participantUsername = cleanText;
-                console.log('✓ Found username from header text:', participantUsername);
+                reportToBackground('debug', `Found username from header text: ${participantUsername}`, { component: 'content' });
                 break;
             }
         }
@@ -688,7 +701,7 @@ function extractChatConversations() {
     // In a DM, there are 2 users. We need to find the OTHER person.
     if (!participantUsername) {
         const allUserLinks = querySelectorDeep('a[href*="/user/"]');
-        console.log('🔍 Found', allUserLinks.length, 'user links in DOM (including shadow)');
+        reportToBackground('debug', `Found ${allUserLinks.length} user links in DOM (including shadow)`, { component: 'content' });
 
         // Collect all unique usernames
         const usernames = new Set();
@@ -701,14 +714,14 @@ function extractChatConversations() {
             }
         }
 
-        console.log('🔍 Unique usernames found:', [...usernames]);
+        reportToBackground('debug', `Unique usernames found: ${[...usernames]}`, { component: 'content' });
 
         // If we found exactly 2 usernames in a DM, and we know currentUser, use the other one
         if (usernames.size === 2 && currentUser) {
             for (const username of usernames) {
                 if (username !== currentUser) {
                     participantUsername = username;
-                    console.log('✓ Found participant by elimination (2 users, excluding current):', participantUsername);
+                    reportToBackground('debug', `Found participant by elimination (2 users, excluding current): ${participantUsername}`, { component: 'content' });
                     break;
                 }
             }
@@ -726,7 +739,7 @@ function extractChatConversations() {
                         const username = match[1].toLowerCase();
                         if (!['preferences', 'settings', 'me', 'undefined'].includes(username) && isValidParticipant(username)) {
                             participantUsername = username;
-                            console.log('✓ Found username from user link (not in nav):', participantUsername);
+                            reportToBackground('debug', `Found username from user link (not in nav): ${participantUsername}`, { component: 'content' });
                             break;
                         }
                     }
@@ -738,7 +751,7 @@ function extractChatConversations() {
     // Strategy 3: Page title parsing
     if (!participantUsername) {
         const title = document.title;
-        console.log('📄 Page title:', title);
+        reportToBackground('debug', `Page title: ${title}`, { component: 'content' });
 
         // Various title patterns Reddit might use
         const titlePatterns = [
@@ -752,7 +765,7 @@ function extractChatConversations() {
             const titleMatch = title.match(pattern);
             if (titleMatch && isValidParticipant(titleMatch[1])) {
                 participantUsername = titleMatch[1];
-                console.log('✓ Found username from title:', participantUsername);
+                reportToBackground('debug', `Found username from title: ${participantUsername}`, { component: 'content' });
                 break;
             }
         }
@@ -763,7 +776,7 @@ function extractChatConversations() {
         const userMatch = window.location.href.match(/\/user\/([^\/\?]+)/);
         if (userMatch && isValidParticipant(userMatch[1])) {
             participantUsername = userMatch[1];
-            console.log('✓ Found username from URL:', participantUsername);
+            reportToBackground('debug', `Found username from URL: ${participantUsername}`, { component: 'content' });
         }
     }
 
@@ -810,7 +823,7 @@ function extractChatConversations() {
                     /^[a-zA-Z0-9_-]+$/.test(username) &&
                     !['user', 'profile', 'settings', 'chat', 'message', 'send', 'reddit', 'inbox'].includes(username.toLowerCase())) {
                     participantUsername = username;
-                    console.log('✓ Found username from element:', participantUsername, 'Selector:', selector);
+                    reportToBackground('debug', `Found username from element: ${participantUsername} Selector: ${selector}`, { component: 'content' });
                     break;
                 }
             }
@@ -830,7 +843,7 @@ function extractChatConversations() {
                     const candidate = match[1] || match[2];
                     if (isValidParticipant(candidate)) {
                         participantUsername = candidate;
-                        console.log('✓ Found username from active conversation:', participantUsername);
+                        reportToBackground('debug', `Found username from active conversation: ${participantUsername}`, { component: 'content' });
                     }
                 }
             }
@@ -839,35 +852,35 @@ function extractChatConversations() {
 
     // Debug: If still not found, log what we can see
     if (!participantUsername) {
-        console.log('❌ Could not determine chat participant');
+        reportToBackground('warn', 'Could not determine chat participant', { component: 'content' });
 
         // Log user links from both regular DOM and shadow DOMs
         const regularUserLinks = Array.from(document.querySelectorAll('a[href*="/user/"]')).map(a => a.href);
         const deepUserLinks = querySelectorDeep('a[href*="/user/"]').map(a => a.href);
-        console.log('🔍 User links in regular DOM:', regularUserLinks.slice(0, 5));
-        console.log('🔍 User links in shadow DOM:', deepUserLinks.filter(l => !regularUserLinks.includes(l)).slice(0, 5));
+        reportToBackground('debug', `User links in regular DOM: ${JSON.stringify(regularUserLinks.slice(0, 5))}`, { component: 'content' });
+        reportToBackground('debug', `User links in shadow DOM: ${JSON.stringify(deepUserLinks.filter(l => !regularUserLinks.includes(l)).slice(0, 5))}`, { component: 'content' });
 
         // Check for shadow roots
         const shadowHostCount = document.querySelectorAll('*').length;
         let shadowRootCount = 0;
         document.querySelectorAll('*').forEach(el => { if (el.shadowRoot) shadowRootCount++; });
-        console.log('🔍 Elements with shadow roots:', shadowRootCount, 'out of', shadowHostCount, 'elements');
+        reportToBackground('debug', `Elements with shadow roots: ${shadowRootCount} out of ${shadowHostCount} elements`, { component: 'content' });
 
         // Log elements with "username" class from shadow DOM
         const usernameElements = querySelectorDeep('[class*="username"], [class*="Username"], [class*="mx_"]');
-        console.log('🔍 Username-related elements (including shadow DOM):', usernameElements.length);
+        reportToBackground('debug', `Username-related elements (including shadow DOM): ${usernameElements.length}`, { component: 'content' });
         usernameElements.slice(0, 5).forEach(el => {
-            console.log('  -', el.tagName, el.className, 'text:', el.textContent?.substring(0, 30));
+            reportToBackground('debug', `  - ${el.tagName} ${el.className} text: ${el.textContent?.substring(0, 30)}`, { component: 'content' });
         });
 
-        console.log('🔍 Page URL:', window.location.href);
+        reportToBackground('debug', `Page URL: ${window.location.href}`, { component: 'content' });
 
         // Last resort: try to get any visible username-like text from the header area
         const possibleHeaders = querySelectorDeep('h1, h2, h3, [role="heading"]');
         possibleHeaders.forEach(h => {
             const text = h.textContent?.trim();
             if (text && /^[a-zA-Z0-9_-]{3,20}$/.test(text)) {
-                console.log('🔍 Possible username in heading:', text);
+                reportToBackground('debug', `Possible username in heading: ${text}`, { component: 'content' });
             }
         });
 
@@ -875,13 +888,13 @@ function extractChatConversations() {
         const pageText = getDeepTextContent(document.body);
         const usernameMatches = pageText.match(/u\/([a-zA-Z0-9_-]{3,20})/g);
         if (usernameMatches && usernameMatches.length > 0) {
-            console.log('🔍 Found u/username patterns in page text:', [...new Set(usernameMatches)].slice(0, 5));
+            reportToBackground('debug', `Found u/username patterns in page text: ${[...new Set(usernameMatches)].slice(0, 5)}`, { component: 'content' });
             // Try to use the first non-common username that isn't the current user
             for (const match of usernameMatches) {
                 const username = match.replace('u/', '');
                 if (!['me', 'user', 'reddit', 'admin'].includes(username.toLowerCase()) && isValidParticipant(username)) {
                     participantUsername = username;
-                    console.log('✓ Found username from page text:', participantUsername);
+                    reportToBackground('debug', `Found username from page text: ${participantUsername}`, { component: 'content' });
                     break;
                 }
             }
@@ -892,7 +905,7 @@ function extractChatConversations() {
         }
     }
 
-    console.log(`Chat participant: ${participantUsername}`);
+    reportToBackground('info', `Chat participant: ${participantUsername}`, { component: 'content' });
 
     // Extract messages
     const messages = extractMessagesFromDOM(participantUsername);
@@ -941,23 +954,23 @@ function extractMessagesFromDOM(participantUsername) {
         // Try regular DOM first
         chatContainer = document.querySelector(selector);
         if (chatContainer) {
-            console.log('✓ Found chat container with selector:', selector);
+            reportToBackground('debug', `Found chat container with selector: ${selector}`, { component: 'content' });
             break;
         }
         // Try shadow DOM
         chatContainer = querySelectorOneDeep(selector);
         if (chatContainer) {
-            console.log('✓ Found chat container in shadow DOM with selector:', selector);
+            reportToBackground('debug', `Found chat container in shadow DOM with selector: ${selector}`, { component: 'content' });
             break;
         }
     }
 
     if (!chatContainer) {
-        console.log('Could not find chat container, trying to find messages directly...');
+        reportToBackground('debug', 'Could not find chat container, trying to find messages directly...', { component: 'content' });
         // Fall back to finding messages anywhere in the page
     } else {
         // Debug: Show what's inside the chat container
-        console.log('🔍 Chat container tag:', chatContainer.tagName, 'classes:', chatContainer.className);
+        reportToBackground('debug', `Chat container tag: ${chatContainer.tagName} classes: ${chatContainer.className}`, { component: 'content' });
 
         // Look for nested shadow roots (Reddit uses many layers)
         const childrenWithShadow = [];
@@ -967,7 +980,7 @@ function extractMessagesFromDOM(participantUsername) {
             }
         });
         if (childrenWithShadow.length > 0) {
-            console.log('🔍 Elements with shadow roots inside container:', [...new Set(childrenWithShadow)]);
+            reportToBackground('debug', `Elements with shadow roots inside container: ${[...new Set(childrenWithShadow)]}`, { component: 'content' });
         }
 
         // Try to find the actual timeline/events container
@@ -985,10 +998,10 @@ function extractMessagesFromDOM(participantUsername) {
         for (const ts of timelineSelectors) {
             const timeline = chatContainer.querySelector(ts) || querySelectorOneDeep(ts, chatContainer);
             if (timeline) {
-                console.log('🔍 Found timeline element:', ts, 'tag:', timeline.tagName);
+                reportToBackground('debug', `Found timeline element: ${ts} tag: ${timeline.tagName}`, { component: 'content' });
                 // Use this as the search root for messages
                 if (timeline.shadowRoot) {
-                    console.log('🔍 Timeline has shadow root, searching inside...');
+                    reportToBackground('debug', 'Timeline has shadow root, searching inside...', { component: 'content' });
                 }
             }
         }
@@ -1033,7 +1046,7 @@ function extractMessagesFromDOM(participantUsername) {
 
     // If searchRoot is a custom element with shadow DOM, search inside its shadow root
     const actualSearchRoot = searchRoot.shadowRoot || searchRoot;
-    console.log(`🔍 Searching for messages in: ${searchRoot.tagName}, has shadowRoot: ${!!searchRoot.shadowRoot}`);
+    reportToBackground('debug', `Searching for messages in: ${searchRoot.tagName}, has shadowRoot: ${!!searchRoot.shadowRoot}`, { component: 'content' });
 
     for (const selector of messageSelectors) {
         // Try regular DOM first
@@ -1048,7 +1061,7 @@ function extractMessagesFromDOM(participantUsername) {
         }
         if (elements.length > 0) {
             messageElements = Array.from(elements);
-            console.log(`Found ${elements.length} messages with selector: ${selector}`);
+            reportToBackground('debug', `Found ${elements.length} messages with selector: ${selector}`, { component: 'content' });
             break;
         }
     }
@@ -1058,7 +1071,7 @@ function extractMessagesFromDOM(participantUsername) {
         // Search in shadow root if available
         const fallbackRoot = chatContainer.shadowRoot || chatContainer;
         const allDivs = querySelectorDeep('div', fallbackRoot);
-        console.log(`🔍 Fallback: found ${allDivs.length} divs in container`);
+        reportToBackground('debug', `Fallback: found ${allDivs.length} divs in container`, { component: 'content' });
 
         messageElements = Array.from(allDivs).filter(div => {
             const text = div.textContent?.trim();
@@ -1068,11 +1081,11 @@ function extractMessagesFromDOM(participantUsername) {
             return text && text.length > 10 && text.length < 2000 &&
                    (div.children.length < 10 || hasMessageClass);
         });
-        console.log(`🔍 Fallback: ${messageElements.length} potential message elements after filtering`);
+        reportToBackground('debug', `Fallback: ${messageElements.length} potential message elements after filtering`, { component: 'content' });
     }
 
     // Extract message data
-    console.log(`Processing ${messageElements.length} message elements...`);
+    reportToBackground('debug', `Processing ${messageElements.length} message elements...`, { component: 'content' });
     const cachedCurrentUsername = getCurrentUsername();
     messageElements.forEach((el, index) => {
         // Get message content - try multiple approaches
@@ -1109,33 +1122,33 @@ function extractMessagesFromDOM(participantUsername) {
         content = content.replace(/^\d{1,2}:\d{2}\s*(AM|PM)\s+/i, '').trim();
 
         // Debug: show what we found
-        console.log(`  [${index}] Element: ${el.tagName}, hasShadow: ${!!el.shadowRoot}`);
-        console.log(`  [${index}] Content preview: "${content?.substring(0, 60)}..."`);
+        reportToBackground('debug', `  [${index}] Element: ${el.tagName}, hasShadow: ${!!el.shadowRoot}`, { component: 'content' });
+        reportToBackground('debug', `  [${index}] Content preview: "${content?.substring(0, 60)}..."`, { component: 'content' });
 
         // Skip if no content, too short, or already seen
         if (!content || content.length < 2 || content.length > 5000) {
-            console.log(`  [${index}] ❌ Skipped: content length ${content?.length || 0}`);
+            reportToBackground('debug', `  [${index}] Skipped: content length ${content?.length || 0}`, { component: 'content' });
             return;
         }
         if (seenContent.has(content)) {
-            console.log(`  [${index}] ❌ Skipped: duplicate content`);
+            reportToBackground('debug', `  [${index}] Skipped: duplicate content`, { component: 'content' });
             return;
         }
 
         // Skip UI elements (buttons, timestamps alone, etc.)
         if (content.match(/^(Send|Reply|Edit|Delete|Cancel|Save|\d{1,2}:\d{2}|Today|Yesterday)$/i)) {
-            console.log(`  [${index}] ❌ Skipped: UI element`);
+            reportToBackground('debug', `  [${index}] Skipped: UI element`, { component: 'content' });
             return;
         }
 
         // Skip content that's exactly the current user's name or participant name (UI headers)
         if (cachedCurrentUsername && content.toLowerCase() === cachedCurrentUsername.toLowerCase()) {
-            console.log(`  [${index}] ❌ Skipped: current user name`);
+            reportToBackground('debug', `  [${index}] Skipped: current user name`, { component: 'content' });
             return;
         }
 
         seenContent.add(content);
-        console.log(`  [${index}] ✓ Accepted message`);
+        reportToBackground('debug', `  [${index}] Accepted message`, { component: 'content' });
 
         // Determine direction (outbound = sent by user, inbound = received)
         // For Reddit's rs-timeline-event, we need to look inside Shadow DOM for author
@@ -1145,7 +1158,7 @@ function extractMessagesFromDOM(participantUsername) {
         // Debug: Log Shadow DOM inner HTML structure (first 500 chars)
         if (el.shadowRoot) {
             const shadowHTML = el.shadowRoot.innerHTML?.substring(0, 500) || '';
-            console.log(`  [${index}] Shadow DOM preview: ${shadowHTML}...`);
+            reportToBackground('debug', `  [${index}] Shadow DOM preview: ${shadowHTML}...`, { component: 'content' });
         }
 
         // Method 1: Find span.user-name element inside Shadow DOM
@@ -1183,18 +1196,18 @@ function extractMessagesFromDOM(participantUsername) {
             if (!authorName) {
                 authorName = authorEl.textContent?.trim().replace(/^u\//, '').toLowerCase() || '';
             }
-            console.log(`  [${index}] Author found from .user-name: "${authorName}", currentUser: "${currentUser}"`);
+            reportToBackground('debug', `  [${index}] Author found from .user-name: "${authorName}", currentUser: "${currentUser}"`, { component: 'content' });
             if (currentUser && authorName === currentUser.toLowerCase()) {
                 isOutbound = true;
             }
         } else {
-            console.log(`  [${index}] No author element found in Shadow DOM`);
+            reportToBackground('debug', `  [${index}] No author element found in Shadow DOM`, { component: 'content' });
         }
 
         // Method 2: Check element attributes
         if (!isOutbound) {
             const elAttrs = Array.from(el.attributes || []).map(a => `${a.name}=${a.value}`).join(', ');
-            console.log(`  [${index}] Element attrs: ${elAttrs}`);
+            reportToBackground('debug', `  [${index}] Element attrs: ${elAttrs}`, { component: 'content' });
 
             isOutbound = el.getAttribute('data-is-own') === 'true' ||
                         el.getAttribute('data-sender') === currentUser ||
@@ -1213,11 +1226,11 @@ function extractMessagesFromDOM(participantUsername) {
                                   querySelectorOneDeep('[class*="mine"]', el.shadowRoot);
             if (innerContainer) {
                 isOutbound = true;
-                console.log(`  [${index}] Found own/self/local class inside Shadow DOM: ${innerContainer.className}`);
+                reportToBackground('debug', `  [${index}] Found own/self/local class inside Shadow DOM: ${innerContainer.className}`, { component: 'content' });
             }
         }
 
-        console.log(`  [${index}] Direction: ${isOutbound ? 'outbound' : 'inbound'}`);
+        reportToBackground('debug', `  [${index}] Direction: ${isOutbound ? 'outbound' : 'inbound'}`, { component: 'content' });
 
         // Try to get timestamp - search in Shadow DOM first
         const timeSearchRoot = el.shadowRoot || el;
@@ -1237,7 +1250,7 @@ function extractMessagesFromDOM(participantUsername) {
                       timeEl?.textContent?.trim() ||
                       new Date().toISOString();
 
-        console.log(`  [${index}] Timestamp: ${sentAt}`);
+        reportToBackground('debug', `  [${index}] Timestamp: ${sentAt}`, { component: 'content' });
 
         messages.push({
             direction: isOutbound ? 'outbound' : 'inbound',
@@ -1247,13 +1260,13 @@ function extractMessagesFromDOM(participantUsername) {
         });
     });
 
-    console.log(`Extracted ${messages.length} messages`);
+    reportToBackground('debug', `Extracted ${messages.length} messages`, { component: 'content' });
 
     // TEXT-BASED FALLBACK: If no messages were found via DOM selectors,
     // try parsing the visible text from the chat area.
     // Reddit's Shadow DOM can be opaque — this catches messages the selectors miss.
     if (messages.length === 0 && chatContainer) {
-        console.log('🔍 Attempting text-based fallback extraction...');
+        reportToBackground('debug', 'Attempting text-based fallback extraction...', { component: 'content' });
         const rawText = getDeepTextContent(chatContainer);
         const currentUser = getCurrentUsername();
 
@@ -1300,18 +1313,18 @@ function extractMessagesFromDOM(participantUsername) {
         }
 
         if (messages.length > 0) {
-            console.log(`🔍 Text fallback extracted ${messages.length} messages`);
+            reportToBackground('debug', `Text fallback extracted ${messages.length} messages`, { component: 'content' });
         }
     }
 
-    console.log(`Total extracted: ${messages.length} messages`);
+    reportToBackground('debug', `Total extracted: ${messages.length} messages`, { component: 'content' });
     return messages;
 }
 
 function startChatSync() {
     if (chatSyncInterval) return; // Already running
 
-    console.log('📡 Starting chat sync monitoring...');
+    reportToBackground('info', 'Starting chat sync monitoring...', { component: 'content' });
 
     // Track last synced room to detect room changes
     let lastSyncedRoomId = null;
@@ -1328,7 +1341,7 @@ function startChatSync() {
 
                 // Only sync if room changed or it's been a while
                 if (currentRoomId !== lastSyncedRoomId || reason === 'periodic') {
-                    console.log(`🔄 Syncing chat (${reason})...`);
+                    reportToBackground('debug', `Syncing chat (${reason})...`, { component: 'content' });
                     lastSyncedRoomId = currentRoomId;
                     syncChatMessages();
                 }
@@ -1339,7 +1352,7 @@ function startChatSync() {
     // Function to check and sync if chat is visible
     const checkAndSync = () => {
         if (hasChatElements()) {
-            console.log('🔄 Chat detected, syncing...');
+            reportToBackground('debug', 'Chat detected, syncing...', { component: 'content' });
             syncChatMessages();
         }
     };
@@ -1358,7 +1371,7 @@ function startChatSync() {
                 // Small delay to let chat fully render
                 setTimeout(() => {
                     if (hasChatElements()) {
-                        console.log('💬 Chat panel opened, syncing...');
+                        reportToBackground('debug', 'Chat panel opened, syncing...', { component: 'content' });
                         syncChatMessages();
                     }
                 }, 1500);
@@ -1385,7 +1398,7 @@ function startChatSync() {
     new MutationObserver(() => {
         if (location.href !== lastUrl) {
             lastUrl = location.href;
-            console.log('📍 URL changed, triggering sync...');
+            reportToBackground('debug', 'URL changed, triggering sync...', { component: 'content' });
             debouncedSync('url-change');
         }
     }).observe(document, { subtree: true, childList: true });
@@ -1406,7 +1419,7 @@ function startChatSync() {
 
     // Listen for popstate (back/forward buttons)
     window.addEventListener('popstate', () => {
-        console.log('📍 popstate navigation detected');
+        reportToBackground('debug', 'popstate navigation detected', { component: 'content' });
         debouncedSync('popstate');
     });
 
@@ -1425,7 +1438,7 @@ function startChatSync() {
             (target.tagName === 'A' && target.href?.includes('/chat/'));
 
         if (isChatClick) {
-            console.log('🖱️ Chat click detected, will sync...');
+            reportToBackground('debug', 'Chat click detected, will sync...', { component: 'content' });
             debouncedSync('click');
         }
     }, true); // Use capture phase to catch clicks early
@@ -1447,7 +1460,7 @@ function getAllSidebarRooms() {
 
     // Strategy 1: rs-rooms-nav-room elements (Reddit chat web components)
     const roomElements = document.querySelectorAll('rs-rooms-nav-room');
-    console.log(`[BulkSync] Found ${roomElements.length} rs-rooms-nav-room elements`);
+    reportToBackground('debug', `[BulkSync] Found ${roomElements.length} rs-rooms-nav-room elements`, { component: 'content' });
 
     for (const room of roomElements) {
         let username = null;
@@ -1512,7 +1525,7 @@ function getAllSidebarRooms() {
 
     // Strategy 2: Deep search all shadow DOMs for chat room links
     if (rooms.length === 0) {
-        console.log('[BulkSync] No rs-rooms-nav-room found, trying deep search...');
+        reportToBackground('debug', '[BulkSync] No rs-rooms-nav-room found, trying deep search...', { component: 'content' });
 
         // Look for any chat sidebar navigation
         const navSelectors = [
@@ -1529,7 +1542,7 @@ function getAllSidebarRooms() {
         for (const sel of navSelectors) {
             sidebarContainer = document.querySelector(sel) || querySelectorOneDeep(sel);
             if (sidebarContainer) {
-                console.log(`[BulkSync] Found sidebar container via: ${sel}`);
+                reportToBackground('debug', `[BulkSync] Found sidebar container via: ${sel}`, { component: 'content' });
                 break;
             }
         }
@@ -1537,7 +1550,7 @@ function getAllSidebarRooms() {
         if (sidebarContainer) {
             // Find all clickable items that look like chat entries
             const clickables = querySelectorDeep('a, [role="listitem"], [role="option"]', sidebarContainer);
-            console.log(`[BulkSync] Found ${clickables.length} clickable items in sidebar`);
+            reportToBackground('debug', `[BulkSync] Found ${clickables.length} clickable items in sidebar`, { component: 'content' });
 
             for (const el of clickables) {
                 const ariaLabel = (el.getAttribute('aria-label') || '');
@@ -1565,7 +1578,7 @@ function getAllSidebarRooms() {
 
     // Strategy 3: If still nothing, try to find any clickable with "Direct chat" anywhere
     if (rooms.length === 0) {
-        console.log('[BulkSync] Trying broadest deep search...');
+        reportToBackground('debug', '[BulkSync] Trying broadest deep search...', { component: 'content' });
         const allClickables = querySelectorDeep('a[aria-label], [role="listitem"], [role="option"]');
         for (const el of allClickables) {
             const ariaLabel = (el.getAttribute('aria-label') || '');
@@ -1580,7 +1593,7 @@ function getAllSidebarRooms() {
         }
     }
 
-    console.log(`[BulkSync] Total rooms found: ${rooms.length}`, rooms.map(r => r.username));
+    reportToBackground('debug', `[BulkSync] Total rooms found: ${rooms.length} ${JSON.stringify(rooms.map(r => r.username))}`, { component: 'content' });
     return rooms;
 }
 
@@ -1611,23 +1624,23 @@ async function waitForChatLoad(expectedUsername, timeout = 3000) {
     }
 
     // Timeout: proceed anyway (extractChatConversations will handle empty case)
-    console.warn(`[BulkSync] Chat load timeout for ${expectedUsername}, proceeding anyway`);
+    reportToBackground('warn', `[BulkSync] Chat load timeout for ${expectedUsername}, proceeding anyway`, { component: 'content' });
     return false;
 }
 
 // Main bulk sync orchestration
 async function syncAllChats() {
     if (bulkSyncActive) {
-        console.log('Bulk sync already in progress');
+        reportToBackground('info', 'Bulk sync already in progress', { component: 'content' });
         return;
     }
 
-    console.log('[BulkSync] syncAllChats called');
-    console.log('[BulkSync] isOnChatPage:', isOnChatPage());
-    console.log('[BulkSync] URL:', window.location.href);
+    reportToBackground('info', '[BulkSync] syncAllChats called', { component: 'content' });
+    reportToBackground('debug', `[BulkSync] isOnChatPage: ${isOnChatPage()}`, { component: 'content' });
+    reportToBackground('debug', `[BulkSync] URL: ${window.location.href}`, { component: 'content' });
 
     if (!isOnChatPage()) {
-        console.log('[BulkSync] Not on chat page, cannot sync all chats');
+        reportToBackground('warn', '[BulkSync] Not on chat page, cannot sync all chats', { component: 'content' });
         safeSendMessage({
             action: 'BULK_SYNC_PROGRESS',
             data: { status: 'error', error: 'Please navigate to Reddit Chat first' }
@@ -1639,21 +1652,21 @@ async function syncAllChats() {
     bulkSyncCancelled = false;
 
     const currentUser = getCurrentUsername();
-    console.log('[BulkSync] Current user:', currentUser);
+    reportToBackground('debug', `[BulkSync] Current user: ${currentUser}`, { component: 'content' });
 
     // Debug: log what DOM elements exist
-    console.log('[BulkSync] rs-rooms-nav-room count:', document.querySelectorAll('rs-rooms-nav-room').length);
-    console.log('[BulkSync] rs-rooms-nav count:', document.querySelectorAll('rs-rooms-nav').length);
+    reportToBackground('debug', `[BulkSync] rs-rooms-nav-room count: ${document.querySelectorAll('rs-rooms-nav-room').length}`, { component: 'content' });
+    reportToBackground('debug', `[BulkSync] rs-rooms-nav count: ${document.querySelectorAll('rs-rooms-nav').length}`, { component: 'content' });
     const allShadowHosts = [];
     document.querySelectorAll('*').forEach(el => { if (el.shadowRoot) allShadowHosts.push(el.tagName.toLowerCase()); });
-    console.log('[BulkSync] Elements with shadow roots:', [...new Set(allShadowHosts)]);
+    reportToBackground('debug', `[BulkSync] Elements with shadow roots: ${[...new Set(allShadowHosts)]}`, { component: 'content' });
 
     // Get all rooms from sidebar
     const rooms = getAllSidebarRooms();
     const total = rooms.length;
 
     if (total === 0) {
-        console.log('[BulkSync] No rooms found in sidebar. Aborting.');
+        reportToBackground('warn', '[BulkSync] No rooms found in sidebar. Aborting.', { component: 'content' });
         bulkSyncActive = false;
         safeSendMessage({
             action: 'BULK_SYNC_PROGRESS',
@@ -1670,14 +1683,14 @@ async function syncAllChats() {
         data: { ...bulkSyncProgress, status: 'started' }
     });
 
-    console.log(`Starting bulk sync of ${total} chats...`);
+    reportToBackground('info', `Starting bulk sync of ${total} chats...`, { component: 'content' });
 
     let consecutiveAlreadySynced = 0;
     const ALREADY_SYNCED_THRESHOLD = 3;
 
     for (let i = 0; i < rooms.length; i++) {
         if (bulkSyncCancelled) {
-            console.log('Bulk sync cancelled by user');
+            reportToBackground('info', 'Bulk sync cancelled by user', { component: 'content' });
             break;
         }
 
@@ -1708,7 +1721,7 @@ async function syncAllChats() {
             const conversations = extractChatConversations();
 
             if (conversations.length === 0 || conversations[0].messages.length === 0) {
-                console.log(`No messages found for ${room.username}, skipping`);
+                reportToBackground('debug', `No messages found for ${room.username}, skipping`, { component: 'content' });
                 bulkSyncProgress.skipped++;
                 continue;
             }
@@ -1744,22 +1757,22 @@ async function syncAllChats() {
             // Check if already synced via _syncMeta from backend
             const syncMeta = response?.data?._syncMeta;
             if (syncMeta?.alreadySynced) {
-                console.log(`Chat with ${room.username} already synced`);
+                reportToBackground('debug', `Chat with ${room.username} already synced`, { component: 'content' });
                 bulkSyncProgress.skipped++;
                 consecutiveAlreadySynced++;
 
                 if (consecutiveAlreadySynced >= ALREADY_SYNCED_THRESHOLD) {
-                    console.log(`${ALREADY_SYNCED_THRESHOLD} consecutive already-synced chats, stopping`);
+                    reportToBackground('info', `${ALREADY_SYNCED_THRESHOLD} consecutive already-synced chats, stopping`, { component: 'content' });
                     break;
                 }
             } else {
-                console.log(`Synced ${syncMeta?.addedCount || '?'} new messages for ${room.username}`);
+                reportToBackground('info', `Synced ${syncMeta?.addedCount || '?'} new messages for ${room.username}`, { component: 'content' });
                 bulkSyncProgress.synced++;
                 consecutiveAlreadySynced = 0; // Reset counter when new data found
             }
 
         } catch (err) {
-            console.error(`Failed to sync chat with ${room.username}:`, err);
+            reportToBackground('error', `Failed to sync chat with ${room.username}`, { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
             bulkSyncProgress.failed++;
             // Don't stop on individual failures, continue to next
         }
@@ -1778,7 +1791,7 @@ async function syncAllChats() {
         data: { ...bulkSyncProgress, status: 'completed' }
     });
 
-    console.log('Bulk sync completed:', bulkSyncProgress);
+    reportToBackground('info', `Bulk sync completed: ${JSON.stringify(bulkSyncProgress)}`, { component: 'content' });
 }
 
 // Detect #__rdm_sync_all in URL hash (triggered by dashboard Sync Chats button)
@@ -1789,7 +1802,7 @@ function checkBulkSyncInstructions() {
     // Clean the hash from URL
     history.replaceState(null, '', window.location.pathname + window.location.search);
 
-    console.log('Bulk sync detected from dashboard');
+    reportToBackground('info', 'Bulk sync detected from dashboard', { component: 'content' });
 
     // Delay to ensure chat page is fully loaded
     setTimeout(() => syncAllChats(), 3000);
@@ -1808,14 +1821,14 @@ function checkDirectSendInstructions() {
 
         const targetUser = payload.username;
         if (!targetUser) {
-            console.warn('Direct send: no username in payload');
+            reportToBackground('warn', 'Direct send: no username in payload', { component: 'content' });
             return;
         }
 
         // Clean the hash from URL for privacy
         history.replaceState(null, '', window.location.pathname + window.location.search);
 
-        console.log('📨 Direct send detected for user:', targetUser);
+        reportToBackground('info', `Direct send detected for user: ${targetUser}`, { component: 'content' });
 
         // Send to background script for automation
         chrome.runtime.sendMessage({
@@ -1829,7 +1842,7 @@ function checkDirectSendInstructions() {
             }
         });
     } catch (err) {
-        console.error('Failed to parse direct send instructions:', err);
+        reportToBackground('error', 'Failed to parse direct send instructions', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
     }
 }
 
@@ -1843,16 +1856,16 @@ function checkCookieCaptureInstructions() {
     // Clean the hash from URL
     history.replaceState(null, '', window.location.pathname + window.location.search);
 
-    console.log('Cookie capture detected');
+    reportToBackground('info', 'Cookie capture detected', { component: 'content' });
 
     chrome.runtime.sendMessage({ action: 'CAPTURE_REDDIT_COOKIES' }, (response) => {
         if (chrome.runtime.lastError) {
-            console.error('Cookie capture failed:', chrome.runtime.lastError.message);
+            reportToBackground('error', `Cookie capture failed: ${chrome.runtime.lastError.message}`, { component: 'content' });
             return;
         }
 
         if (response && response.cookies && response.cookies.length > 0) {
-            console.log(`Cookies captured for u/${response.username || 'unknown'} (${response.cookies.length} cookies)`);
+            reportToBackground('info', `Cookies captured for u/${response.username || 'unknown'} (${response.cookies.length} cookies)`, { component: 'content' });
 
             // Register the account via the backend API directly
             chrome.runtime.sendMessage({
@@ -1861,7 +1874,7 @@ function checkCookieCaptureInstructions() {
                 cookies: response.cookies
             }, (regResult) => {
                 if (chrome.runtime.lastError) {
-                    console.error('Account registration failed:', chrome.runtime.lastError.message);
+                    reportToBackground('error', `Account registration failed: ${chrome.runtime.lastError.message}`, { component: 'content' });
                 }
                 // Store result so dashboard can detect completion
                 chrome.storage.local.set({
@@ -1872,7 +1885,7 @@ function checkCookieCaptureInstructions() {
                 });
             });
         } else {
-            console.warn('No cookies captured. Make sure you are logged into Reddit.');
+            reportToBackground('warn', 'No cookies captured. Make sure you are logged into Reddit.', { component: 'content' });
             chrome.storage.local.set({
                 capturedCookies: null,
                 capturedUsername: null,
@@ -1889,7 +1902,7 @@ async function init() {
     window.__redditDMExtInitialized = true;
 
     if (!isContextValid()) return;
-    console.log('Content script init() called on:', window.location.href);
+    reportToBackground('info', `Content script init() called on: ${window.location.href}`, { component: 'content' });
     // Load state from storage
     const data = await chrome.storage.local.get(['isSidebarOpen', 'sidebarWidth']);
     isSidebarOpen = data.isSidebarOpen || false;
@@ -1945,7 +1958,7 @@ async function init() {
             ensureSidebarVisible();
             setTimeout(() => renderRunningState(request.status), 300);
         } else if (request.action === 'START_BULK_SYNC') {
-            console.log('Received START_BULK_SYNC from background');
+            reportToBackground('info', 'Received START_BULK_SYNC from background', { component: 'content' });
             syncAllChats();
             sendResponse({ success: true });
         } else if (request.action === 'CANCEL_BULK_SYNC') {
@@ -1966,7 +1979,7 @@ async function init() {
     // Check automation status on load
     chrome.runtime.sendMessage({ action: 'GET_AUTOMATION_STATUS' }, (status) => {
         if (status && status.isActive) {
-            console.log('Resuming automation UI:', status);
+            reportToBackground('info', `Resuming automation UI: ${JSON.stringify(status)}`, { component: 'content' });
             ensureSidebarVisible();
             // We need to wait for sidebar to inject
             setTimeout(() => renderRunningState(status), 500);
@@ -2000,7 +2013,7 @@ async function init() {
 
         if (isToggleShortcut) {
             e.preventDefault();
-            console.log('Toggle sidebar shortcut pressed (fallback handler)');
+            reportToBackground('debug', 'Toggle sidebar shortcut pressed (fallback handler)', { component: 'content' });
             const newState = !isSidebarOpen;
             chrome.storage.local.set({ isSidebarOpen: newState });
             toggleSidebar(newState);
@@ -2012,12 +2025,12 @@ async function init() {
 // Synchronous fire-and-forget: kicks off async work and returns an immediate ack.
 // The actual result is delivered via AUTOMATION_STEP_COMPLETE messages.
 function handleAutomationCommand(request) {
-    console.log('📬 Received automation command:', request.command);
+    reportToBackground('info', `Received automation command: ${request.command}`, { component: 'content' });
 
     switch (request.command) {
         case 'CLICK_CHAT_BUTTON':
             executeClickChat().catch(err => {
-                console.error('executeClickChat error:', err);
+                reportToBackground('error', 'executeClickChat error', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
                 safeSendMessage({
                     action: 'AUTOMATION_STEP_COMPLETE',
                     result: { success: false, error: err.message, step: 'CLICK_CHAT_BUTTON' }
@@ -2027,7 +2040,7 @@ function handleAutomationCommand(request) {
 
         case 'FIND_CHAT_USER':
             executeFindChatUser(request.targetUser).catch(err => {
-                console.error('executeFindChatUser error:', err);
+                reportToBackground('error', 'executeFindChatUser error', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
                 safeSendMessage({
                     action: 'AUTOMATION_STEP_COMPLETE',
                     result: { success: false, error: err.message, step: 'FIND_CHAT_USER' }
@@ -2037,7 +2050,7 @@ function handleAutomationCommand(request) {
 
         case 'DIRECT_CHAT_SEND':
             executeDirectChatSend(request.targetUser, request.text).catch(err => {
-                console.error('executeDirectChatSend error:', err);
+                reportToBackground('error', 'executeDirectChatSend error', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
                 safeSendMessage({
                     action: 'AUTOMATION_STEP_COMPLETE',
                     result: { success: false, error: err.message, step: 'DIRECT_CHAT_SEND' }
@@ -2047,7 +2060,7 @@ function handleAutomationCommand(request) {
 
         case 'TYPE_MESSAGE':
             executeTypeMessage(request.text).catch(err => {
-                console.error('executeTypeMessage error:', err);
+                reportToBackground('error', 'executeTypeMessage error', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
                 safeSendMessage({
                     action: 'AUTOMATION_STEP_COMPLETE',
                     result: { success: false, error: err.message, step: 'TYPE_MESSAGE' }
@@ -2062,27 +2075,27 @@ function handleAutomationCommand(request) {
 
 async function executeClickChat() {
     if (!isContextValid()) throw new Error('Extension context invalidated');
-    console.log('🔍 Looking for Chat button...');
+    reportToBackground('info', 'Looking for Chat button...', { component: 'content' });
 
     const findChatButton = () => {
         // Priority 1: data-testid="private-chat-button" (new Reddit anchor)
         const chatTestId = document.querySelector('[data-testid="private-chat-button"]');
         if (chatTestId) {
-            console.log('✓ Found via data-testid="private-chat-button"');
+            reportToBackground('debug', 'Found via data-testid="private-chat-button"', { component: 'content' });
             return chatTestId;
         }
 
         // Priority 2: aria-label="Open chat"
         const ariaChat = document.querySelector('[aria-label="Open chat"]');
         if (ariaChat) {
-            console.log('✓ Found via aria-label="Open chat"');
+            reportToBackground('debug', 'Found via aria-label="Open chat"', { component: 'content' });
             return ariaChat;
         }
 
         // Priority 3: Link to chat.reddit.com
         const chatLink = document.querySelector('a[href*="chat.reddit.com"]');
         if (chatLink) {
-            console.log('✓ Found via href containing chat.reddit.com');
+            reportToBackground('debug', 'Found via href containing chat.reddit.com', { component: 'content' });
             return chatLink;
         }
 
@@ -2104,7 +2117,7 @@ async function executeClickChat() {
             return text === 'Chat' || text === 'Start Chat' || text.includes('Start Chat');
         });
         if (chatBtn) {
-            console.log('✓ Found via text content');
+            reportToBackground('debug', 'Found via text content', { component: 'content' });
             return chatBtn;
         }
 
@@ -2118,7 +2131,7 @@ async function executeClickChat() {
     const chatBtn = await pollForElement(findChatButton, 8000, 500);
 
     if (chatBtn) {
-        console.log('✓ Chat button found. Animating cursor...');
+        reportToBackground('info', 'Chat button found. Animating cursor...', { component: 'content' });
         await showCursorAnimation(chatBtn);
 
         // Detect if clicking will cause same-tab navigation (destroying this script)
@@ -2128,7 +2141,7 @@ async function executeClickChat() {
         const willNavigate = navLink || parentNavLink;
 
         if (willNavigate) {
-            console.log('Chat button is a navigation link, sending step-complete before click...');
+            reportToBackground('info', 'Chat button is a navigation link, sending step-complete before click...', { component: 'content' });
             // Send step-complete BEFORE clicking, since click will destroy this content script
             chrome.runtime.sendMessage({
                 action: 'AUTOMATION_STEP_COMPLETE',
@@ -2138,7 +2151,7 @@ async function executeClickChat() {
             await new Promise(r => setTimeout(r, 300));
             chatBtn.click();
         } else {
-            console.log('Clicking chat button (popup/overlay mode)...');
+            reportToBackground('debug', 'Clicking chat button (popup/overlay mode)...', { component: 'content' });
             chatBtn.click();
             // Safe to send after click since no navigation occurred
             chrome.runtime.sendMessage({
@@ -2147,7 +2160,7 @@ async function executeClickChat() {
             });
         }
     } else {
-        console.error('❌ Could not find Chat button');
+        reportToBackground('error', 'Could not find Chat button', { component: 'content' });
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: 'Chat button not found', step: 'CLICK_CHAT_BUTTON' }
@@ -2190,13 +2203,13 @@ function findChatUserElement(targetLower) {
             if (chatLink) {
                 const ariaLabel = (chatLink.getAttribute('aria-label') || '').toLowerCase();
                 if (matchFn(ariaLabel)) {
-                    console.log('Found via rs-rooms-nav-room aria-label:', ariaLabel);
+                    reportToBackground('debug', `Found via rs-rooms-nav-room aria-label: ${ariaLabel}`, { component: 'content' });
                     return chatLink;
                 }
             }
             const deepText = getDeepTextContent(room).toLowerCase();
             if (matchFn(deepText)) {
-                console.log('Found via rs-rooms-nav-room text content');
+                reportToBackground('debug', 'Found via rs-rooms-nav-room text content', { component: 'content' });
                 return room.shadowRoot.querySelector('a') || room;
             }
         }
@@ -2207,7 +2220,7 @@ function findChatUserElement(targetLower) {
             const text = (el.textContent || '').trim().toLowerCase();
             const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
             if (matchFn(text) || matchFn(ariaLabel)) {
-                console.log('Found via deep clickable search:', el.tagName, text.substring(0, 50));
+                reportToBackground('debug', `Found via deep clickable search: ${el.tagName} ${text.substring(0, 50)}`, { component: 'content' });
                 return el;
             }
         }
@@ -2220,7 +2233,7 @@ function findChatUserElement(targetLower) {
         for (const link of allLinks) {
             const linkText = (link.textContent || '').trim().toLowerCase();
             if (matchFn(linkText)) {
-                console.log('Found via standard DOM text:', link.tagName, linkText.substring(0, 50));
+                reportToBackground('debug', `Found via standard DOM text: ${link.tagName} ${linkText.substring(0, 50)}`, { component: 'content' });
                 return link;
             }
         }
@@ -2234,7 +2247,7 @@ function findChatUserElement(targetLower) {
                     let el = node.parentElement;
                     while (el && el !== root) {
                         if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'listitem' || el.onclick) {
-                            console.log('Found via text node walk:', el.tagName);
+                            reportToBackground('debug', `Found via text node walk: ${el.tagName}`, { component: 'content' });
                             return el;
                         }
                         el = el.parentElement;
@@ -2260,13 +2273,13 @@ function findChatUserElement(targetLower) {
 
 async function executeFindChatUser(targetUser) {
     if (!isContextValid()) throw new Error('Extension context invalidated');
-    console.log('🔍 Looking for chat conversation with:', targetUser);
+    reportToBackground('info', `Looking for chat conversation with: ${targetUser}`, { component: 'content' });
     const targetLower = targetUser.toLowerCase();
 
     const userRoom = await pollForElement(() => findChatUserElement(targetLower), 12000, 500);
 
     if (userRoom) {
-        console.log('✓ Chat conversation found. Clicking to open...');
+        reportToBackground('info', 'Chat conversation found. Clicking to open...', { component: 'content' });
         userRoom.click();
         await new Promise(r => setTimeout(r, 1500));
 
@@ -2276,7 +2289,7 @@ async function executeFindChatUser(targetUser) {
         });
         return { success: true };
     } else {
-        console.error('❌ Could not find chat conversation for:', targetUser);
+        reportToBackground('error', `Could not find chat conversation for: ${targetUser}`, { component: 'content' });
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: `Chat with ${targetUser} not found`, step: 'FIND_CHAT_USER' }
@@ -2290,7 +2303,7 @@ async function executeFindChatUser(targetUser) {
 // clicking a conversation causes a soft/hard navigation.
 async function executeDirectChatSend(targetUser, text) {
     if (!isContextValid()) throw new Error('Extension context invalidated');
-    console.log('📨 Direct chat send to:', targetUser, '| message length:', text?.length);
+    reportToBackground('info', `Direct chat send to: ${targetUser} | message length: ${text?.length}`, { component: 'content' });
 
     const targetLower = targetUser.toLowerCase();
     const onChatPage = /chat\.reddit\.com|reddit\.com\/chat/i.test(window.location.href);
@@ -2299,17 +2312,17 @@ async function executeDirectChatSend(targetUser, text) {
     // may already be open directly — no sidebar entry exists for new conversations.
     // Race: look for either the sidebar entry OR a directly-available chat input.
     if (onChatPage) {
-        console.log('On chat page, racing sidebar lookup vs direct chat input...');
+        reportToBackground('debug', 'On chat page, racing sidebar lookup vs direct chat input...', { component: 'content' });
         const result = await raceForChatReady(targetLower, 15000, 500);
 
         if (result === 'direct') {
-            console.log('Chat input found directly for', targetUser, '- typing...');
+            reportToBackground('debug', `Chat input found directly for ${targetUser} - typing...`, { component: 'content' });
             return await executeTypeMessage(text);
         } else if (result === 'sidebar') {
             // findChatUserElement found a clickable sidebar entry — use it
             const userRoom = findChatUserElement(targetLower);
             if (userRoom) {
-                console.log('Found conversation for', targetUser, 'in sidebar - clicking...');
+                reportToBackground('debug', `Found conversation for ${targetUser} in sidebar - clicking...`, { component: 'content' });
                 userRoom.click();
                 await new Promise(r => setTimeout(r, 2000));
                 return await executeTypeMessage(text);
@@ -2317,14 +2330,14 @@ async function executeDirectChatSend(targetUser, text) {
         }
 
         // Final fallback: poll for chat input alone (page may still be loading)
-        console.log('Race failed, polling for chat input as last resort...');
+        reportToBackground('debug', 'Race failed, polling for chat input as last resort...', { component: 'content' });
         const chatInput = await pollForElement(findChatInput, 8000, 500);
         if (chatInput) {
-            console.log('Chat input found (late) - typing directly for', targetUser);
+            reportToBackground('debug', `Chat input found (late) - typing directly for ${targetUser}`, { component: 'content' });
             return await executeTypeMessage(text);
         }
 
-        console.error('❌ Could not find chat conversation for:', targetUser);
+        reportToBackground('error', `Could not find chat conversation for: ${targetUser}`, { component: 'content' });
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: `Chat with ${targetUser} not found`, step: 'DIRECT_CHAT_SEND' }
@@ -2337,14 +2350,14 @@ async function executeDirectChatSend(targetUser, text) {
     const userRoom = await pollForElement(() => findChatUserElement(targetLower), 12000, 500);
     if (!userRoom) {
         // Fallback: chat may already be open from the chat button click (new conversation)
-        console.log('Sidebar lookup failed, checking if chat is already open for', targetUser);
+        reportToBackground('debug', `Sidebar lookup failed, checking if chat is already open for ${targetUser}`, { component: 'content' });
         const chatInput = await pollForElement(findChatInput, 5000, 500);
         if (chatInput && verifyConversationUser(targetUser)) {
-            console.log('Chat already open for', targetUser, '- typing directly');
+            reportToBackground('debug', `Chat already open for ${targetUser} - typing directly`, { component: 'content' });
             return await executeTypeMessage(text);
         }
 
-        console.error('❌ Could not find chat conversation for:', targetUser);
+        reportToBackground('error', `Could not find chat conversation for: ${targetUser}`, { component: 'content' });
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: `Chat with ${targetUser} not found`, step: 'DIRECT_CHAT_SEND' }
@@ -2352,16 +2365,16 @@ async function executeDirectChatSend(targetUser, text) {
         return { success: false, error: `Chat with ${targetUser} not found` };
     }
 
-    console.log('Found conversation for', targetUser, '- clicking...');
+    reportToBackground('debug', `Found conversation for ${targetUser} - clicking...`, { component: 'content' });
     userRoom.click();
 
     // Wait for conversation to open and chat input to appear
     await new Promise(r => setTimeout(r, 2000));
 
     if (!verifyConversationUser(targetUser)) {
-        console.warn('Conversation header does not match target user:', targetUser);
+        reportToBackground('warn', `Conversation header does not match target user: ${targetUser}`, { component: 'content' });
         // Don't hard-fail — the conversation may still be correct if Reddit's UI doesn't show the username prominently
-        console.log('Proceeding cautiously...');
+        reportToBackground('debug', 'Proceeding cautiously...', { component: 'content' });
     }
 
     // Type and send using the existing logic
@@ -2466,14 +2479,14 @@ function verifyConversationUser(targetUser) {
 
 async function executeTypeMessage(text) {
     if (!isContextValid()) throw new Error('Extension context invalidated');
-    console.log('🔍 Looking for chat input...');
+    reportToBackground('info', 'Looking for chat input...', { component: 'content' });
 
     // Use polling instead of MutationObserver since chat input is inside shadow DOM
     // (MutationObserver on document.body cannot observe changes inside shadow roots)
     const input = await pollForElement(findChatInput, 10000, 500);
 
     if (input) {
-        console.log('✓ Chat input found. Typing message...');
+        reportToBackground('info', 'Chat input found. Typing message...', { component: 'content' });
 
         // Show cursor animation on input first
         await showCursorAnimation(input);
@@ -2483,7 +2496,7 @@ async function executeTypeMessage(text) {
 
         // Abort if automation was stopped during typing
         if (!isAutomationRunning) {
-            console.log('⛔ Automation stopped during typing, aborting send');
+            reportToBackground('info', 'Automation stopped during typing, aborting send', { component: 'content' });
             return { success: false, error: 'Automation stopped' };
         }
 
@@ -2525,16 +2538,16 @@ async function executeTypeMessage(text) {
 
         const sendBtn = await pollForElement(findSendButton, 5000, 500);
         if (sendBtn) {
-            console.log('✓ Send button found. Animating cursor...');
+            reportToBackground('info', 'Send button found. Animating cursor...', { component: 'content' });
             await showCursorAnimation(sendBtn);
 
-            console.log('Clicking send button...');
+            reportToBackground('debug', 'Clicking send button...', { component: 'content' });
             sendBtn.click();
 
-            console.log('🎉 Message sent successfully!');
+            reportToBackground('info', 'Message sent successfully!', { component: 'content' });
 
             // --- CLOSE CHAT LOGIC REMOVED ---
-            console.log('Automation stopping here as requested.');
+            reportToBackground('debug', 'Automation stopping here as requested.', { component: 'content' });
 
             safeSendMessage({
                 action: 'AUTOMATION_STEP_COMPLETE',
@@ -2542,7 +2555,7 @@ async function executeTypeMessage(text) {
             });
             return { success: true };
         } else {
-            console.warn('Send button not found. Message typed but not sent.');
+            reportToBackground('warn', 'Send button not found. Message typed but not sent.', { component: 'content' });
             safeSendMessage({
                 action: 'AUTOMATION_STEP_COMPLETE',
                 result: { success: false, step: 'TYPE_MESSAGE', error: 'Send button not found' }
@@ -2550,7 +2563,7 @@ async function executeTypeMessage(text) {
             return { success: false, error: 'Send button not found' };
         }
     } else {
-        console.error('❌ Could not find chat input');
+        reportToBackground('error', 'Could not find chat input', { component: 'content' });
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: 'Chat input not found', step: 'TYPE_MESSAGE' }
@@ -2818,7 +2831,7 @@ function makeDraggable(element, sidebar) {
         if (!hasMoved) {
             // Don't allow hiding sidebar during automation
             if (isAutomationRunning && !sidebar.classList.contains('hidden')) {
-                console.log('🔒 Sidebar toggle prevented - automation is running');
+                reportToBackground('debug', 'Sidebar toggle prevented - automation is running', { component: 'content' });
                 return;
             }
             const newState = sidebar.classList.contains('hidden');
@@ -2849,7 +2862,7 @@ function toggleSidebar(isOpen) {
 function ensureSidebarVisible() {
     isAutomationRunning = true; // Prevent sidebar from being hidden during automation
     if (!isSidebarOpen) {
-        console.log('🔓 Auto-opening sidebar for automation');
+        reportToBackground('debug', 'Auto-opening sidebar for automation', { component: 'content' });
         isSidebarOpen = true;
         chrome.storage.local.set({ isSidebarOpen: true });
         injectSidebar();
@@ -3015,7 +3028,7 @@ async function loadStats() {
             }
         });
     } catch (error) {
-        console.log('Error loading stats:', error);
+        reportToBackground('error', 'Error loading stats', { component: 'content', errorName: error?.name || error?.constructor?.name, errorStack: error?.stack });
     }
 }
 
@@ -3044,7 +3057,7 @@ async function loadRateLimitStatus() {
             }
         });
     } catch (error) {
-        console.log('Error loading rate limit:', error);
+        reportToBackground('error', 'Error loading rate limit', { component: 'content', errorName: error?.name || error?.constructor?.name, errorStack: error?.stack });
     }
 }
 
@@ -3319,7 +3332,7 @@ function renderSubredditInfo(data, container) {
         }
 
         // Scroll to load 50 posts first
-        console.log('Scrolling to load 50 posts...');
+        reportToBackground('debug', 'Scrolling to load 50 posts...', { component: 'content' });
         await scrollToLoadPosts(50);
 
         // Scroll back to top after loading posts
@@ -3339,7 +3352,7 @@ function renderSubredditInfo(data, container) {
 
         // Show settings review before starting
         showSettingsReview(() => {
-            console.log(`Starting automation on ${links.length} posts`);
+            reportToBackground('info', `Starting automation on ${links.length} posts`, { component: 'content' });
 
             chrome.runtime.sendMessage({
                 action: 'START_SUBREDDIT_AUTOMATION',
@@ -3881,7 +3894,7 @@ async function showPreview(message, author, postData = {}) {
     });
 
     shadowRoot.getElementById('send-btn').addEventListener('click', async () => {
-        console.log('🚀 Open Chat button clicked');
+        reportToBackground('info', 'Open Chat button clicked', { component: 'content' });
         const text = shadowRoot.getElementById('dm-message').value;
 
         // Send message to background to start automation
@@ -3895,7 +3908,7 @@ async function showPreview(message, author, postData = {}) {
             }
         });
 
-        console.log('✓ Started automation via background script');
+        reportToBackground('info', 'Started automation via background script', { component: 'content' });
     });
 
     shadowRoot.getElementById('save-template-btn').addEventListener('click', async () => {
@@ -4033,7 +4046,7 @@ async function scrollToLoadPosts(targetPostCount = 50) {
             const currentPosts = document.querySelectorAll('shreddit-post');
             const currentPostCount = currentPosts.length;
 
-            console.log(`Scroll attempt ${scrollAttempts + 1}: Found ${currentPostCount} posts`);
+            reportToBackground('debug', `Scroll attempt ${scrollAttempts + 1}: Found ${currentPostCount} posts`, { component: 'content' });
 
             // Track consecutive scrolls with no new posts
             if (currentPostCount === lastPostCount) {
@@ -4047,7 +4060,7 @@ async function scrollToLoadPosts(targetPostCount = 50) {
                 staleCount >= 5 ||
                 scrollAttempts >= maxScrollAttempts) {
                 clearInterval(scrollInterval);
-                console.log(`Scrolling complete. Total posts found: ${currentPostCount}`);
+                reportToBackground('debug', `Scrolling complete. Total posts found: ${currentPostCount}`, { component: 'content' });
                 resolve(currentPostCount);
                 return;
             }
@@ -4206,7 +4219,7 @@ function pollForElement(selectorFn, timeout = 10000, interval = 500) {
 }
 
 async function simulateTyping(element, text) {
-    console.log('⌨️ simulateTyping: element type:', element.tagName, 'contentEditable:', element.isContentEditable, 'shadow:', !!element.getRootNode()?.host);
+    reportToBackground('debug', `simulateTyping: element type: ${element.tagName} contentEditable: ${element.isContentEditable} shadow: ${!!element.getRootNode()?.host}`, { component: 'content' });
     element.focus();
     await new Promise(r => setTimeout(r, 300)); // Let focus settle
 
@@ -4252,7 +4265,7 @@ async function simulateTyping(element, text) {
             await typingDelay(80);
         }
         execCmdWorked = (element.textContent || '').length > 0;
-        console.log('⌨️ execCommand contentEditable result:', execCmdWorked, 'text length:', (element.textContent || '').length);
+        reportToBackground('debug', `execCommand contentEditable result: ${execCmdWorked} text length: ${(element.textContent || '').length}`, { component: 'content' });
     } else {
         // For textarea: try execCommand first
         const before = element.value || '';
@@ -4262,14 +4275,14 @@ async function simulateTyping(element, text) {
 
         if (execCmdWorked) {
             // execCommand works for this textarea — type remaining chars
-            console.log('⌨️ execCommand works for textarea, typing remaining chars...');
+            reportToBackground('debug', 'execCommand works for textarea, typing remaining chars...', { component: 'content' });
             for (let i = 1; i < text.length; i++) {
                 if (!isAutomationRunning) break;
                 document.execCommand('insertText', false, text[i]);
                 await typingDelay(80);
             }
         } else {
-            console.log('⌨️ execCommand failed for textarea, using native setter approach...');
+            reportToBackground('debug', 'execCommand failed for textarea, using native setter approach...', { component: 'content' });
             // Strategy 2: Native value setter (bypasses React's override)
             const nativeSetter = Object.getOwnPropertyDescriptor(
                 HTMLTextAreaElement.prototype, 'value'
@@ -4314,10 +4327,10 @@ async function simulateTyping(element, text) {
     const currentValue = element.isContentEditable
         ? (element.textContent || element.innerText || '')
         : (element.value || '');
-    console.log('⌨️ After typing, input value length:', currentValue.length, 'expected:', text.length);
+    reportToBackground('debug', `After typing, input value length: ${currentValue.length} expected: ${text.length}`, { component: 'content' });
 
     if (currentValue.length === 0) {
-        console.warn('⌨️ Text not entered! Trying bulk paste approach...');
+        reportToBackground('warn', 'Text not entered! Trying bulk paste approach...', { component: 'content' });
         // Last resort: set the full text at once
         if (element.isContentEditable) {
             element.textContent = text;
@@ -4335,7 +4348,7 @@ async function simulateTyping(element, text) {
         const retryValue = element.isContentEditable
             ? (element.textContent || element.innerText || '')
             : (element.value || '');
-        console.log('⌨️ After bulk paste, input value length:', retryValue.length);
+        reportToBackground('debug', `After bulk paste, input value length: ${retryValue.length}`, { component: 'content' });
     }
 
     await new Promise(r => setTimeout(r, 500));
@@ -4358,7 +4371,7 @@ function cleanupCursor() {
 }
 
 async function showCursorAnimation(targetElement) {
-    console.log('🖱️ Showing cursor animation...');
+    reportToBackground('debug', 'Showing cursor animation...', { component: 'content' });
 
     // Clean up any existing cursor first
     cleanupCursor();
@@ -4392,7 +4405,7 @@ async function showCursorAnimation(targetElement) {
     const targetX = rect.left + (rect.width / 2) - 24;
     const targetY = rect.top + (rect.height / 2) - 24;
 
-    console.log(`Moving cursor to: ${targetX}, ${targetY}`);
+    reportToBackground('debug', `Moving cursor to: ${targetX}, ${targetY}`, { component: 'content' });
 
     cursor.style.top = `${targetY}px`;
     cursor.style.left = `${targetX}px`;
@@ -4404,7 +4417,7 @@ async function showCursorAnimation(targetElement) {
     cursor.style.transform = 'scale(1) rotate(0deg)';
     await new Promise(r => setTimeout(r, 150));
 
-    console.log('✓ Cursor animation complete');
+    reportToBackground('debug', 'Cursor animation complete', { component: 'content' });
 
     // Schedule cursor cleanup after animation completes (fade out and remove)
     cursor.style.opacity = '0';

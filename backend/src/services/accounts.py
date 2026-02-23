@@ -5,11 +5,14 @@ Manages multiple Reddit accounts for automation
 
 import os
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
 from ..utils.crypto import encrypt, decrypt
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -86,7 +89,7 @@ async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = Non
     """Add a new Reddit account"""
     client = get_client()
     if not client:
-        print("Supabase not configured")
+        logger.warning("Supabase not configured")
         return None
 
     try:
@@ -117,7 +120,7 @@ async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = Non
 
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error adding account: {e}")
+        logger.error(f"Error adding account: {e}")
         return None
 
 
@@ -145,7 +148,7 @@ async def get_accounts(filters: Dict[str, Any] = None, team_id: Optional[str] = 
         result = query.execute()
         return [transform_account(row) for row in result.data] if result.data else []
     except Exception as e:
-        print(f"Error fetching accounts: {e}")
+        logger.error(f"Error fetching accounts: {e}")
         return []
 
 
@@ -165,7 +168,7 @@ async def get_account(account_id: str, team_id: Optional[str] = None) -> Optiona
         result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error fetching account: {e}")
+        logger.error(f"Error fetching account: {e}")
         return None
 
 
@@ -188,7 +191,7 @@ async def get_account_by_username(username: str, team_id: Optional[str] = None) 
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
         if "PGRST116" not in str(e):
-            print(f"Error fetching account: {e}")
+            logger.error(f"Error fetching account: {e}")
         return None
 
 
@@ -223,7 +226,7 @@ async def update_account(account_id: str, updates: Dict[str, Any], team_id: Opti
         result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error updating account: {e}")
+        logger.error(f"Error updating account: {e}")
         return None
 
 
@@ -240,7 +243,7 @@ async def delete_account(account_id: str, team_id: Optional[str] = None) -> bool
         query.execute()
         return True
     except Exception as e:
-        print(f"Error deleting account: {e}")
+        logger.error(f"Error deleting account: {e}")
         return False
 
 
@@ -259,13 +262,13 @@ async def get_account_cookies(account_id: str, team_id: Optional[str] = None) ->
         result = query.execute()
 
         if not result.data or not result.data[0].get("encrypted_cookie"):
-            print("Error fetching account cookies: no data")
+            logger.warning("No cookies data found for account")
             return None
 
         decrypted = decrypt(result.data[0]["encrypted_cookie"])
         return json.loads(decrypted)
     except Exception as e:
-        print(f"Error decrypting cookies: {e}")
+        logger.error(f"Error decrypting cookies: {e}")
         return None
 
 
@@ -349,7 +352,7 @@ async def increment_dm_count(account_id: str, team_id: Optional[str] = None) -> 
         result = query.execute()
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error incrementing DM count: {e}")
+        logger.error(f"Error incrementing DM count: {e}")
         return None
 
 
@@ -369,7 +372,7 @@ async def reset_daily_counts() -> int:
 
         return len(result.data) if result.data else 0
     except Exception as e:
-        print(f"Error resetting daily counts: {e}")
+        logger.error(f"Error resetting daily counts: {e}")
         return 0
 
 
@@ -390,7 +393,7 @@ async def mark_as_shadowbanned(account_id: str, check_result: Dict[str, Any]) ->
 
         return transform_account(result.data[0]) if result.data else None
     except Exception as e:
-        print(f"Error marking as shadowbanned: {e}")
+        logger.error(f"Error marking as shadowbanned: {e}")
         return None
 
 
@@ -409,7 +412,7 @@ async def assign_to_subreddit(account_id: str, subreddit: str, priority: int = 1
         }, on_conflict="account_id,subreddit").execute()
         return True
     except Exception as e:
-        print(f"Error assigning to subreddit: {e}")
+        logger.error(f"Error assigning to subreddit: {e}")
         return False
 
 
@@ -426,7 +429,7 @@ async def remove_from_subreddit(account_id: str, subreddit: str) -> bool:
         ).eq("subreddit", clean_subreddit).execute()
         return True
     except Exception as e:
-        print(f"Error removing from subreddit: {e}")
+        logger.error(f"Error removing from subreddit: {e}")
         return False
 
 
@@ -443,5 +446,5 @@ async def get_account_subreddits(account_id: str) -> List[Dict[str, Any]]:
 
         return result.data if result.data else []
     except Exception as e:
-        print(f"Error fetching account subreddits: {e}")
+        logger.error(f"Error fetching account subreddits: {e}")
         return []

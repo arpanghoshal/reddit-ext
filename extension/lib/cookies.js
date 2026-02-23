@@ -7,6 +7,7 @@
  */
 
 import * as api from './api.js';
+import { extLogInfo, extLogWarn } from './logger.js';
 
 // Cache the current logged-in account
 let currentUsername = null;
@@ -68,10 +69,10 @@ export async function detectCurrentAccount(force = false) {
             currentAccountId = null;
         }
 
-        console.log(`Detected Reddit account: u/${currentUsername} (id: ${currentAccountId || 'unknown'})`);
+        extLogInfo(`Detected Reddit account: u/${currentUsername} (id: ${currentAccountId || 'unknown'})`, { component: 'cookies' });
         return { username: currentUsername, accountId: currentAccountId };
     } catch (err) {
-        console.warn('Failed to detect current account:', err);
+        extLogWarn('Failed to detect current account', { component: 'cookies', errorName: err.name, errorStack: err.stack });
         return { username: null, accountId: null };
     }
 }
@@ -155,7 +156,7 @@ export async function verifySession() {
 
         return { success: false, reason: 'No username in response' };
     } catch (err) {
-        console.warn('Session verification failed:', err);
+        extLogWarn('Session verification failed', { component: 'cookies', errorName: err.name, errorStack: err.stack });
         return { success: false, reason: err.message };
     }
 }

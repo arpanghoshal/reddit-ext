@@ -3,9 +3,12 @@ Automation Settings Service
 CRUD operations for automation_settings table
 """
 
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 from .supabase_service import get_client
+
+logger = logging.getLogger(__name__)
 
 
 def _transform_from_db(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,7 +86,7 @@ async def get_automation_settings(team_id: Optional[str] = None) -> Optional[Dic
         # Return defaults if no settings exist
         return _get_defaults()
     except Exception as e:
-        print(f"Failed to get automation settings: {e}")
+        logger.error(f"Failed to get automation settings: {e}")
         return _get_defaults()
 
 
@@ -91,7 +94,7 @@ async def save_automation_settings(data: Dict[str, Any], team_id: Optional[str] 
     """Save automation settings (upsert)"""
     client = get_client()
     if not client:
-        print("Supabase not configured - cannot save automation settings")
+        logger.warning("Supabase not configured - cannot save automation settings")
         return None
 
     try:
@@ -114,7 +117,7 @@ async def save_automation_settings(data: Dict[str, Any], team_id: Optional[str] 
             return _transform_from_db(result.data[0])
         return None
     except Exception as e:
-        print(f"Failed to save automation settings: {e}")
+        logger.error(f"Failed to save automation settings: {e}")
         return None
 
 

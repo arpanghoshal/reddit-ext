@@ -3,10 +3,13 @@ Team Analytics Service
 Aggregated analytics for team performance tracking
 """
 
+import logging
 import os
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
+
+logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
 
@@ -51,7 +54,7 @@ async def get_team_analytics(
             }
         }
     except Exception as e:
-        print(f"Error fetching team analytics: {e}")
+        logger.error(f"Error fetching team analytics: {e}")
         return {}
 
 
@@ -105,7 +108,7 @@ async def get_summary_stats(
             "avg_dms_per_day": round(total_dms / len(data), 1) if data else 0
         }
     except Exception as e:
-        print(f"Error fetching summary stats: {e}")
+        logger.error(f"Error fetching summary stats: {e}")
         return {}
 
 
@@ -128,7 +131,7 @@ async def get_daily_stats(
 
         return result.data or []
     except Exception as e:
-        print(f"Error fetching daily stats: {e}")
+        logger.error(f"Error fetching daily stats: {e}")
         return []
 
 
@@ -179,7 +182,7 @@ async def get_hourly_activity(
             "recommendation": f"Best engagement: {day_names[best_day]}s around {best_hour}:00"
         }
     except Exception as e:
-        print(f"Error fetching hourly activity: {e}")
+        logger.error(f"Error fetching hourly activity: {e}")
         return {}
 
 
@@ -241,7 +244,7 @@ async def get_member_stats(
 
         return leaderboard
     except Exception as e:
-        print(f"Error fetching member stats: {e}")
+        logger.error(f"Error fetching member stats: {e}")
         return []
 
 
@@ -287,7 +290,7 @@ async def record_dm_sent(
             }).execute()
 
     except Exception as e:
-        print(f"Error recording DM sent: {e}")
+        logger.error(f"Error recording DM sent: {e}")
 
 
 async def record_response_received(
@@ -340,7 +343,7 @@ async def record_response_received(
             }).eq("team_id", team_id).eq("date", today.isoformat()).execute()
 
     except Exception as e:
-        print(f"Error recording response: {e}")
+        logger.error(f"Error recording response: {e}")
 
 
 async def get_analytics_summary_view(team_id: str) -> Dict[str, Any]:
@@ -356,5 +359,5 @@ async def get_analytics_summary_view(team_id: str) -> Dict[str, Any]:
 
         return result.data[0] if result.data else {}
     except Exception as e:
-        print(f"Error fetching analytics summary: {e}")
+        logger.error(f"Error fetching analytics summary: {e}")
         return {}
