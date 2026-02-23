@@ -67,7 +67,7 @@ function ConversationList({ conversations, selected, onSelect }) {
   );
 }
 
-function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
+function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts = [] }) {
   const [messages, setMessages] = useState([]);
   const [suggestion, setSuggestion] = useState('');
   const [loading, setLoading] = useState(false);
@@ -139,7 +139,7 @@ function ConversationDetail({ conversation, onUpdate, accounts = [] }) {
   const updateStatus = async (newStatus) => {
     try {
       await api.updateConversation(conversation.id, { status: newStatus });
-      onUpdate();
+      onStatusChange(conversation.id, newStatus);
     } catch (err) {
       console.error('Failed to update status:', err);
     }
@@ -463,6 +463,12 @@ export default function Inbox() {
     }
   };
 
+  const handleStatusChange = async (conversationId, newStatus) => {
+    setSelected(prev => prev && prev.id === conversationId ? { ...prev, status: newStatus } : prev);
+    setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, status: newStatus } : c));
+    await loadData();
+  };
+
   useEffect(() => {
     loadData(true);
     const interval = setInterval(() => loadData(), 15000);
@@ -652,6 +658,7 @@ export default function Inbox() {
         <ConversationDetail
           conversation={selected}
           onUpdate={loadData}
+          onStatusChange={handleStatusChange}
           accounts={accounts}
         />
       </div>

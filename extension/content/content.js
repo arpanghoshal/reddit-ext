@@ -115,7 +115,10 @@ async function syncChatMessages() {
             try {
                 await chrome.runtime.sendMessage({
                     action: 'SYNC_CHAT_MESSAGES',
-                    data: conv
+                    data: {
+                        ...conv,
+                        accountUsername: getCurrentUsername()
+                    }
                 });
                 lastSyncedMessages.add(syncKey);
                 console.log(`✅ Synced conversation with ${conv.participantUsername}: ${conv.messages.length} messages`);
@@ -1723,7 +1726,8 @@ async function syncAllChats() {
                         action: 'SYNC_CHAT_MESSAGES',
                         data: {
                             participantUsername: conv.participantUsername,
-                            messages: conv.messages
+                            messages: conv.messages,
+                            accountUsername: currentUser
                         }
                     }, (resp) => {
                         if (chrome.runtime.lastError) {

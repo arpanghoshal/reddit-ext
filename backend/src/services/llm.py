@@ -3,8 +3,10 @@ LLM Service
 Handles interactions with Google Gemini API for message generation
 """
 
+import asyncio
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional
 
 from . import gemini_client
@@ -57,31 +59,45 @@ async def generate_question(input_data: Dict[str, Any]) -> Dict[str, str]:
     post = input_data.get("post", {})
     settings = input_data.get("settings", {})
 
-    # Fetch user profile for deep personalization
+    # Fetch user profile, subreddit culture, and comments in parallel
     personalization_context = {}
     subreddit_culture = {}
-
-    try:
-        author = post.get("author", "")
-        if author and author != "[deleted]":
-            user_profile = await user_analysis.get_or_analyze(author)
-            if user_profile and not user_profile.get("error"):
-                personalization_context = user_profile.get("personalization_context", {})
-                logger.debug(f"User profile loaded for {author}")
-
-        # Get subreddit culture
-        subreddit = post.get("subreddit", "")
-        if subreddit:
-            subreddit_culture = await user_analysis.get_subreddit_culture(subreddit)
-    except Exception as e:
-        logger.debug(f"Could not load user profile: {e}")
-
-    # Fetch post comments for richer context
     comments_text = ""
+
+    author = post.get("author", "")
+    subreddit = post.get("subreddit", "")
+    post_url = post.get("url", "")
+
+    t0 = time.time()
+
+    async def _fetch_profile():
+        if author and author != "[deleted]":
+            return await user_analysis.get_or_analyze(author)
+        return None
+
+    async def _fetch_culture():
+        if subreddit:
+            return await user_analysis.get_subreddit_culture(subreddit)
+        return {}
+
+    async def _fetch_comments():
+        if post_url:
+            return await reddit_comments.get_post_comments_text(post_url)
+        return ""
+
     try:
-        comments_text = await reddit_comments.get_post_comments_text(post.get("url", ""))
+        user_profile, subreddit_culture, comments_text = await asyncio.gather(
+            _fetch_profile(),
+            _fetch_culture(),
+            _fetch_comments(),
+        )
+        if user_profile and not user_profile.get("error"):
+            personalization_context = user_profile.get("personalization_context", {})
     except Exception as e:
-        logger.debug(f"Could not fetch post comments: {e}")
+        logger.warning(f"Pre-fetch partially failed: {e}")
+
+    t1 = time.time()
+    logger.info(f"DM generate pre-fetch took {t1 - t0:.2f}s (author={author}, subreddit={subreddit})")
 
     # Build rich personalization section
     personalization_section = ""
@@ -177,11 +193,14 @@ Author: u/{post.get('author', 'unknown')}
 
 Write a DM to this person. Use everything you know about them. Make it impossible for them to think this is a template."""
 
+    t2 = time.time()
     result = await gemini_client.generate_content(
         system_instruction=system_prompt,
         user_prompt=user_prompt,
         temperature=0.85,
     )
+    t3 = time.time()
+    logger.info(f"DM generate LLM call took {t3 - t2:.2f}s, total {t3 - t0:.2f}s")
 
     return _parse_message_response(result)
 

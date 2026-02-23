@@ -156,7 +156,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Retry configuration
 const RETRY_CONFIG = {
     maxRetries: 3,
-    baseDelay: 5000,  // 5 seconds
+    baseDelay: 3000,  // 3 seconds
     maxDelay: 30000   // 30 seconds max
 };
 
@@ -1695,19 +1695,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (syncData && syncData.participantUsername && syncData.messages) {
             // Auto-detect current logged-in account and tag the sync
             cookies.detectCurrentAccount().then(detected => {
+                // Use background detection, fall back to content script's DOM-based username
+                const resolvedUsername = detected.username || syncData.accountUsername || null;
+                const resolvedAccountId = detected.accountId || null;
+
                 // Guard: participant must not be the same as the logged-in account
                 // This happens when getCurrentUsername() fails in the content script
                 // and the user's own name gets picked up as the "participant"
-                if (detected.username &&
-                    syncData.participantUsername.toLowerCase() === detected.username.toLowerCase()) {
+                if (resolvedUsername &&
+                    syncData.participantUsername.toLowerCase() === resolvedUsername.toLowerCase()) {
                     console.warn(`⚠️ Skipping sync: participant "${syncData.participantUsername}" is the logged-in account`);
                     return { skipped: true, reason: 'participant is self' };
                 }
                 return api.syncConversation({
                     participantUsername: syncData.participantUsername,
                     messages: syncData.messages,
-                    accountId: detected.accountId || null,
-                    accountUsername: detected.username || null
+                    accountId: resolvedAccountId,
+                    accountUsername: resolvedUsername
                 });
             }).then(result => {
                 console.log('Chat sync completed:', result);
