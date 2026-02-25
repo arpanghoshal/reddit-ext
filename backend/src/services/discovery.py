@@ -212,6 +212,81 @@ async def store_lead(session_id: str, team_id: str, lead_data: Dict[str, Any]) -
         return None
 
 
+async def enrich_leads_with_contact_info(
+    leads: List[Dict[str, Any]], team_id: str
+) -> List[Dict[str, Any]]:
+    """
+    Enrich leads with contact info from contacted_recipients + reddit_accounts.
+    Adds contacted_by_account (username) and contacted_at fields to each lead
+    that has been previously contacted.
+    """
+    if not leads or not team_id:
+        return leads
+
+    client = get_client()
+    if not client:
+        return leads
+
+    # Collect unique author usernames
+    usernames = list(set(
+        lead.get("author_username", "").lower()
+        for lead in leads
+        if lead.get("author_username")
+    ))
+    if not usernames:
+        return leads
+
+    try:
+        # Batch fetch contacted_recipients for these usernames
+        contact_map = {}  # username -> {account_id, contacted_at, source}
+        for batch_start in range(0, len(usernames), 100):
+            batch = usernames[batch_start:batch_start + 100]
+            cr_result = client.table("contacted_recipients").select(
+                "recipient_username, first_contact_account_id, first_contacted_at, first_contact_source"
+            ).eq("team_id", team_id).in_(
+                "recipient_username", batch
+            ).execute()
+            for row in (cr_result.data or []):
+                contact_map[row["recipient_username"]] = {
+                    "account_id": row.get("first_contact_account_id"),
+                    "contacted_at": row.get("first_contacted_at"),
+                    "source": row.get("first_contact_source"),
+                }
+
+        # Fetch account usernames for the account_ids found
+        account_ids = list(set(
+            info["account_id"] for info in contact_map.values()
+            if info.get("account_id")
+        ))
+        account_map = {}  # account_id -> username
+        if account_ids:
+            for batch_start in range(0, len(account_ids), 100):
+                batch = account_ids[batch_start:batch_start + 100]
+                acc_result = client.table("reddit_accounts").select(
+                    "id, username"
+                ).in_("id", batch).execute()
+                for row in (acc_result.data or []):
+                    account_map[row["id"]] = row.get("username")
+
+        # Merge into leads
+        for lead in leads:
+            author = lead.get("author_username", "").lower()
+            info = contact_map.get(author)
+            if info:
+                lead["contacted_by_account"] = account_map.get(info["account_id"]) or None
+                lead["contacted_at"] = info.get("contacted_at")
+                lead["contact_source"] = info.get("source")
+            else:
+                lead["contacted_by_account"] = None
+                lead["contacted_at"] = None
+                lead["contact_source"] = None
+
+    except Exception as e:
+        logger.warning(f"Failed to enrich leads with contact info: {e}")
+
+    return leads
+
+
 async def get_session_leads(
     session_id: str, team_id: str,
     tier: str = None, status: str = None, subreddit: str = None,
@@ -244,7 +319,8 @@ async def get_session_leads(
     query = query.order("lead_score", desc=True).range(offset, offset + limit - 1)
     result = query.execute()
 
-    return result.data or []
+    leads = result.data or []
+    return await enrich_leads_with_contact_info(leads, team_id)
 
 
 async def get_previously_found_leads(
@@ -317,7 +393,7 @@ async def get_previously_found_leads(
         lead["previously_found"] = True
         filtered.append(lead)
 
-    return filtered
+    return await enrich_leads_with_contact_info(filtered, team_id)
 
 
 async def get_lead(lead_id: str, team_id: str) -> Optional[Dict[str, Any]]:

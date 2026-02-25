@@ -83,7 +83,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
     <div className={`bg-[#141416] rounded-lg border overflow-hidden ${
       lead.status === 'queued' ? 'border-green-500/30 opacity-60' :
       lead.status === 'dismissed' ? 'border-[#23232a] opacity-40' :
-      lead.status === 'already_contacted' ? 'border-yellow-500/30 opacity-60' :
+      (lead.status === 'already_contacted' || lead.contacted_by_account) ? 'border-yellow-500/30 opacity-60' :
       'border-[#23232a]'
     }`}>
       <div className="p-4">
@@ -124,7 +124,17 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
                 <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/15 text-green-400">Queued</span>
               )}
               {lead.status === 'already_contacted' && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/15 text-yellow-400">Already Contacted</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/15 text-yellow-400">
+                  Already Contacted
+                  {lead.contacted_by_account && ` via u/${lead.contacted_by_account}`}
+                  {lead.contacted_at && ` on ${new Date(lead.contacted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+                </span>
+              )}
+              {lead.status !== 'already_contacted' && lead.contacted_by_account && (
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/15 text-yellow-400">
+                  Contacted via u/{lead.contacted_by_account}
+                  {lead.contacted_at && ` on ${new Date(lead.contacted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+                </span>
               )}
               {lead.status === 'dismissed' && (
                 <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-500/15 text-gray-400">Dismissed</span>
@@ -230,7 +240,7 @@ function LeadCard({ lead, onQueue, onDismiss, onGenerateMessage, accounts, sessi
           )}
 
           {/* Message generation & queue */}
-          {lead.status === 'scored' && lead.lead_tier !== 'irrelevant' && (
+          {lead.status === 'scored' && lead.lead_tier !== 'irrelevant' && !lead.contacted_by_account && (
             <div className="space-y-3 pt-2 border-t border-[#23232a]">
               <div>
                 <div className="flex items-center justify-between mb-1">

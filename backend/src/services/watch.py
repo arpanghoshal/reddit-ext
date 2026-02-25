@@ -138,7 +138,9 @@ async def get_watch_leads(
     query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
     result = query.execute()
 
-    return result.data or []
+    leads = result.data or []
+    from . import discovery as discovery_service
+    return await discovery_service.enrich_leads_with_contact_info(leads, team_id)
 
 
 async def reset_new_leads_count(watch_id: str, team_id: str):
