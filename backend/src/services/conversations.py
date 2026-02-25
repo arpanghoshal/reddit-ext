@@ -365,6 +365,8 @@ async def add_message(message_data: Dict[str, Any], team_id: Optional[str] = Non
         }
         if direction == "inbound":
             conv_update["has_reply"] = True
+        elif direction == "outbound":
+            conv_update["has_reply"] = False
 
         conv_stats_query = client.table("conversations").update(conv_update).eq("id", conversation_id)
         if team_id:

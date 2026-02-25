@@ -1,5 +1,16 @@
 console.log('Reddit Automated DM: Content script loaded');
 
+// --- Early PING handler (registered before any async init so background can detect readiness) ---
+if (!window.__redditDMExtPingReady) {
+    window.__redditDMExtPingReady = true;
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === 'PING') {
+            sendResponse({ pong: true });
+            return;
+        }
+    });
+}
+
 // --- Lightweight Logger Relay (sends to background service worker) ---
 function reportToBackground(level, message, opts = {}) {
     if (!isContextValid()) return;
@@ -3288,7 +3299,7 @@ function renderSubredditInfo(data, container) {
         <div class="meta">
           <span class="subreddit">r/${escapeHtml(data.name)}</span>
         </div>
-        <h2 class="post-title">Found ${parseInt(data.postCount, 10) || 0} potential posts</h2>
+        <h2 class="post-title">Found potential posts</h2>
         <p class="subtitle" style="margin-bottom: 12px; font-size: 0.9em; opacity: 0.8;">
             Ready to automate DMs for this subreddit.
         </p>

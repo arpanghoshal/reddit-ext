@@ -92,15 +92,30 @@ function notifyDashboardQueueUpdate() {
     });
 }
 
-// Poll content script until it responds to PING, confirming it's alive and ready
-async function ensureContentScriptReady(tabId, timeoutMs = 10000, intervalMs = 500) {
+// Poll content script until it responds to PING, confirming it's alive and ready.
+// After several failed attempts, programmatically inject the content script as a
+// fallback (the declarative injection from manifest may be delayed on heavy pages).
+async function ensureContentScriptReady(tabId, timeoutMs = 15000, intervalMs = 500) {
     const start = Date.now();
+    let injected = false;
     while (Date.now() - start < timeoutMs) {
         try {
             const r = await chrome.tabs.sendMessage(tabId, { action: 'PING' });
             if (r?.pong) return true;
         } catch (e) {
-            // Content script not ready yet
+            // Content script not ready yet — after 5s, try programmatic injection once
+            if (!injected && Date.now() - start > 5000) {
+                injected = true;
+                try {
+                    extLogDebug(`Programmatically injecting content script into tab ${tabId}`, { component: 'background' });
+                    await chrome.scripting.executeScript({
+                        target: { tabId },
+                        files: ['content/content.js']
+                    });
+                } catch (injErr) {
+                    extLogDebug(`Programmatic injection failed: ${injErr?.message}`, { component: 'background' });
+                }
+            }
         }
         await new Promise(r => setTimeout(r, intervalMs));
     }
