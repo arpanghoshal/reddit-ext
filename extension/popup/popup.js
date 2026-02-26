@@ -4,7 +4,7 @@ function reportLog(level, message, opts = {}) {
     try { chrome.runtime.sendMessage({ action: 'CLIENT_LOG', data: { level, message, opts } }); } catch {}
 }
 
-const DEFAULT_DASHBOARD_URL = 'https://reddit-ext-dashboard.vercel.app';
+const DEFAULT_DASHBOARD_URL = 'https://app.qualydm.com';
 const DEFAULT_BACKEND_URL = 'https://backend-production-423ef.up.railway.app';
 
 // Load on popup open

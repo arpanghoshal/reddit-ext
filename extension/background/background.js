@@ -84,7 +84,7 @@ function clearAllTimeouts(tabId) {
 // Notify any open dashboard tabs to refresh queue data immediately
 function notifyDashboardQueueUpdate() {
     chrome.tabs.query({
-        url: ['https://reddit-ext-dashboard.vercel.app/*', 'http://localhost:5173/*', 'http://localhost:3000/*']
+        url: ['https://app.qualydm.com/*', 'http://localhost:5173/*', 'http://localhost:3000/*']
     }, (tabs) => {
         for (const tab of tabs) {
             chrome.tabs.sendMessage(tab.id, { action: 'QUEUE_UPDATED' }).catch(() => {});
@@ -1521,7 +1521,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Open dashboard tab and save its ID for later sync
     if (request.action === 'OPEN_DASHBOARD') {
         (async () => {
-            const tab = await chrome.tabs.create({ url: 'https://reddit-ext-dashboard.vercel.app' });
+            const tab = await chrome.tabs.create({ url: 'https://app.qualydm.com' });
             await chrome.storage.local.set({ dashboardTabId: tab.id });
             extLogDebug(`[Sync] Opened dashboard tab and saved ID: ${tab.id}`, { component: 'background' });
             sendResponse({ success: true, tabId: tab.id });
@@ -1581,7 +1581,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     const allTabs = await chrome.tabs.query({});
                     const dashTabs = allTabs.filter(t =>
                         t.url && (
-                            t.url.startsWith('https://reddit-ext-dashboard.vercel.app') ||
+                            t.url.startsWith('https://app.qualydm.com') ||
                             t.url.startsWith('http://localhost:5173') ||
                             t.url.startsWith('http://localhost:3000')
                         )
@@ -1882,7 +1882,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Bulk sync progress relay: forward from content script to dashboard tabs
     if (request.action === 'BULK_SYNC_PROGRESS') {
         chrome.tabs.query({
-            url: ['https://reddit-ext-dashboard.vercel.app/*', 'http://localhost:5173/*', 'http://localhost:3000/*']
+            url: ['https://app.qualydm.com/*', 'http://localhost:5173/*', 'http://localhost:3000/*']
         }, (tabs) => {
             for (const tab of tabs) {
                 chrome.tabs.sendMessage(tab.id, {

@@ -16,7 +16,7 @@
     "*://*.reddit.com/*",
     "*://chat.reddit.com/*",
     "https://backend-production-423ef.up.railway.app/*",
-    "https://reddit-ext-dashboard.vercel.app/*",
+    "https://app.qualydm.com/*",
     "http://localhost:*/*",
     "http://127.0.0.1:*/*"
   ],
@@ -68,7 +68,7 @@
     },
     {
       "matches": [
-        "https://reddit-ext-dashboard.vercel.app/*",
+        "https://app.qualydm.com/*",
         "http://localhost:5173/*"
       ],
       "js": [
