@@ -49,6 +49,8 @@ function broadcastAuthWithRetry(payload, attempt = 0) {
 // Listen for the bridge's acknowledgment so we stop retrying.
 if (typeof window !== 'undefined') {
   window.addEventListener('message', (event) => {
+    // Only accept messages from our own origin to prevent spoofing
+    if (event.origin !== window.location.origin) return;
     if (
       event.data?.type === 'RDM_AUTH_RESPONSE' &&
       event.data?.action === 'SESSION_RESTORE' &&
@@ -135,6 +137,8 @@ export function AuthProvider({ children }) {
   // React mounted after the first announcement.
   useEffect(() => {
     const handleBridgeReady = (event) => {
+      // Only accept messages from our own origin
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type !== 'RDM_BRIDGE_READY') return;
       const s = sessionRef.current;
       if (!s) return;
