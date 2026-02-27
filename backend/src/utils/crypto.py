@@ -40,9 +40,6 @@ def encrypt(plaintext: str) -> str:
         The auth tag is appended to ciphertext by AESGCM
     """
     if not ENCRYPTION_KEY:
-        env = os.getenv("ENVIRONMENT", "development")
-        if env == "production":
-            raise ValueError("ENCRYPTION_KEY must be configured in production - cannot store data unencrypted")
         logger.warning("Encryption key not configured - storing data unencrypted (NOT SAFE FOR PRODUCTION)")
         encoded = base64.b64encode(plaintext.encode()).decode()
         return f"unencrypted:{encoded}"

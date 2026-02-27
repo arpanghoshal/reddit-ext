@@ -90,8 +90,7 @@ async def list_teams(request: Request):
         return {"teams": teams}
 
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("")
@@ -143,8 +142,7 @@ async def create_team(request: Request, data: CreateTeamRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{team_id}")
@@ -181,8 +179,7 @@ async def get_team(request: Request, team_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/{team_id}")
@@ -220,8 +217,7 @@ async def update_team(request: Request, team_id: str, data: UpdateTeamRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{team_id}")
@@ -256,8 +252,7 @@ async def delete_team(request: Request, team_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Team Members ---
@@ -315,8 +310,7 @@ async def list_members(request: Request, team_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/{team_id}/members/{member_id}")
@@ -369,8 +363,7 @@ async def update_member_role(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{team_id}/members/{member_id}")
@@ -417,8 +410,7 @@ async def remove_member(request: Request, team_id: str, member_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Team Invitations ---
@@ -453,8 +445,7 @@ async def list_invitations(request: Request, team_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{team_id}/invitations")
@@ -563,8 +554,7 @@ async def invite_member(request: Request, team_id: str, data: InviteMemberReques
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{team_id}/invitations/{invitation_id}")
@@ -597,5 +587,4 @@ async def cancel_invitation(request: Request, team_id: str, invitation_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Teams operation failed: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+        raise HTTPException(status_code=500, detail=str(e))

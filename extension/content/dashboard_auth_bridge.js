@@ -100,8 +100,7 @@ window.addEventListener('message', async (event) => {
 // existing session. Retry several times because React may not have mounted
 // its listener yet when the content script first runs at document_idle.
 function announceReady() {
-  // Use the current page origin instead of '*' to prevent leaking messages to other frames
-  window.postMessage({ type: 'RDM_BRIDGE_READY' }, window.location.origin);
+  window.postMessage({ type: 'RDM_BRIDGE_READY' }, '*');
 }
 
 announceReady();
@@ -131,7 +130,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Relay queue update from background so dashboard refreshes immediately
   if (msg.action === 'QUEUE_UPDATED') {
-    window.postMessage({ type: 'RDM_QUEUE_UPDATED' }, window.location.origin);
+    window.postMessage({ type: 'RDM_QUEUE_UPDATED' }, '*');
   }
 
   // Relay bulk sync progress from background to dashboard page
@@ -140,6 +139,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       type: 'RDM_SYNC_PROGRESS',
       action: msg.action,
       data: msg.data
-    }, window.location.origin);
+    }, '*');
   }
 });

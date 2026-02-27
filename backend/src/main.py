@@ -5,7 +5,6 @@ Main entry point
 
 import os
 import logging
-import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -139,9 +138,7 @@ app.add_middleware(
 # Request context middleware — generates/reads X-Request-ID and logs request lifecycle
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Sanitize X-Request-ID to prevent log injection (allow only alphanumeric, hyphens)
-        raw_id = request.headers.get("X-Request-ID", "")
-        req_id = raw_id if raw_id and re.match(r'^[a-zA-Z0-9\-]{1,64}$', raw_id) else str(uuid.uuid4())[:8]
+        req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
         request_id_var.set(req_id)
 
         start = time.time()

@@ -46,7 +46,7 @@ def get_service_client() -> Client:
 
 class SignupRequest(BaseModel):
     email: EmailStr
-    password: str  # Supabase enforces minimum 6 chars; we add a server-side check too
+    password: str
     full_name: Optional[str] = None
 
 
@@ -72,10 +72,6 @@ async def signup(request: SignupRequest):
     Register a new user.
     Creates user in Supabase Auth, profile and personal team are auto-created via triggers.
     """
-    # Enforce minimum password length server-side
-    if len(request.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-
     try:
         client = get_supabase_client()
 
@@ -111,8 +107,7 @@ async def signup(request: SignupRequest):
         error_msg = str(e)
         if "User already registered" in error_msg:
             raise HTTPException(status_code=400, detail="Email already registered")
-        logger.error(f"Signup error: {error_msg}")
-        raise HTTPException(status_code=400, detail="Signup failed. Please try again.")
+        raise HTTPException(status_code=400, detail=error_msg)
 
 
 @router.post("/login")
@@ -266,8 +261,7 @@ async def get_current_user(request: Request):
         }
 
     except Exception as e:
-        logger.error(f"Failed to get user info: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get user info")
+        raise HTTPException(status_code=500, detail=f"Failed to get user info: {e}")
 
 
 @router.get("/invite-info")
@@ -302,8 +296,7 @@ async def get_invite_info(token: str = Query(...)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Invite info error: {e}")
-        raise HTTPException(status_code=400, detail="Failed to retrieve invitation info")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/accept-invite")
@@ -429,5 +422,4 @@ async def accept_invite(request: Request, data: AcceptInviteRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Accept invite error: {e}")
-        raise HTTPException(status_code=400, detail="Failed to accept invitation")
+        raise HTTPException(status_code=400, detail=str(e))
