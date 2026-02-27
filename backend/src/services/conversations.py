@@ -68,7 +68,10 @@ def transform_conversation(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
         "updatedAt": row.get("updated_at"),
         "sourcePostUrl": source.get("post_url") if source else None,
         "sourcePostTitle": source.get("post_title") if source else None,
+        "sourcePostBody": source.get("post_body") if source else None,
         "sourceSubreddit": source.get("subreddit") if source else None,
+        "sourceType": source.get("source_type", "post") if source else "post",
+        "sourceCommentBody": source.get("source_comment_body") if source else None,
     }
 
 
@@ -151,7 +154,7 @@ async def get_conversations(filters: Dict[str, Any] = None, team_id: Optional[st
         query = client.table("conversations").select(
             "*, reddit_accounts(id, username, status), "
             "dm_history!initial_dm_id(post_url, post_title, subreddit), "
-            "dm_queue!initial_queue_id(post_url, post_title, subreddit)"
+            "dm_queue!initial_queue_id(post_url, post_title, post_body, subreddit, source_type, source_comment_body)"
         ).order("last_message_at", desc=True)
 
         # Filter by team_id (required for multi-tenancy)
@@ -200,7 +203,7 @@ async def get_conversation(conversation_id: str, team_id: Optional[str] = None) 
         conv_query = client.table("conversations").select(
             "*, reddit_accounts(id, username, status), "
             "dm_history!initial_dm_id(post_url, post_title, subreddit), "
-            "dm_queue!initial_queue_id(post_url, post_title, subreddit)"
+            "dm_queue!initial_queue_id(post_url, post_title, post_body, subreddit, source_type, source_comment_body)"
         ).eq("id", conversation_id)
         if team_id:
             conv_query = conv_query.eq("team_id", team_id)

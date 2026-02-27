@@ -63,6 +63,87 @@ let pendingTimeouts = {};
 // Prevent overlapping processNextStep calls per tab
 let commandInFlight = {};
 
+// Track whether a bulk sync is active (signaled from content script)
+let bulkSyncActive = false;
+
+// --- Keep-Alive Alarm (prevents MV3 service worker suspension during active work) ---
+const KEEPALIVE_ALARM_NAME = 'automation-keepalive';
+const KEEPALIVE_INTERVAL_MINUTES = 0.4; // ~24 seconds (well under Chrome's ~30s inactivity threshold)
+
+function updateKeepAlive() {
+    const hasActiveTasks = Object.keys(activeTasks).length > 0;
+    const hasActiveQueues = Object.values(subredditQueues).some(q => q?.isActive);
+    const needsKeepAlive = hasActiveTasks || hasActiveQueues || bulkSyncActive;
+
+    chrome.alarms.get(KEEPALIVE_ALARM_NAME).then(existing => {
+        if (needsKeepAlive && !existing) {
+            extLogDebug('Starting keep-alive alarm for active automation', { component: 'background' });
+            chrome.alarms.create(KEEPALIVE_ALARM_NAME, {
+                delayInMinutes: KEEPALIVE_INTERVAL_MINUTES,
+                periodInMinutes: KEEPALIVE_INTERVAL_MINUTES
+            });
+        } else if (!needsKeepAlive && existing) {
+            extLogDebug('Clearing keep-alive alarm — no active automation', { component: 'background' });
+            chrome.alarms.clear(KEEPALIVE_ALARM_NAME);
+        }
+    });
+}
+
+// --- Automation State Persistence (survives service worker restarts) ---
+const PERSISTED_STATE_KEY = 'automationState';
+
+async function persistAutomationState() {
+    try {
+        const persistableTasks = {};
+        for (const [tabId, task] of Object.entries(activeTasks)) {
+            persistableTasks[tabId] = {
+                status: task.status,
+                data: task.data,
+                retries: task.retries || 0
+            };
+        }
+
+        const persistableQueues = {};
+        for (const [tabId, queue] of Object.entries(subredditQueues)) {
+            if (queue.isActive) {
+                persistableQueues[tabId] = {
+                    urls: queue.urls,
+                    currentIndex: queue.currentIndex,
+                    isActive: queue.isActive,
+                    subreddit: queue.subreddit,
+                    sessionId: queue.sessionId,
+                    successCount: queue.successCount,
+                    failedCount: queue.failedCount
+                };
+            }
+        }
+
+        await chrome.storage.local.set({
+            [PERSISTED_STATE_KEY]: {
+                activeTasks: persistableTasks,
+                subredditQueues: persistableQueues,
+                chatWaitingTabId,
+                chatOriginTabId,
+                timestamp: Date.now()
+            }
+        });
+    } catch (err) {
+        extLogError(`Failed to persist automation state: ${err?.message}`, {
+            component: 'background', errorName: err?.name, errorStack: err?.stack
+        });
+    }
+}
+
+async function clearPersistedState() {
+    await chrome.storage.local.remove(PERSISTED_STATE_KEY).catch(() => {});
+}
+
+// Combined helper — call at every state transition
+function onStateChanged() {
+    updateKeepAlive();
+    persistAutomationState();
+}
+
 function setTrackedTimeout(tabId, fn, delay) {
     const timeoutId = setTimeout(() => {
         if (pendingTimeouts[tabId]) pendingTimeouts[tabId].delete(timeoutId);
@@ -181,6 +262,7 @@ function cleanupTask(tabId) {
     if (chatOriginTabId === tabId) {
         chatOriginTabId = null;
     }
+    onStateChanged();
 }
 
 // Listen for tab removal to clean up memory
@@ -407,6 +489,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (chatWaitingTabId === tabId) chatWaitingTabId = null;
         if (chatOriginTabId === tabId) chatOriginTabId = null;
 
+        onStateChanged();
         sendResponse({ success: true });
     }
 
@@ -492,6 +575,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             // Clear current task and move to next
             delete activeTasks[tabId];
+            onStateChanged();
             processNextQueueItem(tabId);
         } else {
             // Single automation - just clear the task
@@ -500,6 +584,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (task?.data?.isOutreach) outreachQueueProcessing = false;
             if (task?.data?.queueItemId) clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
             delete activeTasks[tabId];
+            onStateChanged();
         }
 
         sendResponse({ success: true });
@@ -730,6 +815,7 @@ async function startAutomation(tabId, data) {
         data: data,
         retries: 0
     };
+    onStateChanged();
 
     // Notify content script to show sidebar with progress
     notifyAutomationProgress(tabId);
@@ -1119,6 +1205,7 @@ async function handleStepCompletion(tabId, result) {
                             }
                             delete activeTasks[tabId];
                             delete subredditQueues[tabId];
+                            onStateChanged();
                             return;
                         }
                         // Soft stop: cooldown active, fall through to delay path
@@ -1157,6 +1244,7 @@ async function handleStepCompletion(tabId, result) {
                 if (task.data?.isReply) replyQueueProcessing = false;
                 if (task.data?.isOutreach) outreachQueueProcessing = false;
                 delete activeTasks[tabId];
+                onStateChanged();
                 chrome.tabs.sendMessage(tabId, {
                     action: 'AUTOMATION_STOPPED'
                 }).catch(() => {});
@@ -1251,6 +1339,7 @@ async function handleStepCompletion(tabId, result) {
 
                 queue.currentIndex++;
                 delete activeTasks[tabId];
+                onStateChanged();
                 processNextQueueItem(tabId);
             } else {
                 // Single/reply/outreach automation failed - show error and stop
@@ -1273,6 +1362,7 @@ async function handleStepCompletion(tabId, result) {
                 }).catch(() => {});
 
                 delete activeTasks[tabId];
+                onStateChanged();
             }
         }
     }
@@ -1298,6 +1388,7 @@ async function processNextQueueItem(tabId) {
 
         delete activeTasks[tabId];
         delete subredditQueues[tabId];
+        onStateChanged();
         return;
     }
 
@@ -1310,6 +1401,7 @@ async function processNextQueueItem(tabId) {
         data: {}, // Will be populated after scraping
         retries: 0
     };
+    onStateChanged();
 
     // Notify content script to show sidebar with progress
     notifyAutomationProgress(tabId);
@@ -1790,6 +1882,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // Bulk sync keep-alive: content script signals when bulk sync is active
+    if (request.action === 'START_BULK_SYNC_KEEPALIVE') {
+        bulkSyncActive = true;
+        updateKeepAlive();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (request.action === 'STOP_BULK_SYNC_KEEPALIVE') {
+        bulkSyncActive = false;
+        updateKeepAlive();
+        sendResponse({ success: true });
+        return true;
+    }
+
     // Start bulk sync: find or create a Reddit chat tab, then tell it to sync
     if (request.action === 'TRIGGER_START_BULK_SYNC') {
         // Helper: create a fresh chat tab and send START_BULK_SYNC once loaded
@@ -2031,6 +2138,12 @@ async function isQueueItemInProgress(itemId) {
 let replyQueueConsecutiveFailures = 0;
 let replyQueuePollSkips = 0;
 
+// Keep-alive alarm handler — lightweight, just prevents SW suspension
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== KEEPALIVE_ALARM_NAME) return;
+    extLogDebug('Keep-alive alarm fired', { component: 'background' });
+});
+
 // Handle alarm events for reply queue polling
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== REPLY_QUEUE_ALARM_NAME) return;
@@ -2234,6 +2347,7 @@ async function processReplyQueueItem(item) {
             },
             retries: 0
         };
+        onStateChanged();
 
         // Profile is already loaded, process next step
         processNextStep(tabId);
@@ -2253,6 +2367,7 @@ async function processReplyQueueItem(item) {
         },
         retries: 0
     };
+    onStateChanged();
 
     // Notify content script to show sidebar with progress
     notifyAutomationProgress(tabId);
@@ -2449,6 +2564,7 @@ async function processOutreachQueueItem(item) {
             },
             retries: 0
         };
+        onStateChanged();
 
         processNextStep(tabId);
         return;
@@ -2468,6 +2584,7 @@ async function processOutreachQueueItem(item) {
         },
         retries: 0
     };
+    onStateChanged();
 
     notifyAutomationProgress(tabId);
 
@@ -2477,13 +2594,148 @@ async function processOutreachQueueItem(item) {
 }
 
 // =============================================================================
-// AUTO-START REPLY QUEUE POLLING ON SERVICE WORKER LOAD
+// SERVICE WORKER RESTART RECOVERY
+// =============================================================================
+
+// Recover interrupted automation state after SW suspension/restart
+async function recoverInterruptedAutomation() {
+    try {
+        const data = await chrome.storage.local.get(PERSISTED_STATE_KEY);
+        const state = data[PERSISTED_STATE_KEY];
+        if (!state || !state.timestamp) return;
+
+        const age = Date.now() - state.timestamp;
+        // Discard state older than 5 minutes (stale from a previous crash)
+        if (age > 5 * 60 * 1000) {
+            extLogInfo('Persisted automation state is stale (>5min), discarding', { component: 'background' });
+            await clearPersistedState();
+            return;
+        }
+
+        extLogInfo(`Recovering interrupted automation state (age: ${Math.round(age / 1000)}s)`, { component: 'background' });
+
+        // States where the in-flight work was lost and cannot be resumed
+        const nonRecoverableStates = [
+            AutomationState.GENERATING_DM,
+            AutomationState.CLICKING_CHAT,
+            AutomationState.TYPING_MESSAGE,
+            AutomationState.FINDING_CHAT_USER,
+            AutomationState.NAVIGATING_CHAT,
+            AutomationState.WAITING_FOR_CHAT,
+            AutomationState.NAVIGATING_PROFILE,
+            AutomationState.WAITING_FOR_PROFILE,
+            AutomationState.NAVIGATING_TO_POST,
+            AutomationState.WAITING_FOR_POST
+        ];
+
+        // Recover subreddit queues (can resume from currentIndex)
+        if (state.subredditQueues) {
+            for (const [tabIdStr, queue] of Object.entries(state.subredditQueues)) {
+                const tabId = parseInt(tabIdStr, 10);
+                try {
+                    const tab = await chrome.tabs.get(tabId);
+                    if (!tab || tab.discarded) throw new Error('Tab gone');
+
+                    subredditQueues[tabId] = queue;
+                    extLogInfo(`Resuming queue for tab ${tabId} at index ${queue.currentIndex}/${queue.urls.length}`, { component: 'background' });
+
+                    chrome.tabs.sendMessage(tabId, {
+                        action: 'SHOW_TOAST',
+                        message: 'Resuming automation after brief interruption...',
+                        type: 'info'
+                    }).catch(() => {});
+
+                    processNextQueueItem(tabId);
+                } catch {
+                    extLogWarn(`Recovery: tab ${tabId} not available, stopping queue`, { component: 'background' });
+                    if (queue.sessionId) {
+                        api.updateAutomationSession(queue.sessionId, {
+                            processedCount: queue.currentIndex,
+                            successCount: queue.successCount,
+                            failedCount: queue.failedCount,
+                            status: 'interrupted'
+                        }).catch(() => {});
+                    }
+                }
+            }
+        }
+
+        // Recover individual tasks
+        if (state.activeTasks) {
+            for (const [tabIdStr, task] of Object.entries(state.activeTasks)) {
+                const tabId = parseInt(tabIdStr, 10);
+                // Skip tasks that belong to a recovered queue (handled above)
+                if (subredditQueues[tabId]) continue;
+
+                try {
+                    const tab = await chrome.tabs.get(tabId);
+                    if (!tab || tab.discarded) throw new Error('Tab gone');
+
+                    if (task.status === AutomationState.AWAITING_CONFIRMATION && task.data?.message) {
+                        // Re-show the confirmation dialog — the generated message is preserved
+                        activeTasks[tabId] = task;
+                        chrome.tabs.sendMessage(tabId, {
+                            action: 'SHOW_DM_CONFIRMATION',
+                            data: {
+                                targetUser: task.data.targetUser,
+                                message: task.data.message,
+                                postTitle: task.data.postTitle,
+                                subreddit: task.data.subreddit,
+                                classification: task.data.classification
+                            }
+                        }).catch(() => {});
+                    } else {
+                        // Non-recoverable state — fail gracefully
+                        extLogInfo(`Task on tab ${tabId} in state ${task.status} — not recoverable, notifying user`, { component: 'background' });
+                        chrome.tabs.sendMessage(tabId, {
+                            action: 'SHOW_TOAST',
+                            message: 'Automation was interrupted. Please retry.',
+                            type: 'warning'
+                        }).catch(() => {});
+                        chrome.tabs.sendMessage(tabId, {
+                            action: 'AUTOMATION_STOPPED'
+                        }).catch(() => {});
+                    }
+                } catch {
+                    extLogWarn(`Recovery: tab ${tabId} not available`, { component: 'background' });
+                }
+
+                // Release queue processing locks for non-recoverable tasks
+                if (!activeTasks[tabId]) {
+                    if (task.data?.isReply) replyQueueProcessing = false;
+                    if (task.data?.isOutreach) outreachQueueProcessing = false;
+                    if (task.data?.queueItemId) {
+                        clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
+                    }
+                }
+            }
+        }
+
+        // Restore chat waiting state
+        if (state.chatWaitingTabId) chatWaitingTabId = state.chatWaitingTabId;
+        if (state.chatOriginTabId) chatOriginTabId = state.chatOriginTabId;
+
+        await clearPersistedState();
+        onStateChanged();
+    } catch (err) {
+        extLogError(`Automation recovery failed: ${err?.message}`, {
+            component: 'background', errorName: err?.name, errorStack: err?.stack
+        });
+        await clearPersistedState();
+    }
+}
+
+// =============================================================================
+// AUTO-START ON SERVICE WORKER LOAD
 // =============================================================================
 
 // In MV3, the service worker restarts after being killed.
-// Check auth state and restart polling if the user is logged in.
+// Recover interrupted automation and restart polling if authenticated.
 (async () => {
     try {
+        // Recover any interrupted automation first
+        await recoverInterruptedAutomation();
+
         const authed = await api.isAuthenticated();
         if (authed) {
             extLogInfo('User authenticated on worker start - auto-starting reply queue polling', { component: 'background' });
@@ -2492,7 +2744,7 @@ async function processOutreachQueueItem(item) {
             extLogDebug('User not authenticated on worker start - reply queue polling not started', { component: 'background' });
         }
     } catch (err) {
-        extLogError(`Error checking auth on worker start: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
+        extLogError(`Error on worker start: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
     }
 })();
 

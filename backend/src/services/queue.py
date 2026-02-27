@@ -98,7 +98,9 @@ async def add_to_queue(item: Dict[str, Any], team_id: Optional[str] = None) -> O
             "status": item.get("status", "pending"),
             "queue_mode": item.get("queueMode", "review"),
             "message_type": item.get("messageType", "outreach"),
-            "scheduled_at": item.get("scheduledAt")
+            "scheduled_at": item.get("scheduledAt"),
+            "source_type": item.get("sourceType", "post"),
+            "source_comment_body": item.get("sourceCommentBody"),
         }
 
         # Add team_id if provided

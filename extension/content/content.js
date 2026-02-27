@@ -57,16 +57,32 @@ setInterval(() => {
     }
 }, 5000);
 
-// Safe wrapper for chrome.runtime.sendMessage — silently ignores context invalidation
-function safeSendMessage(message) {
-    if (!isContextValid()) return;
-    try {
-        chrome.runtime.sendMessage(message);
-    } catch (e) {
-        if (e.message?.includes('Extension context invalidated')) {
-            onContextInvalidated();
-        } else {
-            reportToBackground('error', 'safeSendMessage error', { component: 'content', errorName: e?.name || e?.constructor?.name, errorStack: e?.stack });
+// Safe wrapper for chrome.runtime.sendMessage with retry for transient SW disconnects
+async function safeSendMessage(message, { retries = 3, baseDelay = 500 } = {}) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        if (!isContextValid()) return;
+        try {
+            return await chrome.runtime.sendMessage(message);
+        } catch (e) {
+            if (e.message?.includes('Extension context invalidated')) {
+                onContextInvalidated();
+                return;
+            }
+            // "Could not establish connection" or "Receiving end does not exist"
+            // means the service worker is suspended/restarting
+            const isTransient = e.message?.includes('Could not establish connection') ||
+                                e.message?.includes('Receiving end does not exist');
+            if (isTransient && attempt < retries) {
+                const delay = baseDelay * Math.pow(2, attempt);
+                reportToBackground('warn', `sendMessage failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms: ${e.message}`, { component: 'content' });
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            if (attempt >= retries) {
+                reportToBackground('error', `safeSendMessage failed after ${attempt + 1} attempts: ${e.message}`, {
+                    component: 'content', errorName: e?.name || e?.constructor?.name, errorStack: e?.stack
+                });
+            }
         }
     }
 }
@@ -135,17 +151,19 @@ async function syncChatMessages() {
             // Cap size to prevent unbounded memory growth
             if (lastSyncedMessages.size > 500) lastSyncedMessages.clear();
 
-            // Sync to backend
+            // Sync to backend (uses safeSendMessage for SW disconnect resilience)
             try {
-                await chrome.runtime.sendMessage({
+                const result = await safeSendMessage({
                     action: 'SYNC_CHAT_MESSAGES',
                     data: {
                         ...conv,
                         accountUsername: getCurrentUsername()
                     }
                 });
-                lastSyncedMessages.add(syncKey);
-                reportToBackground('info', `Synced conversation with ${conv.participantUsername}: ${conv.messages.length} messages`, { component: 'content' });
+                if (result) {
+                    lastSyncedMessages.add(syncKey);
+                    reportToBackground('info', `Synced conversation with ${conv.participantUsername}: ${conv.messages.length} messages`, { component: 'content' });
+                }
             } catch (err) {
                 reportToBackground('warn', 'Failed to sync conversation', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
             }
@@ -1662,6 +1680,9 @@ async function syncAllChats() {
     bulkSyncActive = true;
     bulkSyncCancelled = false;
 
+    // Signal background to keep service worker alive during bulk sync
+    safeSendMessage({ action: 'START_BULK_SYNC_KEEPALIVE' });
+
     const currentUser = getCurrentUsername();
     reportToBackground('debug', `[BulkSync] Current user: ${currentUser}`, { component: 'content' });
 
@@ -1679,6 +1700,7 @@ async function syncAllChats() {
     if (total === 0) {
         reportToBackground('warn', '[BulkSync] No rooms found in sidebar. Aborting.', { component: 'content' });
         bulkSyncActive = false;
+        safeSendMessage({ action: 'STOP_BULK_SYNC_KEEPALIVE' });
         safeSendMessage({
             action: 'BULK_SYNC_PROGRESS',
             data: { current: 0, total: 0, synced: 0, skipped: 0, failed: 0, currentUser: '', status: 'completed' }
@@ -1739,29 +1761,13 @@ async function syncAllChats() {
 
             const conv = conversations[0];
 
-            // Sync to backend via background script (with response callback)
-            const response = await new Promise((resolve, reject) => {
-                if (!isContextValid()) {
-                    reject(new Error('Extension context invalidated'));
-                    return;
-                }
-                try {
-                    chrome.runtime.sendMessage({
-                        action: 'SYNC_CHAT_MESSAGES',
-                        data: {
-                            participantUsername: conv.participantUsername,
-                            messages: conv.messages,
-                            accountUsername: currentUser
-                        }
-                    }, (resp) => {
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve(resp);
-                        }
-                    });
-                } catch (e) {
-                    reject(e);
+            // Sync to backend via background script (uses safeSendMessage for SW resilience)
+            const response = await safeSendMessage({
+                action: 'SYNC_CHAT_MESSAGES',
+                data: {
+                    participantUsername: conv.participantUsername,
+                    messages: conv.messages,
+                    accountUsername: currentUser
                 }
             });
 
@@ -1795,6 +1801,7 @@ async function syncAllChats() {
     }
 
     bulkSyncActive = false;
+    safeSendMessage({ action: 'STOP_BULK_SYNC_KEEPALIVE' });
 
     // Report completion
     safeSendMessage({

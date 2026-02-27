@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageSquare, RefreshCw, Sparkles, Tag, ChevronRight, Send, Clock, Edit3, Check } from 'lucide-react';
+import { MessageSquare, RefreshCw, Sparkles, Tag, ChevronRight, Send, Clock, Edit3, Check, Wand2 } from 'lucide-react';
 import * as api from '../api/client';
 import { logError } from '../lib/logger';
 
@@ -77,6 +77,8 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
   const [isQueueing, setIsQueueing] = useState(false);
   const [queuedReply, setQueuedReply] = useState(null);
   const [toast, setToast] = useState(null);
+  const [improvementInstructions, setImprovementInstructions] = useState('');
+  const [improvingSuggestion, setImprovingSuggestion] = useState(false);
 
   useEffect(() => {
     if (conversation) {
@@ -125,6 +127,28 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
       logError('Failed to generate suggestion', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     } finally {
       setGeneratingSuggestion(false);
+    }
+  };
+
+  const handleImproveSuggestion = async () => {
+    if (!improvementInstructions.trim()) return;
+    setImprovingSuggestion(true);
+    try {
+      const currentText = replyText || suggestion;
+      const improved = await api.improveSuggestion(
+        conversation.id,
+        currentText,
+        improvementInstructions.trim()
+      );
+      setSuggestion(improved);
+      if (replyText) {
+        setReplyText(improved);
+      }
+      setImprovementInstructions('');
+    } catch (err) {
+      logError('Failed to improve suggestion', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
+    } finally {
+      setImprovingSuggestion(false);
     }
   };
 
@@ -370,6 +394,38 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
                 Regenerate
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Improve Suggestion */}
+        {(suggestion || replyText) && (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={improvementInstructions}
+              onChange={(e) => setImprovementInstructions(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleImproveSuggestion();
+                }
+              }}
+              placeholder="Improve: e.g. 'make it shorter', 'more casual', 'ask about pricing'..."
+              className="flex-1 px-3 py-1.5 bg-[#1e1e24] border border-[#23232a] text-white placeholder-[#52525b] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+              disabled={improvingSuggestion}
+            />
+            <button
+              onClick={handleImproveSuggestion}
+              disabled={improvingSuggestion || !improvementInstructions.trim()}
+              className="flex items-center gap-1 px-3 py-1.5 bg-purple-500/15 text-purple-400 rounded-lg hover:bg-purple-500/25 disabled:opacity-50 text-sm whitespace-nowrap"
+            >
+              {improvingSuggestion ? (
+                <RefreshCw size={14} className="animate-spin" />
+              ) : (
+                <Wand2 size={14} />
+              )}
+              Improve
+            </button>
           </div>
         )}
 

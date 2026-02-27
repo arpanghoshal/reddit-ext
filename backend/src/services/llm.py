@@ -285,6 +285,40 @@ async def generate_reply_suggestion(conversation: Dict[str, Any], settings: Dict
     except Exception as e:
         logger.debug(f"Could not load user profile for reply: {e}")
 
+    # Extract source post context
+    post_title = conversation.get("sourcePostTitle", "")
+    post_body = conversation.get("sourcePostBody", "")
+    post_url = conversation.get("sourcePostUrl", "")
+    post_subreddit = conversation.get("sourceSubreddit", "")
+    source_type = conversation.get("sourceType", "post")
+    source_comment_body = conversation.get("sourceCommentBody", "")
+
+    # Fetch top comments for context (cached 60min, fails gracefully)
+    comments_text = ""
+    if post_url:
+        try:
+            comments_text = await reddit_comments.get_post_comments_text(post_url)
+        except Exception as e:
+            logger.debug(f"Could not fetch comments for reply context: {e}")
+
+    # Build post context section
+    post_context_section = ""
+    if post_title or post_body or source_comment_body:
+        parts = []
+        if post_subreddit:
+            parts.append(f"Subreddit: r/{post_subreddit}")
+        if post_title:
+            parts.append(f"Title: \"{post_title}\"")
+        if post_body:
+            truncated = post_body[:500] + "..." if len(post_body) > 500 else post_body
+            parts.append(f"Post content: {truncated}")
+        if source_type == "comment" and source_comment_body:
+            truncated_comment = source_comment_body[:500] + "..." if len(source_comment_body) > 500 else source_comment_body
+            parts.append(f"\nTHEIR SPECIFIC COMMENT (what triggered the DM):\n\"{truncated_comment}\"")
+        if comments_text:
+            parts.append(comments_text)
+        post_context_section = "\nTHEIR ORIGINAL POST (what started this conversation):\n" + "\n".join(parts) + "\n"
+
     # Format conversation history
     messages = conversation.get("messages", [])
     conversation_context = "\n".join([
@@ -328,7 +362,7 @@ YOUR CONTEXT (informs your replies but never pitch directly):
 BACKGROUND:
 Business: {settings.get('businessDesc') or settings.get('business_desc', 'Not specified')}
 Conversation status: {conversation.get('status', 'active')}
-{business_context_section}{personalization_section}
+{business_context_section}{personalization_section}{post_context_section}
 TONE: {tone}
 {tone_instructions}
 
@@ -357,6 +391,150 @@ Output ONLY the reply message, nothing else."""
 {conversation_context}
 
 Write your next reply:"""
+
+    result = await gemini_client.generate_content(
+        system_instruction=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.7,
+    )
+
+    return _clean_message(result)
+
+
+async def improve_reply_suggestion(
+    conversation: Dict[str, Any],
+    current_suggestion: str,
+    improvement_instructions: str,
+    settings: Dict[str, Any] = None
+) -> str:
+    """
+    Improve an existing reply suggestion based on user instructions.
+
+    Args:
+        conversation: Conversation object with messages
+        current_suggestion: The current suggestion text to improve
+        improvement_instructions: User's instructions for improvement
+        settings: User settings
+
+    Returns:
+        Improved reply suggestion
+    """
+    settings = settings or {}
+
+    # Fetch user profile for context (same as generate_reply_suggestion)
+    participant_username = conversation.get("participantUsername", "")
+    personalization_context = {}
+
+    try:
+        if participant_username:
+            user_profile = await user_analysis.get_or_analyze(participant_username)
+            if user_profile and not user_profile.get("error"):
+                personalization_context = user_profile.get("personalization_context", {})
+    except Exception as e:
+        logger.debug(f"Could not load user profile for reply improvement: {e}")
+
+    # Extract source post context
+    post_title = conversation.get("sourcePostTitle", "")
+    post_body = conversation.get("sourcePostBody", "")
+    post_url = conversation.get("sourcePostUrl", "")
+    post_subreddit = conversation.get("sourceSubreddit", "")
+    source_type = conversation.get("sourceType", "post")
+    source_comment_body = conversation.get("sourceCommentBody", "")
+
+    # Fetch top comments for context
+    comments_text = ""
+    if post_url:
+        try:
+            comments_text = await reddit_comments.get_post_comments_text(post_url)
+        except Exception as e:
+            logger.debug(f"Could not fetch comments for reply improvement context: {e}")
+
+    # Build post context section
+    post_context_section = ""
+    if post_title or post_body or source_comment_body:
+        parts = []
+        if post_subreddit:
+            parts.append(f"Subreddit: r/{post_subreddit}")
+        if post_title:
+            parts.append(f'Title: "{post_title}"')
+        if post_body:
+            truncated = post_body[:500] + "..." if len(post_body) > 500 else post_body
+            parts.append(f"Post content: {truncated}")
+        if source_type == "comment" and source_comment_body:
+            truncated_comment = source_comment_body[:500] + "..." if len(source_comment_body) > 500 else source_comment_body
+            parts.append(f'\nTHEIR SPECIFIC COMMENT (what triggered the DM):\n"{truncated_comment}"')
+        if comments_text:
+            parts.append(comments_text)
+        post_context_section = "\nTHEIR ORIGINAL POST (what started this conversation):\n" + "\n".join(parts) + "\n"
+
+    # Format conversation history
+    messages = conversation.get("messages", [])
+    conversation_context = "\n".join([
+        f"{'You' if m.get('direction') == 'outbound' else 'Them'}: {m.get('content', '')}"
+        for m in messages
+    ])
+
+    # Build personalization section
+    personalization_section = ""
+    if personalization_context:
+        sections = []
+        if personalization_context.get("interest_summary"):
+            sections.append(f"- Their interests: {personalization_context['interest_summary']}")
+        if personalization_context.get("style_guidance"):
+            sections.append(f"- How they write: {personalization_context['style_guidance']}")
+        if personalization_context.get("length_guidance"):
+            sections.append(f"- Their message length: {personalization_context['length_guidance']}")
+        if personalization_context.get("professional_context"):
+            sections.append(f"- Professional context: {personalization_context['professional_context']}")
+        if sections:
+            personalization_section = f"""
+WHO YOU'RE TALKING TO:
+{chr(10).join(sections)}
+Mirror their style. If they're brief, be brief. If they're detailed, match it.
+"""
+
+    business_context_section = ""
+    business_context = settings.get("businessContext") or settings.get("business_context", "")
+    if business_context:
+        business_context_section = f"""
+YOUR CONTEXT (informs your replies but never pitch directly):
+{business_context}
+"""
+
+    tone = settings.get("tone") or settings.get("tone", "Curious")
+    tone_instructions = _get_tone_instructions(tone)
+
+    system_prompt = f"""You're in a Reddit DM conversation. You're a real person, not a bot.
+
+BACKGROUND:
+Business: {settings.get('businessDesc') or settings.get('business_desc', 'Not specified')}
+Conversation status: {conversation.get('status', 'active')}
+{business_context_section}{personalization_section}{post_context_section}
+TONE: {tone}
+{tone_instructions}
+
+CONVERSATION RULES:
+- Read their last message carefully. React to what they ACTUALLY said.
+- Mirror their energy exactly. Chill = chill. Detailed = detailed.
+- Use contractions naturally (that's, I'm, you're, don't)
+- Acknowledge what they said FIRST, then continue the conversation
+- It's ok to say "oh interesting" or "haha yeah" or "oh nice"
+- NEVER use em dashes or en dashes - use regular hyphens (-) only
+
+IMPROVEMENT TASK:
+You previously suggested this reply:
+"{current_suggestion}"
+
+The user wants you to revise it with these instructions:
+"{improvement_instructions}"
+
+Apply the requested changes while keeping the reply natural, contextually appropriate, and consistent with the conversation tone.
+Output ONLY the improved reply message, nothing else."""
+
+    user_prompt = f"""The conversation so far:
+{conversation_context}
+
+Write the improved reply:"""
 
     result = await gemini_client.generate_content(
         system_instruction=system_prompt,

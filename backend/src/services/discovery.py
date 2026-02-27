@@ -613,6 +613,8 @@ async def queue_lead(
         "status": "pending",
         "queueMode": "review",
         "messageType": "outreach",
+        "sourceType": lead.get("source_type", "post"),
+        "sourceCommentBody": lead.get("source_comment_body"),
     }, team_id=team_id)
 
     if not queue_item:

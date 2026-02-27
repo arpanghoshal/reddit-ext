@@ -331,6 +331,14 @@ export async function getReplySuggestion(id) {
     return result.data.suggestion;
 }
 
+export async function improveSuggestion(id, suggestion, instructions) {
+    const result = await apiRequest(`/conversations/${id}/improve-suggestion`, {
+        method: 'POST',
+        body: JSON.stringify({ suggestion, instructions })
+    });
+    return result.data.suggestion;
+}
+
 // Safety
 export async function getSafetyEvents(filters = {}) {
     const params = new URLSearchParams();

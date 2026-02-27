@@ -137,6 +137,11 @@ class ReplyQueueAddRequest(BaseModel):
     accountId: Optional[str] = None
 
 
+class ImproveSuggestionRequest(BaseModel):
+    suggestion: str
+    instructions: str
+
+
 class QueueUpdateRequest(BaseModel):
     editedMessage: Optional[str] = None
     status: Optional[str] = None
@@ -901,6 +906,25 @@ async def get_reply_suggestion_route(request: Request, conversation_id: str):
     suggestion = await llm.generate_reply_suggestion(conv, settings or {})
 
     return {"success": True, "data": {"suggestion": suggestion}}
+
+
+@router.post("/conversations/{conversation_id}/improve-suggestion")
+async def improve_suggestion_route(request: Request, conversation_id: str, body: ImproveSuggestionRequest):
+    team_id = get_current_team_id(request)
+    conv = await conversations.get_conversation(conversation_id, team_id=team_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    settings = await supabase.get_settings(team_id=team_id)
+
+    improved = await llm.improve_reply_suggestion(
+        conv,
+        current_suggestion=body.suggestion,
+        improvement_instructions=body.instructions,
+        settings=settings or {}
+    )
+
+    return {"success": True, "data": {"suggestion": improved}}
 
 
 # =============================================================================
