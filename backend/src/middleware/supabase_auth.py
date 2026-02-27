@@ -149,13 +149,19 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
 
         # Check if auth is configured
         if not is_auth_configured():
-            logger.warning("Auth not configured - running in dev mode")
+            env = os.getenv("ENVIRONMENT", "development")
+            if env == "production":
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "Authentication not configured in production"}
+                )
+            logger.warning("Auth not configured - running in dev mode (non-production only)")
             request.state.user_id = None
             request.state.team_id = None
             request.state.user = {
                 "user_id": "anonymous",
                 "email": "anonymous@dev.local",
-                "role": "admin"
+                "role": "authenticated"
             }
             return await call_next(request)
 
@@ -196,10 +202,18 @@ class SupabaseAuthMiddleware(BaseHTTPMiddleware):
         app_metadata = payload.get("app_metadata", {})
         team_id = app_metadata.get("team_id")
 
-        # Allow override via header for team switching
+        # Allow override via header for team switching.
+        # NOTE: Membership validation must be performed at the route/service level
+        # or via Supabase RLS policies. The middleware trusts this header from
+        # authenticated users only (JWT already validated above).
         header_team_id = request.headers.get("X-Team-ID")
         if header_team_id:
-            team_id = header_team_id
+            # Basic UUID format validation to prevent injection
+            import re
+            if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', header_team_id):
+                team_id = header_team_id
+            else:
+                logger.warning(f"Invalid X-Team-ID format from user {user_id}: {header_team_id[:50]}")
 
         # Attach user info to request state
         request.state.user_id = user_id

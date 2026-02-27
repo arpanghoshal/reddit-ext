@@ -618,12 +618,12 @@ export function triggerExtensionSend(username, message, queueItemId, conversatio
 // Sends message via extension bridge to background, which finds/creates a Reddit
 // chat tab and tells its content script to start the bulk sync.
 export function triggerBulkSync() {
-    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'START_BULK_SYNC', payload: {} }, '*');
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'START_BULK_SYNC', payload: {} }, window.location.origin);
 }
 
 // Cancel Bulk Sync via extension bridge
 export function cancelBulkSync() {
-    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'CANCEL_BULK_SYNC', payload: {} }, '*');
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'CANCEL_BULK_SYNC', payload: {} }, window.location.origin);
 }
 
 // ============================================================================
@@ -648,14 +648,14 @@ export function checkExtensionAvailable() {
             }
         };
         window.addEventListener('message', handler);
-        window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'PING' }, '*');
+        window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'PING' }, window.location.origin);
     });
 }
 
 // Signal extension to start/stop outreach queue processing
 export function triggerOutreachPolling(start = true) {
     const action = start ? 'START_OUTREACH_POLLING' : 'STOP_OUTREACH_POLLING';
-    window.postMessage({ type: 'RDM_AUTH_EVENT', action, payload: {} }, '*');
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action, payload: {} }, window.location.origin);
     return new Promise((resolve) => {
         const timeout = setTimeout(() => resolve(false), 3000);
         const handler = (event) => {
@@ -671,7 +671,7 @@ export function triggerOutreachPolling(start = true) {
 
 // Get outreach queue status from extension
 export function getOutreachQueueStatus() {
-    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'GET_OUTREACH_STATUS', payload: {} }, '*');
+    window.postMessage({ type: 'RDM_AUTH_EVENT', action: 'GET_OUTREACH_STATUS', payload: {} }, window.location.origin);
     return new Promise((resolve) => {
         const timeout = setTimeout(() => resolve({ isPolling: false, isProcessing: false }), 3000);
         const handler = (event) => {
