@@ -1627,24 +1627,29 @@ function getAllSidebarRooms() {
 }
 
 // Wait for chat messages to load after clicking a sidebar entry
-async function waitForChatLoad(expectedUsername, timeout = 3000) {
+async function waitForChatLoad(expectedUsername, timeout = 5000) {
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
-        // Check multiple container selectors
-        const chatContainer = document.querySelector('rs-room') ||
-                             querySelectorOneDeep('rs-room') ||
-                             document.querySelector('[data-testid="chat-room"]') ||
-                             querySelectorOneDeep('[class*="ChatRoom"]');
+        // First verify the chat header shows the expected user,
+        // so we don't read stale messages from the previous conversation
+        const headerMatches = verifyConversationUser(expectedUsername);
 
-        if (chatContainer) {
-            // Look for message elements with multiple selectors
-            const messageSelectors = ['rs-timeline-event', 'rs-text-message', '[role="listitem"]', '[role="article"]', '[class*="mx_EventTile"]', '[class*="message"]'];
-            for (const sel of messageSelectors) {
-                const els = querySelectorDeep(sel, chatContainer);
-                if (els && els.length > 0) {
-                    await new Promise(r => setTimeout(r, 300));
-                    return true;
+        if (headerMatches) {
+            // Header matches — now check if messages have loaded
+            const chatContainer = document.querySelector('rs-room') ||
+                                 querySelectorOneDeep('rs-room') ||
+                                 document.querySelector('[data-testid="chat-room"]') ||
+                                 querySelectorOneDeep('[class*="ChatRoom"]');
+
+            if (chatContainer) {
+                const messageSelectors = ['rs-timeline-event', 'rs-text-message', '[role="listitem"]', '[role="article"]', '[class*="mx_EventTile"]', '[class*="message"]'];
+                for (const sel of messageSelectors) {
+                    const els = querySelectorDeep(sel, chatContainer);
+                    if (els && els.length > 0) {
+                        await new Promise(r => setTimeout(r, 300));
+                        return true;
+                    }
                 }
             }
         }
@@ -1747,7 +1752,10 @@ async function syncAllChats() {
             // Click the room to open it
             room.element.click();
 
-            // Wait for the chat to load
+            // Give Reddit's SPA time to start transitioning the chat panel
+            await new Promise(r => setTimeout(r, 500));
+
+            // Wait for the chat to load and verify the header matches
             await waitForChatLoad(room.username);
 
             // Extract conversations using existing function
@@ -1760,6 +1768,14 @@ async function syncAllChats() {
             }
 
             const conv = conversations[0];
+
+            // Verify extracted participant matches expected room to prevent
+            // mis-attribution when the DOM hasn't fully transitioned
+            if (conv.participantUsername.toLowerCase() !== room.username.toLowerCase()) {
+                reportToBackground('warn', `[BulkSync] Participant mismatch: expected "${room.username}" but extracted "${conv.participantUsername}". Skipping.`, { component: 'content' });
+                bulkSyncProgress.failed++;
+                continue;
+            }
 
             // Sync to backend via background script (uses safeSendMessage for SW resilience)
             const response = await safeSendMessage({
@@ -1826,6 +1842,36 @@ function checkBulkSyncInstructions() {
     setTimeout(() => syncAllChats(), 3000);
 }
 
+// Wait for Reddit's chat UI to become ready (sidebar or chat input visible).
+// On fresh page loads, Reddit's SPA needs time to bootstrap.
+function waitForChatUIReady(timeout = 30000) {
+    return new Promise((resolve) => {
+        const isReady = () => {
+            if (document.querySelector('rs-rooms-nav')) return true;
+            if (querySelectorOneDeep('rs-rooms-nav')) return true;
+            if (document.querySelector('rs-room')) return true;
+            if (querySelectorOneDeep('rs-room')) return true;
+            if (findChatInput()) return true;
+            if (document.querySelectorAll('rs-rooms-nav-room').length > 0) return true;
+            return false;
+        };
+
+        if (isReady()) return resolve();
+
+        const start = Date.now();
+        const timer = setInterval(() => {
+            if (isReady()) {
+                clearInterval(timer);
+                resolve();
+            } else if (Date.now() - start >= timeout) {
+                clearInterval(timer);
+                reportToBackground('warn', 'Chat UI ready timeout - proceeding with send attempt', { component: 'content' });
+                resolve();
+            }
+        }, 500);
+    });
+}
+
 // --- Direct Send from Dashboard ---
 // Detects #__rdm_send= in the URL hash (set by dashboard "Send Now" / Queue "Send").
 // Parses the base64 JSON payload and forwards to background for automation.
@@ -1848,16 +1894,20 @@ function checkDirectSendInstructions() {
 
         reportToBackground('info', `Direct send detected for user: ${targetUser}`, { component: 'content' });
 
-        // Send to background script for automation
-        chrome.runtime.sendMessage({
-            action: 'DIRECT_SEND_REPLY',
-            data: {
-                targetUser,
-                message: payload.message,
-                queueItemId: payload.queueItemId,
-                conversationId: payload.conversationId,
-                accountId: payload.accountId || null
-            }
+        // Wait for Reddit's chat UI to initialize before triggering the send.
+        // On a fresh page load, the SPA needs time to bootstrap and render.
+        waitForChatUIReady(30000).then(() => {
+            reportToBackground('info', `Chat UI ready, sending DIRECT_SEND_REPLY for ${targetUser}`, { component: 'content' });
+            chrome.runtime.sendMessage({
+                action: 'DIRECT_SEND_REPLY',
+                data: {
+                    targetUser,
+                    message: payload.message,
+                    queueItemId: payload.queueItemId,
+                    conversationId: payload.conversationId,
+                    accountId: payload.accountId || null
+                }
+            });
         });
     } catch (err) {
         reportToBackground('error', 'Failed to parse direct send instructions', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
@@ -2331,7 +2381,7 @@ async function executeDirectChatSend(targetUser, text) {
     // Race: look for either the sidebar entry OR a directly-available chat input.
     if (onChatPage) {
         reportToBackground('debug', 'On chat page, racing sidebar lookup vs direct chat input...', { component: 'content' });
-        const result = await raceForChatReady(targetLower, 15000, 500);
+        const result = await raceForChatReady(targetLower, 20000, 500);
 
         if (result === 'direct') {
             reportToBackground('debug', `Chat input found directly for ${targetUser} - typing...`, { component: 'content' });
@@ -2349,7 +2399,7 @@ async function executeDirectChatSend(targetUser, text) {
 
         // Final fallback: poll for chat input alone (page may still be loading)
         reportToBackground('debug', 'Race failed, polling for chat input as last resort...', { component: 'content' });
-        const chatInput = await pollForElement(findChatInput, 8000, 500);
+        const chatInput = await pollForElement(findChatInput, 12000, 500);
         if (chatInput) {
             reportToBackground('debug', `Chat input found (late) - typing directly for ${targetUser}`, { component: 'content' });
             return await executeTypeMessage(text);

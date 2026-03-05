@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MessageSquare, RefreshCw, Sparkles, Tag, ChevronRight, Send, Clock, Edit3, Check, Wand2 } from 'lucide-react';
 import * as api from '../api/client';
 import { logError } from '../lib/logger';
@@ -80,12 +80,22 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
   const [improvementInstructions, setImprovementInstructions] = useState('');
   const [improvingSuggestion, setImprovingSuggestion] = useState(false);
 
+  const conversationIdRef = useRef(conversation?.id);
+
   useEffect(() => {
+    conversationIdRef.current = conversation?.id;
+
+    // Reset AI and reply state when switching conversations
+    setSuggestion('');
+    setReplyText('');
+    setImprovementInstructions('');
+    setGeneratingSuggestion(false);
+    setImprovingSuggestion(false);
+
     if (conversation) {
       loadConversation(true);
       checkQueuedReply();
 
-      // Auto-refresh messages and queue status every 10s
       const interval = setInterval(() => {
         loadConversation();
         checkQueuedReply();
@@ -119,36 +129,46 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
   };
 
   const generateSuggestion = async () => {
+    const targetId = conversation.id;
     setGeneratingSuggestion(true);
     try {
-      const reply = await api.getReplySuggestion(conversation.id);
+      const reply = await api.getReplySuggestion(targetId);
+      if (conversationIdRef.current !== targetId) return;
       setSuggestion(reply);
     } catch (err) {
+      if (conversationIdRef.current !== targetId) return;
       logError('Failed to generate suggestion', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     } finally {
-      setGeneratingSuggestion(false);
+      if (conversationIdRef.current === targetId) {
+        setGeneratingSuggestion(false);
+      }
     }
   };
 
   const handleImproveSuggestion = async () => {
     if (!improvementInstructions.trim()) return;
+    const targetId = conversation.id;
     setImprovingSuggestion(true);
     try {
       const currentText = replyText || suggestion;
       const improved = await api.improveSuggestion(
-        conversation.id,
+        targetId,
         currentText,
         improvementInstructions.trim()
       );
+      if (conversationIdRef.current !== targetId) return;
       setSuggestion(improved);
       if (replyText) {
         setReplyText(improved);
       }
       setImprovementInstructions('');
     } catch (err) {
+      if (conversationIdRef.current !== targetId) return;
       logError('Failed to improve suggestion', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });
     } finally {
-      setImprovingSuggestion(false);
+      if (conversationIdRef.current === targetId) {
+        setImprovingSuggestion(false);
+      }
     }
   };
 

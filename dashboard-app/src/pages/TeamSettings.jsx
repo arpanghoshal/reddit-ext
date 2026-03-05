@@ -103,12 +103,9 @@ export default function TeamSettings() {
 
       setShowCreateTeam(false);
       setNewTeamName('');
-      await refreshTeams();
 
-      // Auto-switch to the newly created team
-      if (data.team?.id) {
-        switchTeam(data.team.id);
-      }
+      // Refresh teams and auto-switch to the newly created team
+      await refreshTeams(data.team?.id);
       setSuccess('Team created successfully!');
     } catch (err) {
       setError(err.message);
@@ -574,18 +571,6 @@ export default function TeamSettings() {
               </button>
             </form>
 
-            <div className="mt-6 pt-6 border-t border-[#343536]">
-              <p className="text-sm text-[#818384] mb-3">
-                Want to collaborate with others?
-              </p>
-              <button
-                onClick={() => setShowCreateTeam(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-[#272729] hover:bg-[#343536] border border-[#343536] rounded-lg transition-colors text-[#d7dadc]"
-              >
-                <Plus size={18} />
-                Create a Team
-              </button>
-            </div>
           </div>
         </div>
       )}

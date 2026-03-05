@@ -105,14 +105,9 @@ async def create_team(request: Request, data: CreateTeamRequest):
     try:
         client = get_supabase_client()
 
-        # Generate unique slug
+        # Generate unique slug with random suffix
         base_slug = generate_slug(data.name)
-        slug = base_slug
-
-        # Check for slug collision and add suffix if needed
-        existing = client.table("teams").select("id").eq("slug", slug).execute()
-        if existing.data:
-            slug = f"{base_slug}-{secrets.token_hex(4)}"
+        slug = f"{base_slug}-{secrets.token_hex(4)}"
 
         # Create team
         team_result = client.table("teams").insert({
