@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 from .supabase_service import get_client
+from .redis_client import cache_get, cache_set, cache_delete
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,11 @@ def _transform_to_db(data: Dict[str, Any]) -> Dict[str, Any]:
 
 async def get_automation_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get automation settings (returns first/only row or defaults)"""
+    cache_key = f"auto_settings:{team_id or 'default'}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return _get_defaults()
@@ -81,7 +87,9 @@ async def get_automation_settings(team_id: Optional[str] = None) -> Optional[Dic
         result = query.limit(1).execute()
 
         if result.data and len(result.data) > 0:
-            return _transform_from_db(result.data[0])
+            settings = _transform_from_db(result.data[0])
+            await cache_set(cache_key, settings, 3600)
+            return settings
 
         # Return defaults if no settings exist
         return _get_defaults()
@@ -114,6 +122,7 @@ async def save_automation_settings(data: Dict[str, Any], team_id: Optional[str] 
             result = client.table("automation_settings").insert(db_data).execute()
 
         if result.data and len(result.data) > 0:
+            await cache_delete(f"auto_settings:{team_id or 'default'}")
             return _transform_from_db(result.data[0])
         return None
     except Exception as e:

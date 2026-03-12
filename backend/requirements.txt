@@ -9,3 +9,4 @@ PyJWT>=2.8.0
 google-genai>=1.0.0
 structlog>=24.1.0
 sentry-sdk[fastapi]>=1.40.0
+redis[hiredis]>=8.6.0

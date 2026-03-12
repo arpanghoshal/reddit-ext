@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
 from ..utils.crypto import encrypt, decrypt
+from .redis_client import cache_get, cache_set, cache_delete
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,10 @@ async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = Non
             insert_data, on_conflict="username"
         ).execute()
 
-        return transform_account(result.data[0]) if result.data else None
+        if result.data:
+            await cache_delete(f"accounts:{team_id or 'default'}")
+            return transform_account(result.data[0])
+        return None
     except Exception as e:
         logger.error(f"Error adding account: {e}")
         return None
@@ -126,11 +130,19 @@ async def add_account(account_data: Dict[str, Any], team_id: Optional[str] = Non
 
 async def get_accounts(filters: Dict[str, Any] = None, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get all accounts for a team"""
+    filters = filters or {}
+
+    # Only cache unfiltered requests (no status/activeOnly filters)
+    use_cache = not filters.get("status") and not filters.get("activeOnly")
+    cache_key = f"accounts:{team_id or 'default'}"
+    if use_cache:
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+
     client = get_client()
     if not client:
         return []
-
-    filters = filters or {}
 
     try:
         query = client.table("reddit_accounts").select("*").order("created_at", desc=True)
@@ -146,7 +158,10 @@ async def get_accounts(filters: Dict[str, Any] = None, team_id: Optional[str] = 
             query = query.in_("status", ["active", "warming_up"])
 
         result = query.execute()
-        return [transform_account(row) for row in result.data] if result.data else []
+        accounts = [transform_account(row) for row in result.data] if result.data else []
+        if use_cache:
+            await cache_set(cache_key, accounts, 1800)
+        return accounts
     except Exception as e:
         logger.error(f"Error fetching accounts: {e}")
         return []
@@ -224,7 +239,10 @@ async def update_account(account_id: str, updates: Dict[str, Any], team_id: Opti
         if team_id:
             query = query.eq("team_id", team_id)
         result = query.execute()
-        return transform_account(result.data[0]) if result.data else None
+        if result.data:
+            await cache_delete(f"accounts:{team_id or 'default'}")
+            return transform_account(result.data[0])
+        return None
     except Exception as e:
         logger.error(f"Error updating account: {e}")
         return None
@@ -241,6 +259,7 @@ async def delete_account(account_id: str, team_id: Optional[str] = None) -> bool
         if team_id:
             query = query.eq("team_id", team_id)
         query.execute()
+        await cache_delete(f"accounts:{team_id or 'default'}")
         return True
     except Exception as e:
         logger.error(f"Error deleting account: {e}")

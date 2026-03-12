@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 from . import reddit_comments
 from . import gemini_client
+from .redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,14 @@ def get_client() -> Optional[Client]:
 
 
 async def get_cached_classification(post_url: str) -> Optional[Dict[str, Any]]:
-    """Get cached classification for a post URL"""
+    """Get cached classification for a post URL (Redis first, then Supabase)"""
+    cache_key = f"classification:{post_url}"
+
+    # Check Redis first
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return None
@@ -54,7 +62,7 @@ async def get_cached_classification(post_url: str) -> Optional[Dict[str, Any]]:
             logger.info(f"Skipping poisoned cache entry for {post_url}")
             return None
 
-        return {
+        classification = {
             "relevanceScore": data.get("relevance_score"),
             "buyerIntent": data.get("buyer_intent_score"),
             "problemAwareness": data.get("problem_awareness_score"),
@@ -65,6 +73,10 @@ async def get_cached_classification(post_url: str) -> Optional[Dict[str, Any]]:
             "cached": True,
             "classifiedAt": data.get("classified_at")
         }
+
+        # Store in Redis for faster subsequent reads
+        await cache_set(cache_key, classification, 86400)
+        return classification
     except Exception as e:
         logger.error(f"Error fetching cached classification: {e}")
         return None
@@ -228,8 +240,9 @@ async def classify_post(post: Dict[str, Any], settings: Dict[str, Any] = None) -
 
     classification = parse_classification_response(response_text)
 
-    # Save to cache
+    # Save to Supabase and Redis
     await save_classification(post, classification)
+    await cache_set(f"classification:{post.get('url', '')}", {**classification, "cached": True}, 86400)
 
     return {**classification, "cached": False}
 
@@ -399,6 +412,7 @@ async def batch_classify_posts(
                 # Only cache real classifications, not failure defaults
                 if not batch_failed and classification.get("relevanceScore", 0) > 0:
                     await save_classification(posts[idx], classification)
+                    await cache_set(f"classification:{posts[idx].get('url', '')}", {**classification, "cached": True}, 86400)
 
         except Exception as e:
             logger.error(f"Batch classification call failed: {e}", exc_info=True)

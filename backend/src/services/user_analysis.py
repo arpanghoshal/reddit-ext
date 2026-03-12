@@ -13,6 +13,8 @@ from collections import Counter
 import httpx
 from supabase import create_client, Client
 
+from .redis_client import cache_get, cache_set
+
 logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
@@ -452,7 +454,14 @@ def generate_personalization_context(profile: Dict[str, Any]) -> Dict[str, str]:
 
 
 async def get_cached_profile(username: str) -> Optional[Dict[str, Any]]:
-    """Get cached user profile"""
+    """Get cached user profile (Redis first, then Supabase)"""
+    cache_key = f"profile:{username.lower()}"
+
+    # Check Redis first
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return None
@@ -468,7 +477,7 @@ async def get_cached_profile(username: str) -> Optional[Dict[str, Any]]:
             return None
 
         data = result.data[0]
-        return {
+        profile = {
             "username": data.get("username"),
             "interests": data.get("interests", []),
             "pain_points": data.get("pain_points", []),
@@ -481,6 +490,10 @@ async def get_cached_profile(username: str) -> Optional[Dict[str, Any]]:
             "analyzed_at": data.get("analyzed_at"),
             "cached": True
         }
+
+        # Store in Redis for faster subsequent reads
+        await cache_set(cache_key, profile, 21600)
+        return profile
     except Exception as e:
         logger.error(f"Error fetching cached profile: {e}")
         return None
@@ -574,8 +587,9 @@ async def analyze_user(username: str, force_refresh: bool = False) -> Dict[str, 
     # Generate personalization context
     profile["personalization_context"] = generate_personalization_context(profile)
 
-    # Save to cache
+    # Save to Supabase and Redis
     await save_profile(username, profile)
+    await cache_set(f"profile:{username.lower()}", {**profile, "cached": True}, 21600)
 
     return profile
 

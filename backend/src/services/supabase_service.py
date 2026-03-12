@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from supabase import create_client, Client
 
+from .redis_client import cache_get, cache_set, cache_delete
+
 logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
@@ -343,6 +345,7 @@ async def save_settings(settings: Dict[str, Any], team_id: Optional[str] = None)
 
         if result.data:
             logger.info("Settings saved to Supabase")
+            await cache_delete(f"user_settings:{team_id or 'default'}")
             return result.data[0]
         return None
     except Exception as e:
@@ -352,6 +355,11 @@ async def save_settings(settings: Dict[str, Any], team_id: Optional[str] = None)
 
 async def get_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get user settings"""
+    cache_key = f"user_settings:{team_id or 'default'}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return None
@@ -364,7 +372,10 @@ async def get_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]
             "created_at", desc=True
         ).limit(1).execute()
 
-        return result.data[0] if result.data else None
+        if result.data:
+            await cache_set(cache_key, result.data[0], 3600)
+            return result.data[0]
+        return None
     except Exception as e:
         # PGRST116 = no rows found
         if "PGRST116" not in str(e):
@@ -376,6 +387,11 @@ async def get_settings(team_id: Optional[str] = None) -> Optional[Dict[str, Any]
 
 async def get_analytics(team_id: Optional[str] = None) -> Dict[str, Any]:
     """Get analytics data"""
+    cache_key = f"analytics:{team_id or 'default'}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return {"totalDMs": 0, "successRate": 0, "todayCount": 0, "weekCount": 0}
@@ -422,12 +438,14 @@ async def get_analytics(team_id: Optional[str] = None) -> Dict[str, Any]:
 
         success_dms = [dm for dm in dms if dm.get("status") == "sent"]
 
-        return {
+        analytics_result = {
             "totalDMs": len(dms),
             "successRate": round((len(success_dms) / len(dms)) * 100) if dms else 0,
             "todayCount": len(today_dms),
             "weekCount": len(week_dms)
         }
+        await cache_set(cache_key, analytics_result, 600)
+        return analytics_result
     except Exception as e:
         logger.error(f"Failed to get analytics: {e}")
         return {"totalDMs": 0, "successRate": 0, "todayCount": 0, "weekCount": 0}
@@ -435,6 +453,11 @@ async def get_analytics(team_id: Optional[str] = None) -> Dict[str, Any]:
 
 async def get_dms_by_subreddit(limit: int = 10, team_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get top subreddits by DM count"""
+    cache_key = f"dms_by_sub:{team_id or 'default'}:{limit}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return []
@@ -459,7 +482,9 @@ async def get_dms_by_subreddit(limit: int = 10, team_id: Optional[str] = None) -
 
         # Sort by count and take top N
         sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-        return [{"subreddit": sub, "count": count} for sub, count in sorted_items[:limit]]
+        sub_result = [{"subreddit": sub, "count": count} for sub, count in sorted_items[:limit]]
+        await cache_set(cache_key, sub_result, 900)
+        return sub_result
     except Exception as e:
         logger.error(f"Failed to get DMs by subreddit: {e}")
         return []

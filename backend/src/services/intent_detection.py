@@ -8,6 +8,7 @@ import re
 import logging
 from typing import Dict, Any, List, Optional
 from . import gemini_client
+from .redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,16 @@ async def detect_intent_llm(message: str, conversation_context: str = "") -> Dic
     Returns:
         Intent detection result
     """
+    import hashlib
+    import json
+
+    # Check Redis cache — intent for a given message is deterministic
+    msg_hash = hashlib.md5(message.strip().lower().encode()).hexdigest()
+    cache_key = f"intent:{msg_hash}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     intent_list = "\n".join([
         f"- {name}: {config['description']}"
         for name, config in INTENT_DEFINITIONS.items()
@@ -228,8 +239,6 @@ Classify the intent:"""
             temperature=0.3,
         )
 
-        import json
-
         # Handle markdown code blocks
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -248,6 +257,10 @@ Classify the intent:"""
             result["priority"] = 99
 
         result["method"] = "llm"
+
+        # Cache the result — intent is deterministic for a given message
+        await cache_set(cache_key, result, 86400)
+
         return result
 
     except Exception as e:

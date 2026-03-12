@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
+from .redis_client import cache_get, cache_set
+
 logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
@@ -108,6 +110,11 @@ def calculate_professional_score(user_profile: Dict[str, Any]) -> float:
 
 async def get_interaction_history_score(username: str) -> float:
     """Calculate score based on past interaction success"""
+    cache_key = f"interaction:{username.lower()}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return 50  # Neutral if no database
@@ -122,18 +129,22 @@ async def get_interaction_history_score(username: str) -> float:
             return 50  # No previous interactions
 
         conversations = result.data
+        score = 40  # Default: contacted but no response
 
         # If we've had successful interactions before
         for conv in conversations:
             if conv.get("status") == "converted":
-                return 100  # Previous conversion - very hot
+                score = 100
+                break
             if conv.get("status") == "interested":
-                return 85
+                score = 85
+                break
             if conv.get("has_reply"):
-                return 70  # They've responded before
+                score = 70
+                break
 
-        # If we've contacted but no response, slight penalty
-        return 40
+        await cache_set(cache_key, score, 3600)
+        return score
 
     except Exception as e:
         logger.error(f"Error getting interaction history: {e}")
@@ -326,6 +337,11 @@ async def score_batch(
 
 async def get_lead_score_stats(days: int = 7) -> Dict[str, Any]:
     """Get lead scoring statistics"""
+    cache_key = f"lead_stats:{days}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return {"error": "No database connection"}
@@ -354,7 +370,7 @@ async def get_lead_score_stats(days: int = 7) -> Dict[str, Any]:
         # Calculate conversion rates by tier
         sent_leads = [l for l in leads if l.get("status") == "sent"]
 
-        return {
+        stats = {
             "total_scored": len(leads),
             "by_tier": {
                 "hot": hot,
@@ -368,6 +384,8 @@ async def get_lead_score_stats(days: int = 7) -> Dict[str, Any]:
             },
             "period_days": days
         }
+        await cache_set(cache_key, stats, 1800)
+        return stats
 
     except Exception as e:
         logger.error(f"Error getting lead score stats: {e}")

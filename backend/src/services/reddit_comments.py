@@ -6,9 +6,9 @@ Fetches and formats comments via ScrapeCreators API for use in LLM prompts.
 import re
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
 
 from . import reddit_search
+from .redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -16,20 +16,7 @@ MAX_TOP_LEVEL_COMMENTS = 10
 MAX_COMMENT_BODY_LENGTH = 300
 MAX_TOTAL_COMMENTS_CHARS = 2000
 
-# In-memory cache: {post_url: {"data": [...], "fetched_at": datetime}}
-_comment_cache: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_MINUTES = 60
-
-
-def _evict_expired_cache():
-    """Remove expired entries from the in-memory cache."""
-    now = datetime.utcnow()
-    expired = [
-        k for k, v in _comment_cache.items()
-        if now - v["fetched_at"] > timedelta(minutes=CACHE_TTL_MINUTES)
-    ]
-    for k in expired:
-        del _comment_cache[k]
+COMMENT_CACHE_TTL = 3600  # 60 minutes in seconds
 
 
 async def fetch_post_comments(
@@ -50,10 +37,10 @@ async def fetch_post_comments(
         return []
 
     # Check cache
-    _evict_expired_cache()
-    cache_key = post_url
-    if cache_key in _comment_cache:
-        return _comment_cache[cache_key]["data"]
+    cache_key = f"comments:{post_url}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         raw_comments = await reddit_search.get_post_comments(post_url)
@@ -80,10 +67,7 @@ async def fetch_post_comments(
         comments = comments[:max_comments]
 
         # Cache
-        _comment_cache[cache_key] = {
-            "data": comments,
-            "fetched_at": datetime.utcnow(),
-        }
+        await cache_set(cache_key, comments, COMMENT_CACHE_TTL)
 
         return comments
 
