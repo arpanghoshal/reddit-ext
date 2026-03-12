@@ -340,6 +340,33 @@ async def bulk_reject(ids: List[str], reason: Optional[str] = None, team_id: Opt
         return {"success": 0, "failed": len(ids)}
 
 
+async def expire_stale_approved_items(team_id: Optional[str] = None, max_age_hours: int = 24) -> int:
+    """Auto-fail approved items older than max_age_hours to prevent stuck queue items"""
+    client = get_client()
+    if not client:
+        return 0
+
+    try:
+        cutoff = (datetime.utcnow() - timedelta(hours=max_age_hours)).isoformat()
+        query = client.table("dm_queue").update({
+            "status": "failed",
+            "failed_reason": f"Auto-expired: approved for over {max_age_hours}h without being sent",
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("status", "approved").lt("approved_at", cutoff)
+
+        if team_id:
+            query = query.eq("team_id", team_id)
+
+        result = query.execute()
+        expired_count = len(result.data) if result.data else 0
+        if expired_count > 0:
+            logger.info(f"Auto-expired {expired_count} stale approved queue items (>{max_age_hours}h)")
+        return expired_count
+    except Exception as e:
+        logger.error(f"Error expiring stale approved items: {e}")
+        return 0
+
+
 async def get_next_to_send(account_id: Optional[str] = None, message_type: Optional[str] = None, team_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Get the next approved item to send"""
     client = get_client()
@@ -347,6 +374,9 @@ async def get_next_to_send(account_id: Optional[str] = None, message_type: Optio
         return None
 
     try:
+        # Auto-expire items stuck in approved state for >24h
+        await expire_stale_approved_items(team_id=team_id)
+
         query = client.table("dm_queue").select("*").eq(
             "status", "approved"
         ).order("approved_at").limit(1)

@@ -1132,8 +1132,9 @@ async function handleStepCompletion(tabId, result) {
                         await chrome.storage.local.set({ sentQueueItems: sentQueueItems.slice(-100) }); // keep last 100
                     } catch (e) { extLogError(`Failed to store sent item locally: ${e?.message}`, { component: 'background', errorName: e?.name, errorStack: e?.stack }); }
                 }
-                // Clear persistent in-progress marker
+                // Clear persistent in-progress marker and attempt counter
                 clearQueueItemInProgress(task.data.queueItemId).catch(() => {});
+                clearQueueItemAttempts(task.data.queueItemId).catch(() => {});
                 // Notify dashboard immediately so queue UI updates without waiting for poll
                 notifyDashboardQueueUpdate();
             }
@@ -2122,6 +2123,32 @@ async function clearQueueItemInProgress(itemId) {
     await chrome.storage.local.set({ [QUEUE_IN_PROGRESS_KEY]: inProgress });
 }
 
+// Track how many times each queue item has been attempted (prevents stuck items)
+const QUEUE_ATTEMPT_COUNTS_KEY = 'queueAttemptCounts';
+const MAX_QUEUE_ITEM_ATTEMPTS = 5;
+
+async function incrementQueueItemAttempts(itemId) {
+    const data = await chrome.storage.local.get(QUEUE_ATTEMPT_COUNTS_KEY);
+    const counts = data[QUEUE_ATTEMPT_COUNTS_KEY] || {};
+    counts[itemId] = (counts[itemId] || 0) + 1;
+    // Prune old entries (keep last 200)
+    const entries = Object.entries(counts);
+    if (entries.length > 200) {
+        const pruned = Object.fromEntries(entries.slice(-200));
+        await chrome.storage.local.set({ [QUEUE_ATTEMPT_COUNTS_KEY]: pruned });
+        return pruned[itemId];
+    }
+    await chrome.storage.local.set({ [QUEUE_ATTEMPT_COUNTS_KEY]: counts });
+    return counts[itemId];
+}
+
+async function clearQueueItemAttempts(itemId) {
+    const data = await chrome.storage.local.get(QUEUE_ATTEMPT_COUNTS_KEY);
+    const counts = data[QUEUE_ATTEMPT_COUNTS_KEY] || {};
+    delete counts[itemId];
+    await chrome.storage.local.set({ [QUEUE_ATTEMPT_COUNTS_KEY]: counts });
+}
+
 async function isQueueItemInProgress(itemId) {
     const data = await chrome.storage.local.get(QUEUE_IN_PROGRESS_KEY);
     const inProgress = data[QUEUE_IN_PROGRESS_KEY] || {};
@@ -2488,6 +2515,19 @@ async function stopOutreachQueuePolling() {
 
 async function processOutreachQueueItem(item) {
     extLogInfo(`Processing outreach queue item: ${item.id} to u/${item.recipientUsername}`, { component: 'background' });
+
+    // Track attempts — auto-fail items that keep getting retried without success
+    const attempts = await incrementQueueItemAttempts(item.id);
+    if (attempts > MAX_QUEUE_ITEM_ATTEMPTS) {
+        extLogWarn(`Outreach queue item ${item.id} exceeded ${MAX_QUEUE_ITEM_ATTEMPTS} attempts, marking as failed`, { component: 'background' });
+        api.markQueueItemFailed(item.id, `Auto-failed after ${MAX_QUEUE_ITEM_ATTEMPTS} unsuccessful attempts`).catch(err => {
+            extLogError(`Failed to mark stuck item as failed: ${err?.message}`, { component: 'background' });
+        });
+        await clearQueueItemInProgress(item.id);
+        await clearQueueItemAttempts(item.id);
+        outreachQueueProcessing = false;
+        return;
+    }
 
     // Account mismatch check
     const detected = await cookies.detectCurrentAccount(true);
