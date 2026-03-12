@@ -30,6 +30,7 @@ from .config.logging_config import (
     team_id_var,
     user_id_var,
 )
+from .services.redis_client import get_redis, close_redis
 
 # Load environment variables
 load_dotenv()
@@ -95,9 +96,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"Port: {port}")
     logger.info(f"Health check: http://localhost:{port}/health")
 
+    # Connect to Redis cache
+    await get_redis()
+
     yield
 
     # Shutdown
+    await close_redis()
     logger.info("Reddit Automated DM Backend shutting down...")
 
 

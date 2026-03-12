@@ -12,6 +12,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from supabase import create_client, Client
 
+from .redis_client import cache_get, cache_set
+
 logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
@@ -75,7 +77,14 @@ async def fetch_user_comments(username: str, limit: int = 25) -> List[Dict[str, 
 
 
 async def get_cached_qualification(username: str) -> Optional[Dict[str, Any]]:
-    """Get cached qualification for a username"""
+    """Get cached qualification for a username (Redis first, then Supabase)"""
+    cache_key = f"qualification:{username.lower()}"
+
+    # Check Redis first
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return None
@@ -91,7 +100,7 @@ async def get_cached_qualification(username: str) -> Optional[Dict[str, Any]]:
             return None
 
         data = result.data[0]
-        return {
+        qualification = {
             "isQualified": data.get("is_qualified"),
             "accountQualityScore": data.get("account_quality_score"),
             "engagementScore": data.get("engagement_score"),
@@ -109,6 +118,10 @@ async def get_cached_qualification(username: str) -> Optional[Dict[str, Any]]:
             "cached": True,
             "qualifiedAt": data.get("qualified_at")
         }
+
+        # Store in Redis for faster subsequent reads
+        await cache_set(cache_key, qualification, 43200)
+        return qualification
     except Exception as e:
         logger.error(f"Error fetching cached qualification: {e}")
         return None
@@ -447,8 +460,9 @@ async def qualify_user(username: str, options: Dict[str, Any] = None) -> Dict[st
         "cached": False
     }
 
-    # Save to cache
+    # Save to Supabase and Redis
     await save_qualification(username, result, user_data)
+    await cache_set(f"qualification:{username.lower()}", {**result, "cached": True}, 43200)
 
     return result
 

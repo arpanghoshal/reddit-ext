@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
+from .redis_client import cache_get, cache_set
+
 logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
@@ -64,6 +66,11 @@ async def get_summary_stats(
     end_date: date
 ) -> Dict[str, Any]:
     """Get summary statistics for a team"""
+    cache_key = f"team_summary:{team_id}:{start_date}:{end_date}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return {}
@@ -96,7 +103,7 @@ async def get_summary_stats(
         response_times = [d.get("avg_response_time_mins") for d in data if d.get("avg_response_time_mins")]
         avg_response_time = sum(response_times) / len(response_times) if response_times else None
 
-        return {
+        summary = {
             "total_dms_sent": total_dms,
             "total_responses": total_responses,
             "response_rate": round((total_responses / total_dms * 100), 1) if total_dms > 0 else 0,
@@ -107,6 +114,8 @@ async def get_summary_stats(
             "active_days": len(data),
             "avg_dms_per_day": round(total_dms / len(data), 1) if data else 0
         }
+        await cache_set(cache_key, summary, 900)
+        return summary
     except Exception as e:
         logger.error(f"Error fetching summary stats: {e}")
         return {}
@@ -141,6 +150,11 @@ async def get_hourly_activity(
     end_date: date
 ) -> Dict[str, Any]:
     """Get hourly activity heatmap data"""
+    cache_key = f"hourly_activity:{team_id}:{start_date}:{end_date}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return {}
@@ -174,13 +188,15 @@ async def get_hourly_activity(
 
         day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-        return {
+        hourly_result = {
             "by_hour": hourly_totals,
             "by_day_of_week": {day_names[k]: v for k, v in day_of_week_totals.items()},
             "best_hour": best_hour,
             "best_day": day_names[best_day],
             "recommendation": f"Best engagement: {day_names[best_day]}s around {best_hour}:00"
         }
+        await cache_set(cache_key, hourly_result, 1800)
+        return hourly_result
     except Exception as e:
         logger.error(f"Error fetching hourly activity: {e}")
         return {}
@@ -192,6 +208,11 @@ async def get_member_stats(
     end_date: date
 ) -> List[Dict[str, Any]]:
     """Get per-member performance stats"""
+    cache_key = f"member_stats:{team_id}:{start_date}:{end_date}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return []
@@ -242,6 +263,7 @@ async def get_member_stats(
             reverse=True
         )
 
+        await cache_set(cache_key, leaderboard, 1800)
         return leaderboard
     except Exception as e:
         logger.error(f"Error fetching member stats: {e}")
@@ -348,6 +370,11 @@ async def record_response_received(
 
 async def get_analytics_summary_view(team_id: str) -> Dict[str, Any]:
     """Get analytics from the summary view"""
+    cache_key = f"analytics_summary:{team_id}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return {}
@@ -357,7 +384,10 @@ async def get_analytics_summary_view(team_id: str) -> Dict[str, Any]:
             "team_id", team_id
         ).execute()
 
-        return result.data[0] if result.data else {}
+        if result.data:
+            await cache_set(cache_key, result.data[0], 600)
+            return result.data[0]
+        return {}
     except Exception as e:
         logger.error(f"Error fetching analytics summary: {e}")
         return {}

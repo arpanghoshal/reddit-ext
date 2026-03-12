@@ -9,6 +9,8 @@ from datetime import datetime, date
 from typing import Dict, Any, Optional
 from supabase import create_client, Client
 
+from .redis_client import cache_get, cache_set, cache_delete
+
 logger = logging.getLogger(__name__)
 
 _supabase: Optional[Client] = None
@@ -27,6 +29,11 @@ def get_client() -> Optional[Client]:
 
 async def get_team_quota(team_id: str) -> Optional[Dict[str, Any]]:
     """Get quota limits for a team"""
+    cache_key = f"team_quota:{team_id}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return None
@@ -34,6 +41,7 @@ async def get_team_quota(team_id: str) -> Optional[Dict[str, Any]]:
     try:
         result = client.table("team_quotas").select("*").eq("team_id", team_id).execute()
         if result.data:
+            await cache_set(cache_key, result.data[0], 7200)
             return result.data[0]
         return None
     except Exception as e:
@@ -218,7 +226,10 @@ async def update_quota(team_id: str, updates: Dict[str, int]) -> Optional[Dict[s
             "team_id", team_id
         ).execute()
 
-        return result.data[0] if result.data else None
+        if result.data:
+            await cache_delete(f"team_quota:{team_id}")
+            return result.data[0]
+        return None
     except Exception as e:
         logger.error(f"Error updating quota: {e}")
         return None
@@ -226,6 +237,11 @@ async def update_quota(team_id: str, updates: Dict[str, int]) -> Optional[Dict[s
 
 async def get_quota_status(team_id: str) -> Dict[str, Any]:
     """Get comprehensive quota status for a team"""
+    cache_key = f"quota_status:{team_id}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     quota = await get_team_quota(team_id)
     usage = await get_today_usage(team_id)
 
@@ -249,7 +265,7 @@ async def get_quota_status(team_id: str) -> Dict[str, Any]:
 
         quota = quota or {}
 
-        return {
+        status = {
             "accounts": {
                 "current": accounts_count,
                 "limit": quota.get("max_accounts", 5),
@@ -266,6 +282,8 @@ async def get_quota_status(team_id: str) -> Dict[str, Any]:
                 "percentage": round((members_count / max(quota.get("max_members", 10), 1)) * 100)
             }
         }
+        await cache_set(cache_key, status, 300)
+        return status
     except Exception as e:
         logger.error(f"Error fetching quota status: {e}")
         return {}

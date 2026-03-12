@@ -9,17 +9,16 @@ import re
 import asyncio
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
 import httpx
+
+from .redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
 SERPAPI_BASE_URL = "https://serpapi.com/search"
 SERPAPI_TIMEOUT = 20.0
 
-# Cache
-_search_cache: Dict[str, Dict[str, Any]] = {}
-SEARCH_CACHE_TTL = 15  # minutes
+SEARCH_CACHE_TTL = 900  # 15 minutes in seconds
 
 # Rate limiting
 SERPAPI_DELAY = 0.3  # seconds between SerpAPI calls
@@ -27,16 +26,6 @@ SERPAPI_DELAY = 0.3  # seconds between SerpAPI calls
 
 def _get_serpapi_key() -> Optional[str]:
     return os.getenv("SERPAPI_API_KEY")
-
-
-def _evict_cache(cache: Dict, ttl_minutes: int):
-    now = datetime.utcnow()
-    expired = [
-        k for k, v in cache.items()
-        if now - v["fetched_at"] > timedelta(minutes=ttl_minutes)
-    ]
-    for k in expired:
-        del cache[k]
 
 
 # ============================================================================
@@ -69,9 +58,9 @@ async def search_reddit_posts(
 
     tbs_value = tbs if tbs else f"qdr:{time_period}"
     cache_key = f"serp:{query}:{num_results}:{tbs_value}"
-    _evict_cache(_search_cache, SEARCH_CACHE_TTL)
-    if cache_key in _search_cache:
-        return _search_cache[cache_key]["data"]
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     full_query = f"{query} site:reddit.com"
 
@@ -124,10 +113,7 @@ async def search_reddit_posts(
 
             logger.info(f"SerpAPI: '{query}' → {len(results)} Reddit posts (from {len(organic)} organic results)")
 
-            _search_cache[cache_key] = {
-                "data": results,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, results, SEARCH_CACHE_TTL)
             return results
 
     except Exception as e:
@@ -157,9 +143,9 @@ async def search_subreddit_posts(
 
     tbs_value = tbs if tbs else f"qdr:{time_period}"
     cache_key = f"serp_sub:{subreddit}:{query}:{num_results}:{tbs_value}"
-    _evict_cache(_search_cache, SEARCH_CACHE_TTL)
-    if cache_key in _search_cache:
-        return _search_cache[cache_key]["data"]
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         await asyncio.sleep(SERPAPI_DELAY)
@@ -205,10 +191,7 @@ async def search_subreddit_posts(
 
             logger.info(f"SerpAPI: r/{subreddit} '{query}' → {len(results)} posts")
 
-            _search_cache[cache_key] = {
-                "data": results,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, results, SEARCH_CACHE_TTL)
             return results
 
     except Exception as e:

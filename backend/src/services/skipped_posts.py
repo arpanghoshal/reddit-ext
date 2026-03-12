@@ -6,6 +6,7 @@ Read operations for skipped_posts table
 import logging
 from typing import Optional, Dict, List, Any
 from .supabase_service import get_client
+from .redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,11 @@ async def get_skipped_posts(filters: Dict[str, Any] = None, team_id: Optional[st
 
 async def get_skip_stats(team_id: Optional[str] = None) -> Dict[str, Any]:
     """Get statistics about skipped posts by reason"""
+    cache_key = f"skip_stats:{team_id or 'default'}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     client = get_client()
     if not client:
         return {"total": 0, "byReason": {}, "bySubreddit": {}}
@@ -106,11 +112,13 @@ async def get_skip_stats(team_id: Optional[str] = None) -> Dict[str, Any]:
         sorted_subreddits = sorted(by_subreddit.items(), key=lambda x: x[1], reverse=True)
         top_subreddits = dict(sorted_subreddits[:10])
 
-        return {
+        skip_result = {
             "total": total,
             "byReason": by_reason,
             "bySubreddit": top_subreddits
         }
+        await cache_set(cache_key, skip_result, 1800)
+        return skip_result
     except Exception as e:
         logger.error(f"Failed to get skip stats: {e}")
         return {"total": 0, "byReason": {}, "bySubreddit": {}}

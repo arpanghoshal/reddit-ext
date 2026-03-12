@@ -7,22 +7,19 @@ import os
 import asyncio
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 import httpx
+
+from .redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
 SCRAPECREATORS_BASE_URL = "https://api.scrapecreators.com/v1/reddit"
 REQUEST_TIMEOUT = 20.0
 
-# In-memory caches with TTL
-_post_search_cache: Dict[str, Dict[str, Any]] = {}
-_subreddit_search_cache: Dict[str, Dict[str, Any]] = {}
-_subreddit_info_cache: Dict[str, Dict[str, Any]] = {}
-
-POST_SEARCH_CACHE_TTL = 15  # minutes
-SUBREDDIT_SEARCH_CACHE_TTL = 30  # minutes
-SUBREDDIT_INFO_CACHE_TTL = 60  # minutes
+POST_SEARCH_CACHE_TTL = 900      # 15 minutes in seconds
+SUBREDDIT_SEARCH_CACHE_TTL = 1800  # 30 minutes in seconds
+SUBREDDIT_INFO_CACHE_TTL = 3600    # 60 minutes in seconds
 
 # Delay between ScrapeCreators calls
 SCRAPECREATORS_DELAY = 0.5  # seconds
@@ -30,17 +27,6 @@ SCRAPECREATORS_DELAY = 0.5  # seconds
 
 def _get_scrapecreators_key() -> Optional[str]:
     return os.getenv("SCRAPECREATORS_API_KEY")
-
-
-def _evict_cache(cache: Dict[str, Dict[str, Any]], ttl_minutes: int):
-    """Remove expired entries from a cache."""
-    now = datetime.utcnow()
-    expired = [
-        k for k, v in cache.items()
-        if now - v["fetched_at"] > timedelta(minutes=ttl_minutes)
-    ]
-    for k in expired:
-        del cache[k]
 
 
 # ============================================================================
@@ -58,9 +44,9 @@ async def search_posts(query: str, sort: str = "relevance", trim: bool = True) -
         return []
 
     cache_key = f"search:{query}:{sort}"
-    _evict_cache(_post_search_cache, POST_SEARCH_CACHE_TTL)
-    if cache_key in _post_search_cache:
-        return _post_search_cache[cache_key]["data"]
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         await asyncio.sleep(SCRAPECREATORS_DELAY)
@@ -88,10 +74,7 @@ async def search_posts(query: str, sort: str = "relevance", trim: bool = True) -
             if not isinstance(posts, list):
                 posts = []
 
-            _post_search_cache[cache_key] = {
-                "data": posts,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, posts, POST_SEARCH_CACHE_TTL)
             return posts
 
     except Exception as e:
@@ -120,9 +103,9 @@ async def search_subreddit_posts(
         return {"items": [], "cursor": None}
 
     cache_key = f"sub_search:{subreddit}:{query}:{sort}:{timeframe}:{filter_type}:{cursor or ''}"
-    _evict_cache(_post_search_cache, POST_SEARCH_CACHE_TTL)
-    if cache_key in _post_search_cache:
-        return _post_search_cache[cache_key]["data"]
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         await asyncio.sleep(SCRAPECREATORS_DELAY)
@@ -173,10 +156,7 @@ async def search_subreddit_posts(
                 "cursor": data.get("cursor"),
             }
 
-            _post_search_cache[cache_key] = {
-                "data": result,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, result, POST_SEARCH_CACHE_TTL)
             return result
 
     except Exception as e:
@@ -200,9 +180,9 @@ async def get_subreddit_posts(
         return []
 
     cache_key = f"subreddit_posts:{subreddit}:{sort}:{timeframe}"
-    _evict_cache(_post_search_cache, POST_SEARCH_CACHE_TTL)
-    if cache_key in _post_search_cache:
-        return _post_search_cache[cache_key]["data"]
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         await asyncio.sleep(SCRAPECREATORS_DELAY)
@@ -233,10 +213,7 @@ async def get_subreddit_posts(
             if not isinstance(posts, list):
                 posts = []
 
-            _post_search_cache[cache_key] = {
-                "data": posts,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, posts, POST_SEARCH_CACHE_TTL)
             return posts
 
     except Exception as e:
@@ -393,9 +370,9 @@ async def search_subreddits(query: str, limit: int = 10) -> List[Dict[str, Any]]
         return []
 
     cache_key = f"sr_search:{query}:{limit}"
-    _evict_cache(_subreddit_search_cache, SUBREDDIT_SEARCH_CACHE_TTL)
-    if cache_key in _subreddit_search_cache:
-        return _subreddit_search_cache[cache_key]["data"]
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         await asyncio.sleep(SCRAPECREATORS_DELAY)
@@ -445,10 +422,7 @@ async def search_subreddits(query: str, limit: int = 10) -> List[Dict[str, Any]]
                     if len(subreddits) >= limit:
                         break
 
-            _subreddit_search_cache[cache_key] = {
-                "data": subreddits,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, subreddits, SUBREDDIT_SEARCH_CACHE_TTL)
             return subreddits
 
     except Exception as e:
@@ -466,10 +440,10 @@ async def get_subreddit_info(subreddit: str) -> Optional[Dict[str, Any]]:
         logger.error("SCRAPECREATORS_API_KEY not set")
         return None
 
-    cache_key = subreddit.lower()
-    _evict_cache(_subreddit_info_cache, SUBREDDIT_INFO_CACHE_TTL)
-    if cache_key in _subreddit_info_cache:
-        return _subreddit_info_cache[cache_key]["data"]
+    cache_key = f"sr_info:{subreddit.lower()}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         await asyncio.sleep(SCRAPECREATORS_DELAY)
@@ -512,10 +486,7 @@ async def get_subreddit_info(subreddit: str) -> Optional[Dict[str, Any]]:
                 info["title"] = sr_meta.get("title", subreddit)
                 info["over18"] = sr_meta.get("over18", False)
 
-            _subreddit_info_cache[cache_key] = {
-                "data": info,
-                "fetched_at": datetime.utcnow(),
-            }
+            await cache_set(cache_key, info, SUBREDDIT_INFO_CACHE_TTL)
             return info
 
     except Exception as e:

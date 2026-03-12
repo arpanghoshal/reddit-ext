@@ -1,11 +1,10 @@
 """
-Gemini API Client
-Shared async client for Google Gemini API calls.
-Falls back to OpenRouter (DeepSeek V3.2) when Gemini is unavailable.
+LLM API Client
+Shared async client for LLM API calls.
+Primary: OpenRouter (DeepSeek V3.2). Fallback: Google Gemini.
 """
 
 import os
-import asyncio
 import logging
 import httpx
 import json
@@ -15,35 +14,34 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-3-flash-preview"
+GEMINI_MODEL = "gemini-3-flash-preview"
 OPENROUTER_MODEL = "deepseek/deepseek-v3.2"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MAX_RETRIES = 3
 
-_client: Optional[genai.Client] = None
+_gemini_client: Optional[genai.Client] = None
 
 
 def get_gemini_client() -> genai.Client:
     """Get or create Gemini client singleton."""
-    global _client
-    if _client is None:
+    global _gemini_client
+    if _gemini_client is None:
         api_key = os.getenv("GOOGLE_GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_GEMINI_API_KEY not configured")
-        _client = genai.Client(api_key=api_key)
-    return _client
+        _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
 
 
-async def _openrouter_fallback(
+async def _openrouter_request(
     system_instruction: str,
     user_prompt: str,
     temperature: float = 0.7,
     response_mime_type: Optional[str] = None,
 ) -> str:
-    """Call OpenRouter DeepSeek V3.2 as fallback when Gemini is down."""
+    """Call OpenRouter DeepSeek V3.2 (primary provider)."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        raise ValueError("OPENROUTER_API_KEY not configured — cannot fall back from Gemini")
+        raise ValueError("OPENROUTER_API_KEY not configured")
 
     messages = [
         {"role": "system", "content": system_instruction},
@@ -73,33 +71,19 @@ async def _openrouter_fallback(
 
     text = data["choices"][0]["message"]["content"]
     if not text:
-        raise ValueError("Empty response from OpenRouter fallback")
+        raise ValueError("Empty response from OpenRouter")
     return text.strip()
 
 
-async def generate_content(
+async def _gemini_request(
     system_instruction: str,
     user_prompt: str,
-    model: str = DEFAULT_MODEL,
+    model: str = GEMINI_MODEL,
     temperature: float = 0.7,
     max_tokens: Optional[int] = None,
     response_mime_type: Optional[str] = None,
 ) -> str:
-    """
-    Generate content using Gemini async API.
-    Retries on transient errors. Falls back to OpenRouter if Gemini is unavailable.
-
-    Args:
-        system_instruction: System prompt/instructions
-        user_prompt: User message
-        model: Gemini model ID
-        temperature: Sampling temperature (0-2)
-        max_tokens: Maximum output tokens (None = no limit)
-        response_mime_type: Optional MIME type to constrain output (e.g. "application/json")
-
-    Returns:
-        Generated text content
-    """
+    """Call Gemini API (fallback provider)."""
     client = get_gemini_client()
 
     config_kwargs = {
@@ -112,43 +96,62 @@ async def generate_content(
 
     config = types.GenerateContentConfig(**config_kwargs)
 
-    last_error = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = await client.aio.models.generate_content(
-                model=model,
-                contents=user_prompt,
-                config=config,
-            )
+    response = await client.aio.models.generate_content(
+        model=model,
+        contents=user_prompt,
+        config=config,
+    )
 
-            if not response.text:
-                raise ValueError("Empty response from Gemini API")
+    if not response.text:
+        raise ValueError("Empty response from Gemini API")
 
-            return response.text.strip()
+    return response.text.strip()
 
-        except Exception as e:
-            last_error = e
-            err_str = str(e)
-            is_retryable = (
-                "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-                or "503" in err_str or "UNAVAILABLE" in err_str
-            )
-            if is_retryable and attempt < MAX_RETRIES:
-                delay = 8 * attempt  # 8s, 16s
-                logger.warning(f"Gemini error (attempt {attempt}), retrying in {delay}s: {err_str[:120]}")
-                await asyncio.sleep(delay)
-            else:
-                break
 
-    # All Gemini retries failed — try OpenRouter fallback
-    logger.warning(f"Gemini failed after {MAX_RETRIES} attempts, falling back to OpenRouter: {last_error}")
+async def generate_content(
+    system_instruction: str,
+    user_prompt: str,
+    model: str = GEMINI_MODEL,
+    temperature: float = 0.7,
+    max_tokens: Optional[int] = None,
+    response_mime_type: Optional[str] = None,
+) -> str:
+    """
+    Generate content via LLM.
+    Primary: OpenRouter (DeepSeek V3.2). Fallback: Gemini.
+
+    Args:
+        system_instruction: System prompt/instructions
+        user_prompt: User message
+        model: Gemini model ID (used only if falling back to Gemini)
+        temperature: Sampling temperature (0-2)
+        max_tokens: Maximum output tokens (None = no limit)
+        response_mime_type: Optional MIME type to constrain output (e.g. "application/json")
+
+    Returns:
+        Generated text content
+    """
+    # Try OpenRouter first
     try:
-        return await _openrouter_fallback(
+        return await _openrouter_request(
             system_instruction=system_instruction,
             user_prompt=user_prompt,
             temperature=temperature,
             response_mime_type=response_mime_type,
         )
+    except Exception as e:
+        logger.warning(f"OpenRouter failed, falling back to Gemini: {str(e)[:120]}")
+
+    # Fallback to Gemini
+    try:
+        return await _gemini_request(
+            system_instruction=system_instruction,
+            user_prompt=user_prompt,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_mime_type=response_mime_type,
+        )
     except Exception as fallback_err:
-        logger.error(f"OpenRouter fallback also failed: {fallback_err}")
-        raise last_error
+        logger.error(f"Gemini fallback also failed: {fallback_err}")
+        raise fallback_err
