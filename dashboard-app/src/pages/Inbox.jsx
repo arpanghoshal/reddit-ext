@@ -82,6 +82,13 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
 
   useEffect(() => {
     if (conversation) {
+      // Reset reply state when switching conversations
+      setSuggestion('');
+      setReplyText('');
+      setImprovementInstructions('');
+      setGeneratingSuggestion(false);
+      setImprovingSuggestion(false);
+
       loadConversation(true);
       checkQueuedReply();
 

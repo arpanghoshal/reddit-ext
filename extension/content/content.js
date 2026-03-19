@@ -2347,11 +2347,15 @@ async function executeDirectChatSend(targetUser, text) {
             }
         }
 
-        // Final fallback: poll for chat input alone (page may still be loading)
+        // Final fallback: poll for chat input, but verify it's the right conversation
         reportToBackground('debug', 'Race failed, polling for chat input as last resort...', { component: 'content' });
-        const chatInput = await pollForElement(findChatInput, 8000, 500);
+        const chatInput = await pollForElement(() => {
+            const input = findChatInput();
+            if (input && verifyConversationUser(targetUser)) return input;
+            return null;
+        }, 8000, 500);
         if (chatInput) {
-            reportToBackground('debug', `Chat input found (late) - typing directly for ${targetUser}`, { component: 'content' });
+            reportToBackground('debug', `Chat input found and verified for ${targetUser}`, { component: 'content' });
             return await executeTypeMessage(text);
         }
 
@@ -2403,18 +2407,19 @@ async function executeDirectChatSend(targetUser, text) {
 // Returns 'direct' if a chat input is found, 'sidebar' if a sidebar entry is found, or null.
 function raceForChatReady(targetLower, timeout, interval) {
     return new Promise((resolve) => {
-        // Check immediately
-        if (findChatInput()) return resolve('direct');
+        // Prioritize sidebar — it's the reliable path to the correct user
         if (findChatUserElement(targetLower)) return resolve('sidebar');
+        // Only resolve 'direct' if chat input exists AND we can verify it's the right user
+        if (findChatInput() && verifyConversationUser(targetLower)) return resolve('direct');
 
         const start = Date.now();
         const timer = setInterval(() => {
-            if (findChatInput()) {
-                clearInterval(timer);
-                resolve('direct');
-            } else if (findChatUserElement(targetLower)) {
+            if (findChatUserElement(targetLower)) {
                 clearInterval(timer);
                 resolve('sidebar');
+            } else if (findChatInput() && verifyConversationUser(targetLower)) {
+                clearInterval(timer);
+                resolve('direct');
             } else if (Date.now() - start >= timeout) {
                 clearInterval(timer);
                 resolve(null);

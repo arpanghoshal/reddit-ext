@@ -16,6 +16,13 @@ from . import dedup
 
 logger = logging.getLogger(__name__)
 
+# Known Reddit system/non-human accounts to always skip (lowercase)
+EXCLUDED_ACCOUNTS = frozenset({
+    "automoderator", "reddit", "redditads", "reddit_ads",
+    "reddithelp", "mod_mailer", "anti_spam_account",
+    "reddit_irl", "redditstatic",
+})
+
 
 # ============================================================================
 # CRUD Operations
@@ -256,6 +263,10 @@ async def refresh_watch(watch_id: str, team_id: str):
 
             # Skip if no URL, no author, or deleted
             if not post_url or not author or author == "[deleted]":
+                continue
+
+            # Skip known system/non-human accounts (AutoModerator, ads, etc.)
+            if author.lower() in EXCLUDED_ACCOUNTS:
                 continue
 
             # Skip if older than last check
