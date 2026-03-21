@@ -2778,8 +2778,10 @@ async function recoverInterruptedAutomation() {
 
         const authed = await api.isAuthenticated();
         if (authed) {
-            extLogInfo('User authenticated on worker start - auto-starting reply queue polling', { component: 'background' });
-            startReplyQueuePolling();
+            extLogInfo('User authenticated on worker start - reply queue polling available (not auto-started)', { component: 'background' });
+            // NOTE: Do NOT auto-start reply queue polling on SW restart.
+            // Polling is started explicitly when the user triggers sends from the dashboard
+            // or logs in. Auto-starting caused unexpected DMs on extension load.
         } else {
             extLogDebug('User not authenticated on worker start - reply queue polling not started', { component: 'background' });
         }
