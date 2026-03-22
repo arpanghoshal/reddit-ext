@@ -1576,8 +1576,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         api.resetApiConfig();
         api.login(request.email, request.password)
             .then(result => {
-                // Auto-start reply queue polling after successful login
-                startReplyQueuePolling();
                 sendResponse({ success: true, ...result });
             })
             .catch(err => sendResponse({ error: err.message }));
@@ -1744,7 +1742,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         };
         chrome.storage.local.set(authData).then(() => {
             api.resetApiConfig();
-            startReplyQueuePolling();
             sendResponse({ success: true });
         });
         return true;
