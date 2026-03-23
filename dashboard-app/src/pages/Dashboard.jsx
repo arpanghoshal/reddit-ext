@@ -169,9 +169,23 @@ export default function Dashboard() {
       if (document.visibilityState === 'visible') loadData();
     };
     document.addEventListener('visibilitychange', onVisible);
+
+    // Listen for extension notifications (DM sent, queue updated) to refresh immediately
+    // Debounce to avoid excessive API calls when multiple events fire in quick succession
+    let debounceTimer = null;
+    const onExtMessage = (event) => {
+      if (event.data?.type === 'RDM_QUEUE_UPDATED') {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => loadData(), 500);
+      }
+    };
+    window.addEventListener('message', onExtMessage);
+
     return () => {
       clearInterval(interval);
+      clearTimeout(debounceTimer);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('message', onExtMessage);
     };
   }, []);
 

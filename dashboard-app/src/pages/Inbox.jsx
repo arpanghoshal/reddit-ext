@@ -80,6 +80,8 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
   const [improvementInstructions, setImprovementInstructions] = useState('');
   const [improvingSuggestion, setImprovingSuggestion] = useState(false);
   const conversationIdRef = useRef(conversation?.id);
+  // Cache suggestions per conversation so they persist across chat switches
+  const suggestionCacheRef = useRef({});
 
   useEffect(() => {
     conversationIdRef.current = conversation?.id;
@@ -88,11 +90,21 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
   useEffect(() => {
     if (conversation) {
       // Reset reply state when switching conversations
-      setSuggestion('');
-      setReplyText('');
+      setQueuedReply(null);
       setImprovementInstructions('');
-      setGeneratingSuggestion(false);
       setImprovingSuggestion(false);
+
+      // Restore cached suggestion for this conversation, or clear
+      const cached = suggestionCacheRef.current[conversation.id];
+      if (cached) {
+        setSuggestion(cached.suggestion || '');
+        setReplyText(cached.replyText || '');
+        setGeneratingSuggestion(false);
+      } else {
+        setSuggestion('');
+        setReplyText('');
+        setGeneratingSuggestion(false);
+      }
 
       loadConversation(true);
       checkQueuedReply();
@@ -135,7 +147,17 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
     setGeneratingSuggestion(true);
     try {
       const reply = await api.getReplySuggestion(targetId);
-      // Only apply if user hasn't switched to a different conversation
+      // Always cache the result so it's available when switching back
+      // Evict oldest entries if cache grows too large (keep last 20)
+      const cacheKeys = Object.keys(suggestionCacheRef.current);
+      if (cacheKeys.length >= 20) {
+        delete suggestionCacheRef.current[cacheKeys[0]];
+      }
+      suggestionCacheRef.current[targetId] = {
+        ...(suggestionCacheRef.current[targetId] || {}),
+        suggestion: reply
+      };
+      // Only update UI state if still on the same conversation
       if (conversationIdRef.current !== targetId) return;
       setSuggestion(reply);
     } catch (err) {
@@ -156,6 +178,12 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
         currentText,
         improvementInstructions.trim()
       );
+      // Cache the improved suggestion
+      suggestionCacheRef.current[targetId] = {
+        ...(suggestionCacheRef.current[targetId] || {}),
+        suggestion: improved,
+        replyText: replyText ? improved : undefined
+      };
       if (conversationIdRef.current !== targetId) return;
       setSuggestion(improved);
       if (replyText) {
@@ -224,6 +252,8 @@ function ConversationDetail({ conversation, onUpdate, onStatusChange, accounts =
 
       setReplyText('');
       setSuggestion('');
+      // Clear the suggestion cache for this conversation since the reply was sent/queued
+      delete suggestionCacheRef.current[conversation.id];
       await checkQueuedReply();
     } catch (err) {
       logError('Failed to add to queue', { component: 'ConversationDetail', errorName: err?.name, errorStack: err?.stack });

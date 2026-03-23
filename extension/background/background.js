@@ -460,6 +460,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (stoppedTask) {
             if (stoppedTask.data?.queueItemId) {
                 clearQueueItemInProgress(stoppedTask.data.queueItemId).catch(() => {});
+                // Mark the queue item as failed so it doesn't show as approved/sent in inbox
+                api.markQueueItemFailed(stoppedTask.data.queueItemId, 'Stopped by user').catch(err => {
+                    extLogError(`Failed to mark stopped queue item as failed: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
+                });
             }
             delete activeTasks[tabId];
         }
@@ -876,7 +880,22 @@ async function processNextStep(tabId) {
                                     skipReason: 'already_contacted',
                                     skipDetails: { source: contactCheck.source }
                                 }).catch(err => extLogError(`Failed to log skipped post: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
-                                handleStepCompletion(tabId, { success: false, error: 'Already contacted' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
+
+                                // Auto-skip in batch mode instead of requiring human intervention
+                                if (skipQueue && skipQueue.isActive) {
+                                    chrome.tabs.sendMessage(tabId, {
+                                        action: 'SHOW_TOAST',
+                                        message: `Skipped u/${postData.author} — already contacted`,
+                                        type: 'info'
+                                    }).catch(() => {});
+                                    skipQueue.currentIndex++;
+                                    delete activeTasks[tabId];
+                                    onStateChanged();
+                                    processNextQueueItem(tabId);
+                                } else {
+                                    // Single automation — show error so user knows
+                                    handleStepCompletion(tabId, { success: false, error: 'Already contacted' }).catch(err => extLogError(`handleStepCompletion error: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack }));
+                                }
                                 return;
                             }
                         } catch (err) {
@@ -1109,6 +1128,9 @@ async function handleStepCompletion(tabId, result) {
             }
             recordDMSent(currentAccountId);
 
+            // Notify dashboard immediately so message count refreshes right away
+            notifyDashboardQueueUpdate();
+
             // Mark queue item as sent (replies and outreach)
             if (task.data.queueItemId) {
                 extLogInfo(`Marking queue item as sent: ${task.data.queueItemId}`, { component: 'background' });
@@ -1137,6 +1159,12 @@ async function handleStepCompletion(tabId, result) {
                 clearQueueItemAttempts(task.data.queueItemId).catch(() => {});
                 // Notify dashboard immediately so queue UI updates without waiting for poll
                 notifyDashboardQueueUpdate();
+            }
+
+            // Guard: if the task was deleted by STOP_AUTOMATION during async ops above, bail out
+            if (!activeTasks[tabId]) {
+                extLogDebug('Task was stopped during post-send processing, skipping DM log', { component: 'background' });
+                return;
             }
 
             // Log DM to Supabase (tagged with the current logged-in account)
@@ -1535,6 +1563,9 @@ chrome.commands.onCommand.addListener(async (command) => {
         if (stoppedTask) {
             if (stoppedTask.data?.queueItemId) {
                 clearQueueItemInProgress(stoppedTask.data.queueItemId).catch(() => {});
+                api.markQueueItemFailed(stoppedTask.data.queueItemId, 'Stopped by user').catch(err => {
+                    extLogError(`Failed to mark stopped queue item as failed: ${err?.message}`, { component: 'background', errorName: err?.name, errorStack: err?.stack });
+                });
             }
             delete activeTasks[tab.id];
         }
@@ -2378,9 +2409,10 @@ async function processReplyQueueItem(item) {
         return;
     }
 
-    // Start automation task for this reply on the available tab
+    // Navigate to chat page directly and use DIRECT_CHAT_SEND to find user in sidebar.
+    // This is more reliable than profile → click chat → wait, which has more failure points.
     activeTasks[tabId] = {
-        status: AutomationState.NAVIGATING_PROFILE,
+        status: AutomationState.TYPING_MESSAGE,
         data: {
             targetUser: item.recipientUsername,
             message: item.finalMessage,
@@ -2393,13 +2425,32 @@ async function processReplyQueueItem(item) {
     };
     onStateChanged();
 
-    // Notify content script to show sidebar with progress
-    notifyAutomationProgress(tabId);
+    // Navigate to chat page
+    const chatUrl = 'https://www.reddit.com/chat/';
+    await chrome.tabs.update(tabId, { url: chatUrl });
 
-    // Navigate to user's profile
-    const profileUrl = `https://www.reddit.com/user/${item.recipientUsername}/`;
-    await chrome.tabs.update(tabId, { url: profileUrl });
-    activeTasks[tabId].status = AutomationState.WAITING_FOR_PROFILE;
+    // Wait for the chat page to load
+    await new Promise((resolve) => {
+        const listener = (updatedTabId, changeInfo) => {
+            if (updatedTabId === tabId && changeInfo.status === 'complete') {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+            }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+        }, 15000);
+    });
+
+    // Use DIRECT_CHAT_SEND to find user in sidebar and send
+    sendCommandWithReadinessCheck(tabId, {
+        action: 'EXECUTE_ACTION',
+        command: 'DIRECT_CHAT_SEND',
+        targetUser: item.recipientUsername,
+        text: item.finalMessage
+    }, AutomationState.TYPING_MESSAGE, 'DIRECT_CHAT_SEND');
 
     // The existing automation flow will handle clicking chat and typing the message
     // When complete, handleStepCompletion will mark the queue item as sent

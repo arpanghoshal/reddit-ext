@@ -2044,6 +2044,8 @@ async function init() {
 // The actual result is delivered via AUTOMATION_STEP_COMPLETE messages.
 function handleAutomationCommand(request) {
     reportToBackground('info', `Received automation command: ${request.command}`, { component: 'content' });
+    // Ensure automation flag is set so typing checks don't abort prematurely
+    isAutomationRunning = true;
 
     switch (request.command) {
         case 'CLICK_CHAT_BUTTON':
@@ -2395,8 +2397,16 @@ async function executeDirectChatSend(targetUser, text) {
 
     if (!verifyConversationUser(targetUser)) {
         reportToBackground('warn', `Conversation header does not match target user: ${targetUser}`, { component: 'content' });
-        // Don't hard-fail — the conversation may still be correct if Reddit's UI doesn't show the username prominently
-        reportToBackground('debug', 'Proceeding cautiously...', { component: 'content' });
+        // Retry: wait a bit longer and re-verify (Reddit may still be rendering)
+        await new Promise(r => setTimeout(r, 2000));
+        if (!verifyConversationUser(targetUser)) {
+            reportToBackground('error', `Wrong conversation open — expected ${targetUser}, aborting to prevent messaging wrong user`, { component: 'content' });
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: false, error: `Wrong conversation: expected ${targetUser}`, step: 'VERIFY_USER' }
+            });
+            return { success: false, error: `Wrong conversation: expected ${targetUser}` };
+        }
     }
 
     // Type and send using the existing logic
@@ -4284,6 +4294,11 @@ async function simulateTyping(element, text) {
     if (element.isContentEditable) {
         for (let i = 0; i < text.length; i++) {
             if (!isAutomationRunning) break;
+            // Check element is still in DOM every 20 chars (Reddit may re-render)
+            if (i > 0 && i % 20 === 0 && !element.isConnected) {
+                reportToBackground('warn', `Input element detached after ${i} chars, aborting char-by-char`, { component: 'content' });
+                break;
+            }
             document.execCommand('insertText', false, text[i]);
             await typingDelay(80);
         }
@@ -4301,6 +4316,10 @@ async function simulateTyping(element, text) {
             reportToBackground('debug', 'execCommand works for textarea, typing remaining chars...', { component: 'content' });
             for (let i = 1; i < text.length; i++) {
                 if (!isAutomationRunning) break;
+                if (i % 20 === 0 && !element.isConnected) {
+                    reportToBackground('warn', `Textarea element detached after ${i} chars`, { component: 'content' });
+                    break;
+                }
                 document.execCommand('insertText', false, text[i]);
                 await typingDelay(80);
             }
@@ -4316,6 +4335,7 @@ async function simulateTyping(element, text) {
             if (nativeSetter) {
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
+                    if (i > 0 && i % 20 === 0 && !element.isConnected) break;
                     nativeSetter.call(element, (element.value || '') + text[i]);
                     element.dispatchEvent(new InputEvent('input', {
                         bubbles: true,
@@ -4346,32 +4366,43 @@ async function simulateTyping(element, text) {
 
     await new Promise(r => setTimeout(r, 300));
 
-    // Verify text was entered
-    const currentValue = element.isContentEditable
-        ? (element.textContent || element.innerText || '')
-        : (element.value || '');
+    // Verify text was entered — check for both empty AND partial typing (e.g., only 2 letters)
+    const getElementValue = (el) => el.isContentEditable
+        ? (el.textContent || el.innerText || '')
+        : (el.value || '');
+
+    let currentValue = getElementValue(element);
     reportToBackground('debug', `After typing, input value length: ${currentValue.length} expected: ${text.length}`, { component: 'content' });
 
-    if (currentValue.length === 0) {
-        reportToBackground('warn', 'Text not entered! Trying bulk paste approach...', { component: 'content' });
-        // Last resort: set the full text at once
-        if (element.isContentEditable) {
-            element.textContent = text;
-            element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+    // If element was detached (Reddit re-rendered), try to re-find the chat input
+    if (!element.isConnected || currentValue.length < text.length * 0.5) {
+        const staleReason = !element.isConnected ? 'element detached from DOM' : `only ${currentValue.length}/${text.length} chars entered`;
+        reportToBackground('warn', `Typing incomplete (${staleReason}), re-finding input and retrying with bulk paste...`, { component: 'content' });
+
+        // Re-find the active input element
+        const freshInput = findChatInput() || element;
+        if (freshInput !== element) {
+            reportToBackground('debug', 'Found fresh chat input element after re-render', { component: 'content' });
+        }
+
+        // Clear existing partial text and bulk-paste the full message
+        if (freshInput.isContentEditable) {
+            freshInput.textContent = '';
+            freshInput.focus();
+            await new Promise(r => setTimeout(r, 100));
+            freshInput.textContent = text;
+            freshInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
         } else {
             const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-            if (setter) setter.call(element, text);
-            else element.value = text;
-            element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+            if (setter) setter.call(freshInput, text);
+            else freshInput.value = text;
+            freshInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
         }
-        // Also fire change event
-        element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        freshInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
         await new Promise(r => setTimeout(r, 300));
 
-        const retryValue = element.isContentEditable
-            ? (element.textContent || element.innerText || '')
-            : (element.value || '');
-        reportToBackground('debug', `After bulk paste, input value length: ${retryValue.length}`, { component: 'content' });
+        const retryValue = getElementValue(freshInput);
+        reportToBackground('debug', `After bulk paste retry, input value length: ${retryValue.length}`, { component: 'content' });
     }
 
     await new Promise(r => setTimeout(r, 500));
