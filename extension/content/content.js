@@ -4471,6 +4471,50 @@ async function simulateTyping(element, text, targetUser = null) {
         element.setSelectionRange(len, len);
     }
 
+    // --- Focus guard: detect if focus has moved away from our target element ---
+    // document.execCommand('insertText') types into whatever is FOCUSED, not into `element`.
+    // If the user switches chats, focus moves to the new chat input, and execCommand
+    // would type into the WRONG conversation. We must check before every character.
+    const isFocusStolen = () => {
+        // For contenteditable, check if element still contains the selection
+        if (element.isContentEditable) {
+            const sel = element.getRootNode().getSelection ? element.getRootNode().getSelection() : window.getSelection();
+            if (sel && sel.anchorNode) {
+                return !element.contains(sel.anchorNode);
+            }
+        }
+        // For textarea/input, check activeElement
+        const active = document.activeElement;
+        return active !== element && !element.contains(active);
+    };
+
+    // Helper: abort typing, clear text from BOTH old and current inputs
+    const abortTyping = (reason) => {
+        reportToBackground('error', `${reason} — aborting typing to prevent wrong-user send`, { component: 'content' });
+        isAutomationRunning = false;
+        // Clear original element
+        try {
+            if (element.isContentEditable) {
+                element.textContent = '';
+            } else {
+                element.value = '';
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        } catch (e) { /* element may be detached */ }
+        // Also clear whatever is currently focused (may be new chat's input)
+        try {
+            const currentInput = findChatInput();
+            if (currentInput && currentInput !== element) {
+                if (currentInput.isContentEditable) {
+                    currentInput.textContent = '';
+                } else {
+                    currentInput.value = '';
+                }
+                currentInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        } catch (e) { /* best effort */ }
+    };
+
     // Strategy 1: Try execCommand (works for both contenteditable and textarea in Chrome)
     let execCmdWorked = false;
     if (element.isContentEditable) {
@@ -4481,14 +4525,19 @@ async function simulateTyping(element, text, targetUser = null) {
                 reportToBackground('warn', `Input element detached after ${i} chars, aborting char-by-char`, { component: 'content' });
                 break;
             }
+            // CRITICAL: Check focus hasn't moved to a different element (chat switch)
+            if (i > 0 && i % 5 === 0 && isFocusStolen()) {
+                abortTyping(`Focus stolen from target input after ${i} chars (user likely switched chats)`);
+                break;
+            }
             // Verify conversation hasn't changed every 10 chars
             if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
-                reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
-                // Clear partial text to prevent wrong-user send
-                element.textContent = '';
-                element.dispatchEvent(new Event('input', { bubbles: true }));
-                isAutomationRunning = false;
+                abortTyping(`Conversation switched during typing (expected ${targetUser})`);
                 break;
+            }
+            // Re-focus our element before each execCommand to prevent typing into wrong input
+            if (i > 0 && i % 5 === 0) {
+                element.focus();
             }
             document.execCommand('insertText', false, text[i]);
             await typingDelay(80);
@@ -4511,13 +4560,15 @@ async function simulateTyping(element, text, targetUser = null) {
                     reportToBackground('warn', `Textarea element detached after ${i} chars`, { component: 'content' });
                     break;
                 }
-                if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
-                    reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
-                    element.value = '';
-                    element.dispatchEvent(new Event('input', { bubbles: true }));
-                    isAutomationRunning = false;
+                if (i > 0 && i % 5 === 0 && isFocusStolen()) {
+                    abortTyping(`Focus stolen from textarea after ${i} chars (user likely switched chats)`);
                     break;
                 }
+                if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
+                    abortTyping(`Conversation switched during typing (expected ${targetUser})`);
+                    break;
+                }
+                if (i > 0 && i % 5 === 0) element.focus();
                 document.execCommand('insertText', false, text[i]);
                 await typingDelay(80);
             }
@@ -4534,11 +4585,12 @@ async function simulateTyping(element, text, targetUser = null) {
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
                     if (i > 0 && i % 20 === 0 && !element.isConnected) break;
+                    if (i > 0 && i % 5 === 0 && isFocusStolen()) {
+                        abortTyping(`Focus stolen during native setter typing after ${i} chars`);
+                        break;
+                    }
                     if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
-                        reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
-                        nativeSetter.call(element, '');
-                        element.dispatchEvent(new Event('input', { bubbles: true }));
-                        isAutomationRunning = false;
+                        abortTyping(`Conversation switched during typing (expected ${targetUser})`);
                         break;
                     }
                     nativeSetter.call(element, (element.value || '') + text[i]);
@@ -4554,11 +4606,12 @@ async function simulateTyping(element, text, targetUser = null) {
                 // Strategy 3: Direct value + composed events
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
+                    if (i > 0 && i % 5 === 0 && isFocusStolen()) {
+                        abortTyping(`Focus stolen during direct value typing after ${i} chars`);
+                        break;
+                    }
                     if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
-                        reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
-                        element.value = '';
-                        element.dispatchEvent(new Event('input', { bubbles: true }));
-                        isAutomationRunning = false;
+                        abortTyping(`Conversation switched during typing (expected ${targetUser})`);
                         break;
                     }
                     element.value += text[i];
@@ -4587,34 +4640,52 @@ async function simulateTyping(element, text, targetUser = null) {
     reportToBackground('debug', `After typing, input value length: ${currentValue.length} expected: ${text.length}`, { component: 'content' });
 
     // If element was detached (Reddit re-rendered), try to re-find the chat input
-    if (!element.isConnected || currentValue.length < text.length * 0.5) {
-        const staleReason = !element.isConnected ? 'element detached from DOM' : `only ${currentValue.length}/${text.length} chars entered`;
-        reportToBackground('warn', `Typing incomplete (${staleReason}), re-finding input and retrying with bulk paste...`, { component: 'content' });
-
-        // Re-find the active input element
-        const freshInput = findChatInput() || element;
-        if (freshInput !== element) {
-            reportToBackground('debug', 'Found fresh chat input element after re-render', { component: 'content' });
-        }
-
-        // Clear existing partial text and bulk-paste the full message
-        if (freshInput.isContentEditable) {
-            freshInput.textContent = '';
-            freshInput.focus();
-            await new Promise(r => setTimeout(r, 100));
-            freshInput.textContent = text;
-            freshInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+    // BUT ONLY if the conversation hasn't changed — otherwise we'd paste into the wrong chat!
+    if (!isAutomationRunning) {
+        reportToBackground('info', 'Automation stopped during typing, skipping retry', { component: 'content' });
+    } else if (!element.isConnected || currentValue.length < text.length * 0.5) {
+        // SAFETY: verify conversation hasn't changed before retrying
+        if (targetUser && !verifyConversationUser(targetUser)) {
+            reportToBackground('error', `Typing incomplete but conversation changed (expected ${targetUser}), NOT retrying to prevent wrong-user send`, { component: 'content' });
+            // Clear any leaked text
+            try {
+                const currentInput = findChatInput();
+                if (currentInput) {
+                    if (currentInput.isContentEditable) currentInput.textContent = '';
+                    else currentInput.value = '';
+                    currentInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            } catch (e) { /* best effort */ }
+            isAutomationRunning = false;
         } else {
-            const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-            if (setter) setter.call(freshInput, text);
-            else freshInput.value = text;
-            freshInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
-        }
-        freshInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-        await new Promise(r => setTimeout(r, 300));
+            const staleReason = !element.isConnected ? 'element detached from DOM' : `only ${currentValue.length}/${text.length} chars entered`;
+            reportToBackground('warn', `Typing incomplete (${staleReason}), re-finding input and retrying with bulk paste...`, { component: 'content' });
 
-        const retryValue = getElementValue(freshInput);
-        reportToBackground('debug', `After bulk paste retry, input value length: ${retryValue.length}`, { component: 'content' });
+            // Re-find the active input element
+            const freshInput = findChatInput() || element;
+            if (freshInput !== element) {
+                reportToBackground('debug', 'Found fresh chat input element after re-render', { component: 'content' });
+            }
+
+            // Clear existing partial text and bulk-paste the full message
+            if (freshInput.isContentEditable) {
+                freshInput.textContent = '';
+                freshInput.focus();
+                await new Promise(r => setTimeout(r, 100));
+                freshInput.textContent = text;
+                freshInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+            } else {
+                const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+                if (setter) setter.call(freshInput, text);
+                else freshInput.value = text;
+                freshInput.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+            }
+            freshInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+            await new Promise(r => setTimeout(r, 300));
+
+            const retryValue = getElementValue(freshInput);
+            reportToBackground('debug', `After bulk paste retry, input value length: ${retryValue.length}`, { component: 'content' });
+        }
     }
 
     await new Promise(r => setTimeout(r, 500));
