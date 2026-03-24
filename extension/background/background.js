@@ -1301,13 +1301,36 @@ async function handleStepCompletion(tabId, result) {
         };
 
         // Check if we can retry
+        const isChatSwitchAbort = (result.error || '').includes('switched') || (result.error || '').includes('detached') || (result.error || '').includes('focus');
         if (task.retries < RETRY_CONFIG.maxRetries) {
-            // Show error UI with retry option
-            chrome.tabs.sendMessage(tabId, {
-                action: 'AUTOMATION_ERROR',
-                error: { message: result.error || 'Step failed' },
-                context: errorContext
-            }).catch(() => {});
+            if (isChatSwitchAbort) {
+                // Auto-retry for chat-switch aborts — user didn't intend to cancel,
+                // they just navigated away; retry will navigate back to correct chat
+                task.retries = (task.retries || 0) + 1;
+                const delay = getRetryDelay(task.retries - 1);
+                extLogInfo(`Chat switch detected, auto-retrying ${task.retries}/${RETRY_CONFIG.maxRetries} after ${delay}ms`, { component: 'background' });
+                chrome.tabs.sendMessage(tabId, {
+                    action: 'SHOW_TOAST',
+                    message: `Chat switched — retrying in ${Math.round(delay / 1000)}s...`,
+                    type: 'warning'
+                }).catch(() => {});
+                setTrackedTimeout(tabId, () => {
+                    // Reset status so processNextStep re-enters the correct step
+                    if (task.status === AutomationState.CLICKING_CHAT) {
+                        task.status = AutomationState.WAITING_FOR_PROFILE;
+                    } else if (task.status === AutomationState.TYPING_MESSAGE) {
+                        task.status = AutomationState.WAITING_FOR_CHAT;
+                    }
+                    processNextStep(tabId);
+                }, delay);
+            } else {
+                // Show error UI with manual retry option for other errors
+                chrome.tabs.sendMessage(tabId, {
+                    action: 'AUTOMATION_ERROR',
+                    error: { message: result.error || 'Step failed' },
+                    context: errorContext
+                }).catch(() => {});
+            }
 
             extLogDebug(`Error shown to user. Retries: ${task.retries}/${RETRY_CONFIG.maxRetries}`, { component: 'background' });
         } else {
