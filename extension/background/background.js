@@ -1131,6 +1131,14 @@ async function handleStepCompletion(tabId, result) {
             // Notify dashboard immediately so message count refreshes right away
             notifyDashboardQueueUpdate();
 
+            // Notify sidebar on all Reddit tabs to refresh stats (Today count, quota bar)
+            try {
+                const redditTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+                for (const tab of redditTabs) {
+                    chrome.tabs.sendMessage(tab.id, { action: 'REFRESH_SIDEBAR_STATS' }).catch(() => {});
+                }
+            } catch (e) { /* ignore */ }
+
             // Mark queue item as sent (replies and outreach)
             if (task.data.queueItemId) {
                 extLogInfo(`Marking queue item as sent: ${task.data.queueItemId}`, { component: 'background' });

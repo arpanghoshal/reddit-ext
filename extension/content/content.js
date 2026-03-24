@@ -1952,9 +1952,11 @@ async function init() {
             sendResponse(handleAutomationCommand(request));
         } else if (request.action === 'AUTOMATION_STOPPED') {
             isAutomationRunning = false;
+            hideFloatingStopButton();
             showToast('Automation stopped', 'info');
             checkPageStatus();
         } else if (request.action === 'AUTOMATION_ERROR') {
+            hideFloatingStopButton();
             ensureSidebarVisible();
             setTimeout(() => renderErrorState(request.error, request.context), 300);
             // Safety: reset toggle lock after 30s if automation doesn't resume
@@ -1982,6 +1984,8 @@ async function init() {
         } else if (request.action === 'CANCEL_BULK_SYNC') {
             bulkSyncCancelled = true;
             sendResponse({ success: true });
+        } else if (request.action === 'REFRESH_SIDEBAR_STATS') {
+            loadSidebarData();
         }
     });
 
@@ -2046,6 +2050,8 @@ function handleAutomationCommand(request) {
     reportToBackground('info', `Received automation command: ${request.command}`, { component: 'content' });
     // Ensure automation flag is set so typing checks don't abort prematurely
     isAutomationRunning = true;
+    // Show floating stop button so user can stop even without sidebar open
+    showFloatingStopButton();
 
     switch (request.command) {
         case 'CLICK_CHAT_BUTTON':
@@ -2337,7 +2343,7 @@ async function executeDirectChatSend(targetUser, text) {
 
         if (result === 'direct') {
             reportToBackground('debug', `Chat input found directly for ${targetUser} - typing...`, { component: 'content' });
-            return await executeTypeMessage(text);
+            return await executeTypeMessage(text, targetUser);
         } else if (result === 'sidebar') {
             // findChatUserElement found a clickable sidebar entry — use it
             const userRoom = findChatUserElement(targetLower);
@@ -2345,7 +2351,7 @@ async function executeDirectChatSend(targetUser, text) {
                 reportToBackground('debug', `Found conversation for ${targetUser} in sidebar - clicking...`, { component: 'content' });
                 userRoom.click();
                 await new Promise(r => setTimeout(r, 2000));
-                return await executeTypeMessage(text);
+                return await executeTypeMessage(text, targetUser);
             }
         }
 
@@ -2358,7 +2364,7 @@ async function executeDirectChatSend(targetUser, text) {
         }, 8000, 500);
         if (chatInput) {
             reportToBackground('debug', `Chat input found and verified for ${targetUser}`, { component: 'content' });
-            return await executeTypeMessage(text);
+            return await executeTypeMessage(text, targetUser);
         }
 
         reportToBackground('error', `Could not find chat conversation for: ${targetUser}`, { component: 'content' });
@@ -2378,7 +2384,7 @@ async function executeDirectChatSend(targetUser, text) {
         const chatInput = await pollForElement(findChatInput, 5000, 500);
         if (chatInput && verifyConversationUser(targetUser)) {
             reportToBackground('debug', `Chat already open for ${targetUser} - typing directly`, { component: 'content' });
-            return await executeTypeMessage(text);
+            return await executeTypeMessage(text, targetUser);
         }
 
         reportToBackground('error', `Could not find chat conversation for: ${targetUser}`, { component: 'content' });
@@ -2410,7 +2416,7 @@ async function executeDirectChatSend(targetUser, text) {
     }
 
     // Type and send using the existing logic
-    return await executeTypeMessage(text);
+    return await executeTypeMessage(text, targetUser);
 }
 
 // Race between finding the user in the sidebar and finding a direct chat input.
@@ -2510,7 +2516,7 @@ function verifyConversationUser(targetUser) {
     return false;
 }
 
-async function executeTypeMessage(text) {
+async function executeTypeMessage(text, targetUser = null) {
     if (!isContextValid()) throw new Error('Extension context invalidated');
     reportToBackground('info', 'Looking for chat input...', { component: 'content' });
 
@@ -2519,13 +2525,33 @@ async function executeTypeMessage(text) {
     const input = await pollForElement(findChatInput, 10000, 500);
 
     if (input) {
+        // Verify we're still in the correct conversation before typing
+        if (targetUser && !verifyConversationUser(targetUser)) {
+            reportToBackground('error', `Wrong conversation open before typing — expected ${targetUser}`, { component: 'content' });
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: false, error: `Wrong conversation — expected ${targetUser}`, step: 'TYPE_MESSAGE' }
+            });
+            return { success: false, error: `Wrong conversation — aborting to prevent messaging wrong user` };
+        }
+
         reportToBackground('info', 'Chat input found. Typing message...', { component: 'content' });
 
         // Show cursor animation on input first
         await showCursorAnimation(input);
 
         // Type the message
-        await simulateTyping(input, text);
+        await simulateTyping(input, text, targetUser);
+
+        // Abort if conversation changed during typing
+        if (targetUser && !verifyConversationUser(targetUser)) {
+            reportToBackground('error', `Conversation changed during typing — expected ${targetUser}, aborting send`, { component: 'content' });
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: false, error: `Conversation changed during typing — expected ${targetUser}`, step: 'TYPE_MESSAGE' }
+            });
+            return { success: false, error: 'Conversation changed during typing' };
+        }
 
         // Abort if automation was stopped during typing
         if (!isAutomationRunning) {
@@ -2578,6 +2604,7 @@ async function executeTypeMessage(text) {
             sendBtn.click();
 
             reportToBackground('info', 'Message sent successfully!', { component: 'content' });
+            hideFloatingStopButton();
 
             // --- CLOSE CHAT LOGIC REMOVED ---
             reportToBackground('debug', 'Automation stopping here as requested.', { component: 'content' });
@@ -2603,6 +2630,40 @@ async function executeTypeMessage(text) {
         });
         return { success: false, error: 'Chat input not found' };
     }
+}
+
+// --- Floating Stop Button (visible during reply automation even without sidebar open) ---
+function showFloatingStopButton() {
+    // Remove existing if any
+    hideFloatingStopButton();
+
+    const btn = document.createElement('div');
+    btn.id = 'reddit-insight-floating-stop';
+    btn.style.cssText = 'position:fixed; bottom:20px; right:20px; z-index:2147483647; font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+    btn.innerHTML = `
+        <button style="
+            background: #dc2626; color: white; border: none; padding: 10px 20px;
+            border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;
+            box-shadow: 0 4px 12px rgba(220,38,38,0.4); display: flex; align-items: center; gap: 6px;
+            transition: background 0.2s;
+        " onmouseover="this.style.background='#b91c1c'" onmouseout="this.style.background='#dc2626'">
+            <span style="font-size:16px;">&#9724;</span> Stop Reply
+        </button>
+    `;
+    btn.querySelector('button').addEventListener('click', () => {
+        isAutomationRunning = false;
+        chrome.runtime.sendMessage({ action: 'STOP_AUTOMATION' }, () => {
+            showToast('Automation stopped', 'info');
+            hideFloatingStopButton();
+            checkPageStatus();
+        });
+    });
+    document.body.appendChild(btn);
+}
+
+function hideFloatingStopButton() {
+    const existing = document.getElementById('reddit-insight-floating-stop');
+    if (existing) existing.remove();
 }
 
 // --- Sidebar Injection ---
@@ -4251,7 +4312,7 @@ function pollForElement(selectorFn, timeout = 10000, interval = 500) {
     });
 }
 
-async function simulateTyping(element, text) {
+async function simulateTyping(element, text, targetUser = null) {
     reportToBackground('debug', `simulateTyping: element type: ${element.tagName} contentEditable: ${element.isContentEditable} shadow: ${!!element.getRootNode()?.host}`, { component: 'content' });
     element.focus();
     await new Promise(r => setTimeout(r, 300)); // Let focus settle
@@ -4299,6 +4360,11 @@ async function simulateTyping(element, text) {
                 reportToBackground('warn', `Input element detached after ${i} chars, aborting char-by-char`, { component: 'content' });
                 break;
             }
+            // Verify conversation hasn't changed every 50 chars
+            if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                break;
+            }
             document.execCommand('insertText', false, text[i]);
             await typingDelay(80);
         }
@@ -4320,6 +4386,10 @@ async function simulateTyping(element, text) {
                     reportToBackground('warn', `Textarea element detached after ${i} chars`, { component: 'content' });
                     break;
                 }
+                if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                    reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                    break;
+                }
                 document.execCommand('insertText', false, text[i]);
                 await typingDelay(80);
             }
@@ -4336,6 +4406,10 @@ async function simulateTyping(element, text) {
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
                     if (i > 0 && i % 20 === 0 && !element.isConnected) break;
+                    if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                        reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                        break;
+                    }
                     nativeSetter.call(element, (element.value || '') + text[i]);
                     element.dispatchEvent(new InputEvent('input', {
                         bubbles: true,
@@ -4349,6 +4423,10 @@ async function simulateTyping(element, text) {
                 // Strategy 3: Direct value + composed events
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
+                    if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                        reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                        break;
+                    }
                     element.value += text[i];
                     element.dispatchEvent(new InputEvent('input', {
                         bubbles: true,
