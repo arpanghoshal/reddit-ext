@@ -2537,11 +2537,48 @@ async function executeTypeMessage(text, targetUser = null) {
 
         reportToBackground('info', 'Chat input found. Typing message...', { component: 'content' });
 
+        // --- URL change monitoring: abort immediately if user navigates away ---
+        const urlAtStart = window.location.href;
+        let urlChanged = false;
+        const onUrlChange = () => {
+            if (window.location.href !== urlAtStart && isAutomationRunning) {
+                urlChanged = true;
+                isAutomationRunning = false;
+                reportToBackground('error', 'URL changed during typing, aborting to prevent wrong-user send', { component: 'content' });
+            }
+        };
+        const origPushState = history.pushState;
+        const origReplaceState = history.replaceState;
+        history.pushState = function(...args) { origPushState.apply(this, args); onUrlChange(); };
+        history.replaceState = function(...args) { origReplaceState.apply(this, args); onUrlChange(); };
+        window.addEventListener('popstate', onUrlChange);
+        // Also poll for hash/href changes (Reddit chat may not use pushState)
+        const urlPollTimer = setInterval(() => {
+            if (window.location.href !== urlAtStart) onUrlChange();
+        }, 300);
+
         // Show cursor animation on input first
         await showCursorAnimation(input);
 
         // Type the message
         await simulateTyping(input, text, targetUser);
+
+        // --- Clean up URL monitoring ---
+        history.pushState = origPushState;
+        history.replaceState = origReplaceState;
+        window.removeEventListener('popstate', onUrlChange);
+        clearInterval(urlPollTimer);
+
+        // Abort if URL changed during typing
+        if (urlChanged) {
+            reportToBackground('error', `URL changed during typing — expected chat with ${targetUser}, aborting send`, { component: 'content' });
+            hideFloatingStopButton();
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: false, error: `URL changed during typing — chat switched away from ${targetUser}`, step: 'TYPE_MESSAGE' }
+            });
+            return { success: false, error: 'URL changed during typing — chat switched' };
+        }
 
         // Abort if conversation changed during typing
         if (targetUser && !verifyConversationUser(targetUser)) {
@@ -2639,15 +2676,25 @@ function showFloatingStopButton() {
 
     const btn = document.createElement('div');
     btn.id = 'reddit-insight-floating-stop';
-    btn.style.cssText = 'position:fixed; bottom:20px; right:20px; z-index:2147483647; font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+    btn.style.cssText = `
+        position: fixed; bottom: 80px; right: 20px; z-index: 2147483647;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    `;
     btn.innerHTML = `
+        <style>
+            @keyframes rdm-pulse {
+                0%, 100% { box-shadow: 0 4px 12px rgba(220,38,38,0.4); }
+                50% { box-shadow: 0 4px 24px rgba(220,38,38,0.7); }
+            }
+        </style>
         <button style="
-            background: #dc2626; color: white; border: none; padding: 10px 20px;
-            border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;
-            box-shadow: 0 4px 12px rgba(220,38,38,0.4); display: flex; align-items: center; gap: 6px;
+            background: #dc2626; color: white; border: none; padding: 12px 24px;
+            border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer;
+            box-shadow: 0 4px 12px rgba(220,38,38,0.4); display: flex; align-items: center; gap: 8px;
             transition: background 0.2s;
+            animation: rdm-pulse 1.5s ease-in-out infinite;
         " onmouseover="this.style.background='#b91c1c'" onmouseout="this.style.background='#dc2626'">
-            <span style="font-size:16px;">&#9724;</span> Stop Reply
+            <span style="font-size:18px;">&#9724;</span> Stop Reply
         </button>
     `;
     btn.querySelector('button').addEventListener('click', () => {
@@ -3106,19 +3153,19 @@ async function loadStats() {
     if (!statToday) return;
 
     try {
-        // Get analytics from background script
-        chrome.runtime.sendMessage({ action: 'GET_ANALYTICS' }, (analytics) => {
-            if (analytics) {
-                statToday.textContent = analytics.todayCount || 0;
-                statSuccess.textContent = analytics.successRate ? `${analytics.successRate}%` : '-';
+        // Use local rate-limit state for Today count (instant, no backend API latency)
+        chrome.runtime.sendMessage({ action: 'GET_RATE_LIMIT_STATUS' }, (status) => {
+            if (status) {
+                statToday.textContent = status.dailyCount || 0;
+                const remaining = Math.max(0, status.dailyLimit - status.dailyCount);
+                statRemaining.textContent = remaining;
             }
         });
 
-        // Get rate limit status for remaining
-        chrome.runtime.sendMessage({ action: 'GET_RATE_LIMIT_STATUS' }, (status) => {
-            if (status) {
-                const remaining = Math.max(0, status.dailyLimit - status.dailyCount);
-                statRemaining.textContent = remaining;
+        // Backend analytics for success rate only
+        chrome.runtime.sendMessage({ action: 'GET_ANALYTICS' }, (analytics) => {
+            if (analytics) {
+                statSuccess.textContent = analytics.successRate ? `${analytics.successRate}%` : '-';
             }
         });
     } catch (error) {
@@ -4360,9 +4407,13 @@ async function simulateTyping(element, text, targetUser = null) {
                 reportToBackground('warn', `Input element detached after ${i} chars, aborting char-by-char`, { component: 'content' });
                 break;
             }
-            // Verify conversation hasn't changed every 50 chars
-            if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+            // Verify conversation hasn't changed every 10 chars
+            if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
                 reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                // Clear partial text to prevent wrong-user send
+                element.textContent = '';
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                isAutomationRunning = false;
                 break;
             }
             document.execCommand('insertText', false, text[i]);
@@ -4386,8 +4437,11 @@ async function simulateTyping(element, text, targetUser = null) {
                     reportToBackground('warn', `Textarea element detached after ${i} chars`, { component: 'content' });
                     break;
                 }
-                if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
                     reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                    element.value = '';
+                    element.dispatchEvent(new Event('input', { bubbles: true }));
+                    isAutomationRunning = false;
                     break;
                 }
                 document.execCommand('insertText', false, text[i]);
@@ -4406,8 +4460,11 @@ async function simulateTyping(element, text, targetUser = null) {
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
                     if (i > 0 && i % 20 === 0 && !element.isConnected) break;
-                    if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                    if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
                         reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                        nativeSetter.call(element, '');
+                        element.dispatchEvent(new Event('input', { bubbles: true }));
+                        isAutomationRunning = false;
                         break;
                     }
                     nativeSetter.call(element, (element.value || '') + text[i]);
@@ -4423,8 +4480,11 @@ async function simulateTyping(element, text, targetUser = null) {
                 // Strategy 3: Direct value + composed events
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
-                    if (targetUser && i > 0 && i % 50 === 0 && !verifyConversationUser(targetUser)) {
+                    if (targetUser && i > 0 && i % 10 === 0 && !verifyConversationUser(targetUser)) {
                         reportToBackground('error', `Conversation switched during typing (expected ${targetUser}), aborting`, { component: 'content' });
+                        element.value = '';
+                        element.dispatchEvent(new Event('input', { bubbles: true }));
+                        isAutomationRunning = false;
                         break;
                     }
                     element.value += text[i];
