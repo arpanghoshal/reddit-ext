@@ -2085,7 +2085,7 @@ function handleAutomationCommand(request) {
             return { ack: true };
 
         case 'TYPE_MESSAGE':
-            executeTypeMessage(request.text).catch(err => {
+            executeTypeMessage(request.text, request.targetUser).catch(err => {
                 reportToBackground('error', 'executeTypeMessage error', { component: 'content', errorName: err?.name || err?.constructor?.name, errorStack: err?.stack });
                 safeSendMessage({
                     action: 'AUTOMATION_STEP_COMPLETE',
@@ -2524,148 +2524,222 @@ async function executeTypeMessage(text, targetUser = null) {
     // (MutationObserver on document.body cannot observe changes inside shadow roots)
     const input = await pollForElement(findChatInput, 10000, 500);
 
-    if (input) {
-        // Verify we're still in the correct conversation before typing
-        if (targetUser && !verifyConversationUser(targetUser)) {
-            reportToBackground('error', `Wrong conversation open before typing — expected ${targetUser}`, { component: 'content' });
-            safeSendMessage({
-                action: 'AUTOMATION_STEP_COMPLETE',
-                result: { success: false, error: `Wrong conversation — expected ${targetUser}`, step: 'TYPE_MESSAGE' }
-            });
-            return { success: false, error: `Wrong conversation — aborting to prevent messaging wrong user` };
-        }
-
-        reportToBackground('info', 'Chat input found. Typing message...', { component: 'content' });
-
-        // --- URL change monitoring: abort immediately if user navigates away ---
-        const urlAtStart = window.location.href;
-        let urlChanged = false;
-        const onUrlChange = () => {
-            if (window.location.href !== urlAtStart && isAutomationRunning) {
-                urlChanged = true;
-                isAutomationRunning = false;
-                reportToBackground('error', 'URL changed during typing, aborting to prevent wrong-user send', { component: 'content' });
-            }
-        };
-        const origPushState = history.pushState;
-        const origReplaceState = history.replaceState;
-        history.pushState = function(...args) { origPushState.apply(this, args); onUrlChange(); };
-        history.replaceState = function(...args) { origReplaceState.apply(this, args); onUrlChange(); };
-        window.addEventListener('popstate', onUrlChange);
-        // Also poll for hash/href changes (Reddit chat may not use pushState)
-        const urlPollTimer = setInterval(() => {
-            if (window.location.href !== urlAtStart) onUrlChange();
-        }, 300);
-
-        // Show cursor animation on input first
-        await showCursorAnimation(input);
-
-        // Type the message
-        await simulateTyping(input, text, targetUser);
-
-        // --- Clean up URL monitoring ---
-        history.pushState = origPushState;
-        history.replaceState = origReplaceState;
-        window.removeEventListener('popstate', onUrlChange);
-        clearInterval(urlPollTimer);
-
-        // Abort if URL changed during typing
-        if (urlChanged) {
-            reportToBackground('error', `URL changed during typing — expected chat with ${targetUser}, aborting send`, { component: 'content' });
-            hideFloatingStopButton();
-            safeSendMessage({
-                action: 'AUTOMATION_STEP_COMPLETE',
-                result: { success: false, error: `URL changed during typing — chat switched away from ${targetUser}`, step: 'TYPE_MESSAGE' }
-            });
-            return { success: false, error: 'URL changed during typing — chat switched' };
-        }
-
-        // Abort if conversation changed during typing
-        if (targetUser && !verifyConversationUser(targetUser)) {
-            reportToBackground('error', `Conversation changed during typing — expected ${targetUser}, aborting send`, { component: 'content' });
-            safeSendMessage({
-                action: 'AUTOMATION_STEP_COMPLETE',
-                result: { success: false, error: `Conversation changed during typing — expected ${targetUser}`, step: 'TYPE_MESSAGE' }
-            });
-            return { success: false, error: 'Conversation changed during typing' };
-        }
-
-        // Abort if automation was stopped during typing
-        if (!isAutomationRunning) {
-            reportToBackground('info', 'Automation stopped during typing, aborting send', { component: 'content' });
-            return { success: false, error: 'Automation stopped' };
-        }
-
-        // Find send button
-        const findSendButton = () => {
-            const findInShadow = (root) => {
-                if (!root) return null;
-
-                // Priority 1: aria-label="Send message"
-                const sendByAria = root.querySelector('button[aria-label="Send message"]');
-                if (sendByAria) return sendByAria;
-
-                // Priority 2: type="submit" inside chat area
-                const submitBtn = root.querySelector('button[type="submit"][aria-label*="Send"]');
-                if (submitBtn) return submitBtn;
-
-                // Recurse
-                const candidates = root.querySelectorAll('*');
-                for (const el of candidates) {
-                    if (el.shadowRoot) {
-                        const found = findInShadow(el.shadowRoot);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            };
-
-            // 1. Search main document
-            const mainDocResult = findInShadow(document);
-            if (mainDocResult) return mainDocResult;
-
-            // Fallback: Standard DOM search
-            const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(b =>
-                b.getAttribute('aria-label')?.includes('Send') ||
-                b.innerText.includes('Send')
-            );
-        };
-
-        const sendBtn = await pollForElement(findSendButton, 5000, 500);
-        if (sendBtn) {
-            reportToBackground('info', 'Send button found. Animating cursor...', { component: 'content' });
-            await showCursorAnimation(sendBtn);
-
-            reportToBackground('debug', 'Clicking send button...', { component: 'content' });
-            sendBtn.click();
-
-            reportToBackground('info', 'Message sent successfully!', { component: 'content' });
-            hideFloatingStopButton();
-
-            // --- CLOSE CHAT LOGIC REMOVED ---
-            reportToBackground('debug', 'Automation stopping here as requested.', { component: 'content' });
-
-            safeSendMessage({
-                action: 'AUTOMATION_STEP_COMPLETE',
-                result: { success: true, step: 'TYPE_MESSAGE' }
-            });
-            return { success: true };
-        } else {
-            reportToBackground('warn', 'Send button not found. Message typed but not sent.', { component: 'content' });
-            safeSendMessage({
-                action: 'AUTOMATION_STEP_COMPLETE',
-                result: { success: false, step: 'TYPE_MESSAGE', error: 'Send button not found' }
-            });
-            return { success: false, error: 'Send button not found' };
-        }
-    } else {
+    if (!input) {
         reportToBackground('error', 'Could not find chat input', { component: 'content' });
         safeSendMessage({
             action: 'AUTOMATION_STEP_COMPLETE',
             result: { success: false, error: 'Chat input not found', step: 'TYPE_MESSAGE' }
         });
         return { success: false, error: 'Chat input not found' };
+    }
+
+    // --- Save original input reference for stale-element detection ---
+    const originalInput = input;
+
+    // Verify we're still in the correct conversation before typing
+    if (targetUser && !verifyConversationUser(targetUser)) {
+        reportToBackground('error', `Wrong conversation open before typing — expected ${targetUser}`, { component: 'content' });
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `Wrong conversation — expected ${targetUser}`, step: 'TYPE_MESSAGE' }
+        });
+        return { success: false, error: `Wrong conversation — aborting to prevent messaging wrong user` };
+    }
+
+    reportToBackground('info', 'Chat input found. Typing message...', { component: 'content' });
+
+    // --- Helper: clear any text that may have leaked into the current chat input ---
+    const clearLeakedText = () => {
+        try {
+            const currentInput = findChatInput();
+            if (currentInput) {
+                if (currentInput.isContentEditable || currentInput.contentEditable === 'true') {
+                    currentInput.textContent = '';
+                } else {
+                    currentInput.value = '';
+                }
+                currentInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        } catch (e) { /* best effort */ }
+    };
+
+    // --- URL change monitoring: abort immediately if user navigates away ---
+    // NOTE: monitoring stays active through the entire flow including send-button search/click
+    const urlAtStart = window.location.href;
+    let urlChanged = false;
+    const onUrlChange = () => {
+        if (window.location.href !== urlAtStart && isAutomationRunning) {
+            urlChanged = true;
+            isAutomationRunning = false;
+            reportToBackground('error', 'URL changed during typing/send, aborting to prevent wrong-user send', { component: 'content' });
+        }
+    };
+    const origPushState = history.pushState;
+    const origReplaceState = history.replaceState;
+    history.pushState = function(...args) { origPushState.apply(this, args); onUrlChange(); };
+    history.replaceState = function(...args) { origReplaceState.apply(this, args); onUrlChange(); };
+    window.addEventListener('popstate', onUrlChange);
+    // Also poll for hash/href changes (Reddit chat may not use pushState)
+    const urlPollTimer = setInterval(() => {
+        if (window.location.href !== urlAtStart) onUrlChange();
+    }, 300);
+
+    // --- Helper: clean up URL monitoring (called on every exit path) ---
+    const cleanupUrlMonitoring = () => {
+        history.pushState = origPushState;
+        history.replaceState = origReplaceState;
+        window.removeEventListener('popstate', onUrlChange);
+        clearInterval(urlPollTimer);
+    };
+
+    // Show cursor animation on input first
+    await showCursorAnimation(input);
+
+    // Type the message
+    await simulateTyping(input, text, targetUser);
+
+    // --- Post-typing safety checks (URL monitoring still active) ---
+
+    // Abort if URL changed during typing
+    if (urlChanged) {
+        cleanupUrlMonitoring();
+        reportToBackground('error', `URL changed during typing — expected chat with ${targetUser}, aborting send`, { component: 'content' });
+        hideFloatingStopButton();
+        clearLeakedText();
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `URL changed during typing — chat switched away from ${targetUser}`, step: 'TYPE_MESSAGE' }
+        });
+        return { success: false, error: 'URL changed during typing — chat switched' };
+    }
+
+    // Abort if the original input element was detached (chat was switched)
+    if (!originalInput.isConnected) {
+        cleanupUrlMonitoring();
+        reportToBackground('error', `Original chat input detached — chat was switched away from ${targetUser}, aborting send`, { component: 'content' });
+        hideFloatingStopButton();
+        clearLeakedText();
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `Chat input detached — conversation switched away from ${targetUser}`, step: 'TYPE_MESSAGE' }
+        });
+        return { success: false, error: 'Chat input detached — conversation switched' };
+    }
+
+    // Abort if conversation changed during typing
+    if (targetUser && !verifyConversationUser(targetUser)) {
+        cleanupUrlMonitoring();
+        reportToBackground('error', `Conversation changed during typing — expected ${targetUser}, aborting send`, { component: 'content' });
+        hideFloatingStopButton();
+        clearLeakedText();
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, error: `Conversation changed during typing — expected ${targetUser}`, step: 'TYPE_MESSAGE' }
+        });
+        return { success: false, error: 'Conversation changed during typing' };
+    }
+
+    // Abort if automation was stopped during typing
+    if (!isAutomationRunning) {
+        cleanupUrlMonitoring();
+        reportToBackground('info', 'Automation stopped during typing, aborting send', { component: 'content' });
+        clearLeakedText();
+        return { success: false, error: 'Automation stopped' };
+    }
+
+    // Find send button
+    const findSendButton = () => {
+        const findInShadow = (root) => {
+            if (!root) return null;
+
+            // Priority 1: aria-label="Send message"
+            const sendByAria = root.querySelector('button[aria-label="Send message"]');
+            if (sendByAria) return sendByAria;
+
+            // Priority 2: type="submit" inside chat area
+            const submitBtn = root.querySelector('button[type="submit"][aria-label*="Send"]');
+            if (submitBtn) return submitBtn;
+
+            // Recurse
+            const candidates = root.querySelectorAll('*');
+            for (const el of candidates) {
+                if (el.shadowRoot) {
+                    const found = findInShadow(el.shadowRoot);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+
+        // 1. Search main document
+        const mainDocResult = findInShadow(document);
+        if (mainDocResult) return mainDocResult;
+
+        // Fallback: Standard DOM search
+        const buttons = Array.from(document.querySelectorAll('button'));
+        return buttons.find(b =>
+            b.getAttribute('aria-label')?.includes('Send') ||
+            b.innerText.includes('Send')
+        );
+    };
+
+    const sendBtn = await pollForElement(findSendButton, 5000, 500);
+    if (sendBtn) {
+        reportToBackground('info', 'Send button found. Animating cursor...', { component: 'content' });
+        await showCursorAnimation(sendBtn);
+
+        // ===== FINAL SAFETY GATE: verify NOTHING changed right before clicking send =====
+        const chatSwitched = (
+            urlChanged ||
+            !originalInput.isConnected ||
+            !isAutomationRunning ||
+            (targetUser && !verifyConversationUser(targetUser))
+        );
+        // Also check if the current input is a DIFFERENT element (DOM replaced by chat switch)
+        const currentInput = findChatInput();
+        const inputSwapped = currentInput && currentInput !== originalInput;
+
+        if (chatSwitched || inputSwapped) {
+            cleanupUrlMonitoring();
+            const reason = urlChanged ? 'URL changed' :
+                !originalInput.isConnected ? 'input detached' :
+                inputSwapped ? 'input element replaced' :
+                !isAutomationRunning ? 'automation stopped' :
+                'conversation header mismatch';
+            reportToBackground('error', `FINAL SAFETY GATE: aborting send — ${reason} (expected ${targetUser})`, { component: 'content' });
+            hideFloatingStopButton();
+            clearLeakedText();
+            safeSendMessage({
+                action: 'AUTOMATION_STEP_COMPLETE',
+                result: { success: false, error: `Send aborted at final gate: ${reason}`, step: 'TYPE_MESSAGE' }
+            });
+            return { success: false, error: `Send aborted at final gate: ${reason}` };
+        }
+
+        reportToBackground('debug', 'Clicking send button...', { component: 'content' });
+        sendBtn.click();
+
+        // Clean up URL monitoring AFTER successful send
+        cleanupUrlMonitoring();
+
+        reportToBackground('info', 'Message sent successfully!', { component: 'content' });
+        hideFloatingStopButton();
+
+        reportToBackground('debug', 'Automation stopping here as requested.', { component: 'content' });
+
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: true, step: 'TYPE_MESSAGE' }
+        });
+        return { success: true };
+    } else {
+        cleanupUrlMonitoring();
+        reportToBackground('warn', 'Send button not found. Message typed but not sent.', { component: 'content' });
+        safeSendMessage({
+            action: 'AUTOMATION_STEP_COMPLETE',
+            result: { success: false, step: 'TYPE_MESSAGE', error: 'Send button not found' }
+        });
+        return { success: false, error: 'Send button not found' };
     }
 }
 
