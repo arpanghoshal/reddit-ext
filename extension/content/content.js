@@ -4494,16 +4494,12 @@ async function simulateTyping(element, text, targetUser = null) {
     // If the user switches chats, focus moves to the new chat input, and execCommand
     // would type into the WRONG conversation.
     //
-    // SHADOW DOM NOTE: When element is inside a shadow root, document.activeElement
-    // returns the shadow HOST (not the textarea inside). We must drill through
-    // shadowRoot.activeElement recursively to find the real focused element.
-    const getDeepActiveElement = () => {
-        let active = document.activeElement;
-        while (active && active.shadowRoot && active.shadowRoot.activeElement) {
-            active = active.shadowRoot.activeElement;
-        }
-        return active;
-    };
+    // SHADOW DOM NOTE: When element is inside a shadow root (open OR closed),
+    // document.activeElement returns the shadow HOST, not the textarea inside.
+    // Even drilling through shadowRoot.activeElement fails for closed roots.
+    // Instead, use element.getRootNode().activeElement which works from INSIDE
+    // the shadow root regardless of open/closed mode.
+    const isInShadowDom = element.getRootNode() !== document;
 
     const isFocusStolen = () => {
         // For contenteditable, check if element still contains the selection
@@ -4513,8 +4509,19 @@ async function simulateTyping(element, text, targetUser = null) {
                 return !element.contains(sel.anchorNode);
             }
         }
-        // For textarea/input, drill through shadow DOM to find real active element
-        const active = getDeepActiveElement();
+        // For elements inside shadow DOM, check via the shadow root's activeElement
+        if (isInShadowDom) {
+            const root = element.getRootNode();
+            // If the shadow root tracks activeElement, use that
+            if (root && root.activeElement !== undefined) {
+                return root.activeElement !== element;
+            }
+            // Can't reliably detect focus in this shadow DOM — fall back to
+            // element connectivity check only (other guards will catch switches)
+            return false;
+        }
+        // For regular DOM elements, check document.activeElement directly
+        const active = document.activeElement;
         return active !== element && !element.contains(active);
     };
 
