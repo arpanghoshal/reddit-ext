@@ -2506,13 +2506,31 @@ function findChatInput() {
 
 // Standalone helper: verify the open conversation matches the target username
 function verifyConversationUser(targetUser) {
-    const headers = querySelectorDeep('h1, h2, h3, [class*="header"], [class*="title"], [class*="name"]');
     const normalizedTarget = targetUser.replace(/^u\//, '').toLowerCase();
+
+    // Priority 1: Check chat-specific headers inside the chat overlay/panel.
+    // These are the most reliable indicators of which conversation is actually open.
+    const chatHeaders = querySelectorDeep(
+        '[class*="chat"] h1, [class*="chat"] h2, [class*="chat"] h3, ' +
+        '[class*="chat"] [class*="header"], [class*="chat"] [class*="title"], [class*="chat"] [class*="name"], ' +
+        '[class*="conversation"] [class*="name"], [class*="conversation"] [class*="header"], ' +
+        '[data-testid*="chat"] [class*="name"], [data-testid*="chat"] [class*="header"]'
+    );
+    for (const h of chatHeaders) {
+        const text = (h.textContent || '').trim().toLowerCase();
+        if (text.includes(normalizedTarget)) return true;
+    }
+
+    // Priority 2: General page headers (less reliable — may match profile page, not chat)
+    const headers = querySelectorDeep('h1, h2, h3, [class*="header"], [class*="title"], [class*="name"]');
     for (const h of headers) {
         const text = (h.textContent || '').trim().toLowerCase();
         if (text.includes(normalizedTarget)) return true;
     }
-    if (window.location.href.toLowerCase().includes(normalizedTarget)) return true;
+
+    // NOTE: URL check REMOVED — when a chat overlay opens on /user/X/, the URL always
+    // contains X's username regardless of which conversation is actually open in the overlay.
+    // This caused false positives that let messages be sent to the wrong user.
     return false;
 }
 
@@ -4520,9 +4538,9 @@ async function simulateTyping(element, text, targetUser = null) {
     if (element.isContentEditable) {
         for (let i = 0; i < text.length; i++) {
             if (!isAutomationRunning) break;
-            // Check element is still in DOM every 20 chars (Reddit may re-render)
+            // Check element is still in DOM every 20 chars — treat detach as chat switch
             if (i > 0 && i % 20 === 0 && !element.isConnected) {
-                reportToBackground('warn', `Input element detached after ${i} chars, aborting char-by-char`, { component: 'content' });
+                abortTyping(`Input element detached after ${i} chars (user likely switched chats)`);
                 break;
             }
             // CRITICAL: Check focus hasn't moved to a different element (chat switch)
@@ -4536,7 +4554,7 @@ async function simulateTyping(element, text, targetUser = null) {
                 break;
             }
             // Re-focus our element before each execCommand to prevent typing into wrong input
-            if (i > 0 && i % 5 === 0) {
+            if (i > 0 && i % 5 === 0 && element.isConnected) {
                 element.focus();
             }
             document.execCommand('insertText', false, text[i]);
@@ -4557,7 +4575,7 @@ async function simulateTyping(element, text, targetUser = null) {
             for (let i = 1; i < text.length; i++) {
                 if (!isAutomationRunning) break;
                 if (i % 20 === 0 && !element.isConnected) {
-                    reportToBackground('warn', `Textarea element detached after ${i} chars`, { component: 'content' });
+                    abortTyping(`Textarea element detached after ${i} chars (user likely switched chats)`);
                     break;
                 }
                 if (i > 0 && i % 5 === 0 && isFocusStolen()) {
@@ -4584,7 +4602,10 @@ async function simulateTyping(element, text, targetUser = null) {
             if (nativeSetter) {
                 for (let i = 0; i < text.length; i++) {
                     if (!isAutomationRunning) break;
-                    if (i > 0 && i % 20 === 0 && !element.isConnected) break;
+                    if (i > 0 && i % 20 === 0 && !element.isConnected) {
+                        abortTyping(`Input detached during native setter typing after ${i} chars`);
+                        break;
+                    }
                     if (i > 0 && i % 5 === 0 && isFocusStolen()) {
                         abortTyping(`Focus stolen during native setter typing after ${i} chars`);
                         break;
