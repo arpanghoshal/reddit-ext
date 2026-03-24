@@ -4492,7 +4492,19 @@ async function simulateTyping(element, text, targetUser = null) {
     // --- Focus guard: detect if focus has moved away from our target element ---
     // document.execCommand('insertText') types into whatever is FOCUSED, not into `element`.
     // If the user switches chats, focus moves to the new chat input, and execCommand
-    // would type into the WRONG conversation. We must check before every character.
+    // would type into the WRONG conversation.
+    //
+    // SHADOW DOM NOTE: When element is inside a shadow root, document.activeElement
+    // returns the shadow HOST (not the textarea inside). We must drill through
+    // shadowRoot.activeElement recursively to find the real focused element.
+    const getDeepActiveElement = () => {
+        let active = document.activeElement;
+        while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+            active = active.shadowRoot.activeElement;
+        }
+        return active;
+    };
+
     const isFocusStolen = () => {
         // For contenteditable, check if element still contains the selection
         if (element.isContentEditable) {
@@ -4501,8 +4513,8 @@ async function simulateTyping(element, text, targetUser = null) {
                 return !element.contains(sel.anchorNode);
             }
         }
-        // For textarea/input, check activeElement
-        const active = document.activeElement;
+        // For textarea/input, drill through shadow DOM to find real active element
+        const active = getDeepActiveElement();
         return active !== element && !element.contains(active);
     };
 
